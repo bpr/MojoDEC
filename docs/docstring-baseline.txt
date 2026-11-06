@@ -1,0 +1,3 @@
+# Doc string warnings per file, from `pixi run doc-check --update`.
+# `pixi run doc-check` fails when a file has more than this.
+# total 0

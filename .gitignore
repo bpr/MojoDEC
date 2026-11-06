@@ -1,0 +1,14 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+build/
+docs/api/
+examples/*/harmonic.txt
+examples/*/pressures.txt
+examples/*/temperature.txt
+examples/*/eigenvalues.txt
+examples/*/mode3.txt
+examples/MakeMesh/square_8.*
+examples/*/*.png
+examples/*/*.vtu
+examples/*/spectrum.txt

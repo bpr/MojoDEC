@@ -1,0 +1,1376 @@
+diff --git a/core/accelerator/device.mojo b/core/accelerator/device.mojo
+index b733e08..a78fc3d 100644
+--- a/core/accelerator/device.mojo
++++ b/core/accelerator/device.mojo
+@@ -22,7 +22,7 @@ Exports
+ # ===----------------------------------------------------------------------=== #
+ # Stdlib
+ # ===----------------------------------------------------------------------=== #
+-from std.sys.info import default_accelerator
++from max.gpu.host import default_accelerator
+ 
+ # ===----------------------------------------------------------------------=== #
+ # External
+@@ -148,7 +148,7 @@ struct DeviceHandle[device: Device](Copyable, Movable, Writable):
+ 
+     comptime _requires_gpu = Self.device.type == "gpu"
+ 
+-    var context: DeviceContext
++    var context: DeviceContext[]
+ 
+     def __init__(out self) raises:
+         comptime assert (
+@@ -167,7 +167,7 @@ struct DeviceHandle[device: Device](Copyable, Movable, Writable):
+             )
+         self.context = DeviceContext(Self.device.id)
+ 
+-    def __init__(out self, var context: DeviceContext):
++    def __init__(out self, var context: DeviceContext[]):
+         comptime assert (
+             Self._requires_gpu
+         ), "DeviceHandle is only for GPU devices."
+@@ -191,7 +191,7 @@ struct DeviceHandle[device: Device](Copyable, Movable, Writable):
+     def is_gpu(self) -> Bool:
+         return True
+ 
+-    def device_context(self) -> DeviceContext:
++    def device_context(self) -> DeviceContext[]:
+         return self.context.copy()
+ 
+     def synchronize(self) raises:
+diff --git a/core/accelerator_ndarray.mojo b/core/accelerator_ndarray.mojo
+index c3333c9..2e4bb34 100644
+--- a/core/accelerator_ndarray.mojo
++++ b/core/accelerator_ndarray.mojo
+@@ -284,7 +284,7 @@ struct AcceleratorNDArray[
+ 
+     def device_context(
+         self,
+-    ) -> DeviceContext where Self.device.type == "gpu":
++    ) -> DeviceContext[] where Self.device.type == "gpu":
+         """Return the `DeviceContext` backing this array's GPU storage."""
+         return self._buf.device_storage.unsafe_value().handle.device_context()
+ 
+diff --git a/core/memory/dlpack.mojo b/core/memory/dlpack.mojo
+index 2017598..4a047bc 100644
+--- a/core/memory/dlpack.mojo
++++ b/core/memory/dlpack.mojo
+@@ -350,7 +350,7 @@ struct DLTensor(ImplicitlyCopyable, Movable):
+ 
+ comptime DLManagedTensorDeleter = def(
+     Pointer[DLManagedTensor, MutUntrackedOrigin]
+-) capturing -> None
++) thin -> None
+ 
+ 
+ # TODO: This is the old API, current API requires using DLManagedTensorVersioned which has a version field for future compatibility.
+@@ -457,7 +457,7 @@ def _dlpack_deleter_impl[
+     dtype: DType
+ ](
+     managed_tensor_ptr: Pointer[DLManagedTensor, MutUntrackedOrigin]
+-) capturing -> None:
++) -> None:
+     """Type-specific deleter callback for DLManagedTensor."""
+     if Int(managed_tensor_ptr) == 0:
+         return
+diff --git a/core/ndarray.mojo b/core/ndarray.mojo
+index 236abc8..07d4e0c 100644
+--- a/core/ndarray.mojo
++++ b/core/ndarray.mojo
+@@ -3816,7 +3816,7 @@ struct NDArray[dtype: DType = DType.float64](
+     def _inplace_scalar_op[
+         func: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w], SIMD[type, simd_w]
+-        ) capturing -> SIMD[type, simd_w],
++        ) thin -> SIMD[type, simd_w],
+     ](mut self, other: SIMD[Self.dtype, 1]):
+         """Apply a binary SIMD operation in-place: self[i] = func(self[i], s).
+ 
+@@ -3857,7 +3857,7 @@ struct NDArray[dtype: DType = DType.float64](
+     def _inplace_array_op[
+         func: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w], SIMD[type, simd_w]
+-        ) capturing -> SIMD[type, simd_w],
++        ) thin -> SIMD[type, simd_w],
+     ](mut self, other: Self) raises:
+         """Apply a binary SIMD operation in-place: self[i] = func(self[i], o[i]).
+ 
+@@ -3922,7 +3922,7 @@ struct NDArray[dtype: DType = DType.float64](
+ 
+         def add_kernel[
+             type: DType, simd_w: Int
+-        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) capturing -> SIMD[
++        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) -> SIMD[
+             type, simd_w
+         ]:
+             return a + b
+@@ -3934,7 +3934,7 @@ struct NDArray[dtype: DType = DType.float64](
+ 
+         def add_kernel[
+             type: DType, simd_w: Int
+-        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) capturing -> SIMD[
++        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) -> SIMD[
+             type, simd_w
+         ]:
+             return a + b
+@@ -3964,7 +3964,7 @@ struct NDArray[dtype: DType = DType.float64](
+ 
+         def sub_kernel[
+             type: DType, simd_w: Int
+-        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) capturing -> SIMD[
++        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) -> SIMD[
+             type, simd_w
+         ]:
+             return a - b
+@@ -3976,7 +3976,7 @@ struct NDArray[dtype: DType = DType.float64](
+ 
+         def sub_kernel[
+             type: DType, simd_w: Int
+-        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) capturing -> SIMD[
++        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) -> SIMD[
+             type, simd_w
+         ]:
+             return a - b
+@@ -4009,7 +4009,7 @@ struct NDArray[dtype: DType = DType.float64](
+ 
+         def mul_kernel[
+             type: DType, simd_w: Int
+-        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) capturing -> SIMD[
++        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) -> SIMD[
+             type, simd_w
+         ]:
+             return a * b
+@@ -4021,7 +4021,7 @@ struct NDArray[dtype: DType = DType.float64](
+ 
+         def mul_kernel[
+             type: DType, simd_w: Int
+-        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) capturing -> SIMD[
++        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) -> SIMD[
+             type, simd_w
+         ]:
+             return a * b
+@@ -4138,7 +4138,7 @@ struct NDArray[dtype: DType = DType.float64](
+ 
+         def div_kernel[
+             type: DType, simd_w: Int
+-        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) capturing -> SIMD[
++        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) -> SIMD[
+             type, simd_w
+         ]:
+             return a / b
+@@ -4150,7 +4150,7 @@ struct NDArray[dtype: DType = DType.float64](
+ 
+         def div_kernel[
+             type: DType, simd_w: Int
+-        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) capturing -> SIMD[
++        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) -> SIMD[
+             type, simd_w
+         ]:
+             return a / b
+@@ -4180,7 +4180,7 @@ struct NDArray[dtype: DType = DType.float64](
+ 
+         def floor_div_kernel[
+             type: DType, simd_w: Int
+-        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) capturing -> SIMD[
++        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) -> SIMD[
+             type, simd_w
+         ]:
+             return a.__floordiv__(b)
+@@ -4192,7 +4192,7 @@ struct NDArray[dtype: DType = DType.float64](
+ 
+         def floor_div_kernel[
+             type: DType, simd_w: Int
+-        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) capturing -> SIMD[
++        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) -> SIMD[
+             type, simd_w
+         ]:
+             return a.__floordiv__(b)
+@@ -4222,7 +4222,7 @@ struct NDArray[dtype: DType = DType.float64](
+ 
+         def mod_kernel[
+             type: DType, simd_w: Int
+-        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) capturing -> SIMD[
++        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) -> SIMD[
+             type, simd_w
+         ]:
+             return a % b
+@@ -4234,7 +4234,7 @@ struct NDArray[dtype: DType = DType.float64](
+ 
+         def mod_kernel[
+             type: DType, simd_w: Int
+-        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) capturing -> SIMD[
++        ](a: SIMD[type, simd_w], b: SIMD[type, simd_w]) -> SIMD[
+             type, simd_w
+         ]:
+             return a % b
+diff --git a/routines/functional.mojo b/routines/functional.mojo
+index e9d1f46..88fb0c5 100644
+--- a/routines/functional.mojo
++++ b/routines/functional.mojo
+@@ -100,7 +100,7 @@ def apply_along_axis_reduce_to_int[
+     dtype: DType,
+     func1d: def[dtype_func: DType](
+         NDArray[dtype_func]
+-    ) capturing raises -> Scalar[DType.int],
++    ) thin raises -> Scalar[DType.int],
+ ](a: NDArray[dtype], axis: Int) raises -> NDArray[DType.int]:
+     """
+     Applies a function to a NDArray by axis and reduce that dimension.
+@@ -146,7 +146,7 @@ def apply_along_axis_reduce[
+     dtype: DType,
+     func1d: def[dtype_func: DType](
+         NDArray[dtype_func]
+-    ) capturing raises -> Scalar[dtype_func],
++    ) thin raises -> Scalar[dtype_func],
+ ](a: NDArray[dtype], axis: Int) raises -> NDArray[dtype]:
+     """
+     Applies a function to a NDArray by axis and reduce that dimension.
+@@ -208,7 +208,7 @@ def apply_along_axis_reduce_with_dtype[
+     returned_dtype: DType,
+     func1d: def[dtype_func: DType, returned_dtype_func: DType](
+         NDArray[dtype_func]
+-    ) capturing raises -> Scalar[returned_dtype_func],
++    ) thin raises -> Scalar[returned_dtype_func],
+ ](a: NDArray[dtype], axis: Int) raises -> NDArray[returned_dtype]:
+     """
+     Applies a function to a NDArray by axis and reduce that dimension.
+@@ -261,7 +261,7 @@ def apply_along_axis_preserve[
+     dtype: DType,
+     func1d: def[dtype_func: DType](
+         NDArray[dtype_func]
+-    ) capturing raises -> NDArray[dtype_func],
++    ) thin raises -> NDArray[dtype_func],
+ ](a: NDArray[dtype], axis: Int) raises -> NDArray[dtype]:
+     """
+     Applies a function to a NDArray by axis without reducing that dimension.
+@@ -337,7 +337,7 @@ def apply_along_axis_inplace[
+     dtype: DType,
+     func1d: def[dtype_func: DType](
+         mut NDArray[dtype_func]
+-    ) capturing raises -> None,
++    ) thin raises -> None,
+ ](mut a: NDArray[dtype], axis: Int) raises -> None:
+     """
+     Applies a function to a NDArray by axis without reducing that dimension.
+@@ -400,7 +400,7 @@ def apply_along_axis_indices[
+     dtype: DType,
+     func1d: def[dtype_func: DType](
+         NDArray[dtype_func]
+-    ) capturing raises -> NDArray[DType.int],
++    ) thin raises -> NDArray[DType.int],
+ ](a: NDArray[dtype], axis: Int) raises -> NDArray[DType.int]:
+     """
+     Applies a function to a NDArray by axis without reducing that dimension.
+diff --git a/routines/io/npy.mojo b/routines/io/npy.mojo
+index 7764e8e..b0bd983 100644
+--- a/routines/io/npy.mojo
++++ b/routines/io/npy.mojo
+@@ -393,7 +393,7 @@ def save_npy[dtype: DType](path: String, A: NDArray[dtype]) raises:
+         _append_scalar_bytes[dtype](Ac.unsafe_get(i), payload)
+     if len(payload) > 0:
+         f.write_bytes(Span(payload))
+-    f.close()
++    f^.close()
+ 
+ 
+ def load_npy[dtype: DType](path: String) raises -> NDArray[dtype]:
+@@ -440,7 +440,7 @@ def load_npy[dtype: DType](path: String) raises -> NDArray[dtype]:
+ 
+     var f = open(path, "r")
+     var data = f.read_bytes()
+-    f.close()
++    f^.close()
+ 
+     var magic = _npy_magic()
+     if len(data) < 10:
+diff --git a/routines/io/torch.mojo b/routines/io/torch.mojo
+index a74e333..8aff70b 100644
+--- a/routines/io/torch.mojo
++++ b/routines/io/torch.mojo
+@@ -948,7 +948,7 @@ def load_torch[dtype: DType](path: String) raises -> NDArray[dtype]:
+ 
+     var f = open(path, "r")
+     var data = f.read_bytes()
+-    f.close()
++    f^.close()
+ 
+     var pickle_data = _zip_extract(data, "data.pkl")
+     var parsed = _parse_rebuild_tensor_pickle(pickle_data)
+@@ -1120,4 +1120,4 @@ def save_torch[dtype: DType](path: String, A: NDArray[dtype]) raises:
+     var zip_bytes = _zip_write_stored(names, payloads)
+     var f = open(path, "w")
+     f.write_bytes(Span(zip_bytes))
+-    f.close()
++    f^.close()
+diff --git a/routines/logic/comparison.mojo b/routines/logic/comparison.mojo
+index 7df0bb5..cf2685b 100644
+--- a/routines/logic/comparison.mojo
++++ b/routines/logic/comparison.mojo
+@@ -77,7 +77,7 @@ def greater[
+     ](
+         a: SIMD[type, simd_w],
+         b: SIMD[type, simd_w],
+-    ) capturing -> SIMD[
++    ) -> SIMD[
+         DType.bool, simd_w
+     ]:
+         return a.gt(b)
+@@ -117,7 +117,7 @@ def greater[
+     ](
+         a: SIMD[type, simd_w],
+         b: SIMD[type, simd_w],
+-    ) capturing -> SIMD[
++    ) -> SIMD[
+         DType.bool, simd_w
+     ]:
+         return a.gt(b)
+@@ -158,7 +158,7 @@ def greater_equal[
+     ](
+         a: SIMD[type, simd_w],
+         b: SIMD[type, simd_w],
+-    ) capturing -> SIMD[
++    ) -> SIMD[
+         DType.bool, simd_w
+     ]:
+         return a.ge(b)
+@@ -198,7 +198,7 @@ def greater_equal[
+     ](
+         a: SIMD[type, simd_w],
+         b: SIMD[type, simd_w],
+-    ) capturing -> SIMD[
++    ) -> SIMD[
+         DType.bool, simd_w
+     ]:
+         return a.ge(b)
+@@ -239,7 +239,7 @@ def less[
+     ](
+         a: SIMD[type, simd_w],
+         b: SIMD[type, simd_w],
+-    ) capturing -> SIMD[
++    ) -> SIMD[
+         DType.bool, simd_w
+     ]:
+         return a.lt(b)
+@@ -279,7 +279,7 @@ def less[
+     ](
+         a: SIMD[type, simd_w],
+         b: SIMD[type, simd_w],
+-    ) capturing -> SIMD[
++    ) -> SIMD[
+         DType.bool, simd_w
+     ]:
+         return a.lt(b)
+@@ -320,7 +320,7 @@ def less_equal[
+     ](
+         a: SIMD[type, simd_w],
+         b: SIMD[type, simd_w],
+-    ) capturing -> SIMD[
++    ) -> SIMD[
+         DType.bool, simd_w
+     ]:
+         return a.le(b)
+@@ -360,7 +360,7 @@ def less_equal[
+     ](
+         a: SIMD[type, simd_w],
+         b: SIMD[type, simd_w],
+-    ) capturing -> SIMD[
++    ) -> SIMD[
+         DType.bool, simd_w
+     ]:
+         return a.le(b)
+@@ -401,7 +401,7 @@ def equal[
+     ](
+         a: SIMD[type, simd_w],
+         b: SIMD[type, simd_w],
+-    ) capturing -> SIMD[
++    ) -> SIMD[
+         DType.bool, simd_w
+     ]:
+         return a.eq(b)
+@@ -441,7 +441,7 @@ def equal[
+     ](
+         a: SIMD[type, simd_w],
+         b: SIMD[type, simd_w],
+-    ) capturing -> SIMD[
++    ) -> SIMD[
+         DType.bool, simd_w
+     ]:
+         return a.eq(b)
+@@ -482,7 +482,7 @@ def not_equal[
+     ](
+         a: SIMD[type, simd_w],
+         b: SIMD[type, simd_w],
+-    ) capturing -> SIMD[
++    ) -> SIMD[
+         DType.bool, simd_w
+     ]:
+         return a.ne(b)
+@@ -522,7 +522,7 @@ def not_equal[
+     ](
+         a: SIMD[type, simd_w],
+         b: SIMD[type, simd_w],
+-    ) capturing -> SIMD[
++    ) -> SIMD[
+         DType.bool, simd_w
+     ]:
+         return a.ne(b)
+diff --git a/routines/logic/contents.mojo b/routines/logic/contents.mojo
+index 9f0ad8c..5fb4df7 100644
+--- a/routines/logic/contents.mojo
++++ b/routines/logic/contents.mojo
+@@ -68,7 +68,7 @@ def isinf[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
+ 
+     def is_inf_kernel[
+         dtype: DType, simd_width: Int
+-    ](x: SIMD[dtype, simd_width]) capturing -> SIMD[DType.bool, simd_width]:
++    ](x: SIMD[dtype, simd_width]) -> SIMD[DType.bool, simd_width]:
+         return math.isinf(x)
+ 
+     return HostExecutor.apply_unary_predicate[dtype, is_inf_kernel](array)
+@@ -127,7 +127,7 @@ def isfinite[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
+ 
+     def is_finite_kernel[
+         dtype: DType, simd_width: Int
+-    ](x: SIMD[dtype, simd_width]) capturing -> SIMD[DType.bool, simd_width]:
++    ](x: SIMD[dtype, simd_width]) -> SIMD[DType.bool, simd_width]:
+         return math.isfinite(x)
+ 
+     return HostExecutor.apply_unary_predicate[dtype, is_finite_kernel](array)
+@@ -185,7 +185,7 @@ def isnan[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
+ 
+     def is_nan_kernel[
+         dtype: DType, simd_width: Int
+-    ](x: SIMD[dtype, simd_width]) capturing -> SIMD[DType.bool, simd_width]:
++    ](x: SIMD[dtype, simd_width]) -> SIMD[DType.bool, simd_width]:
+         return math.isnan(x)
+ 
+     return HostExecutor.apply_unary_predicate[dtype, is_nan_kernel](array)
+@@ -244,7 +244,7 @@ def isneginf[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
+ 
+     def is_neginf[
+         dtype: DType, simd_width: Int
+-    ](x: SIMD[dtype, simd_width]) capturing -> SIMD[DType.bool, simd_width]:
++    ](x: SIMD[dtype, simd_width]) -> SIMD[DType.bool, simd_width]:
+         return x.eq(SIMD[dtype, simd_width](neg_inf[dtype]()))
+ 
+     return HostExecutor.apply_unary_predicate[dtype, is_neginf](array)
+@@ -303,7 +303,7 @@ def isposinf[dtype: DType](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
+ 
+     def is_posinf[
+         dtype: DType, simd_width: Int
+-    ](x: SIMD[dtype, simd_width]) capturing -> SIMD[DType.bool, simd_width]:
++    ](x: SIMD[dtype, simd_width]) -> SIMD[DType.bool, simd_width]:
+         return x.eq(SIMD[dtype, simd_width](inf[dtype]()))
+ 
+     return HostExecutor.apply_unary_predicate[dtype, is_posinf](array)
+diff --git a/routines/logic/logical_ops.mojo b/routines/logic/logical_ops.mojo
+index 405b151..e5acc42 100644
+--- a/routines/logic/logical_ops.mojo
++++ b/routines/logic/logical_ops.mojo
+@@ -83,7 +83,7 @@ def logical_and[
+ 
+     def kernel[
+         dtype: DType, width: Int
+-    ](a: SIMD[dtype, width], b: SIMD[dtype, width]) capturing -> SIMD[
++    ](a: SIMD[dtype, width], b: SIMD[dtype, width]) -> SIMD[
+         DType.bool, width
+     ]:
+         return SIMD[DType.bool, width](a & b)
+@@ -136,7 +136,7 @@ def logical_or[
+ 
+     def kernel[
+         dtype: DType, width: Int
+-    ](a: SIMD[dtype, width], b: SIMD[dtype, width]) capturing -> SIMD[
++    ](a: SIMD[dtype, width], b: SIMD[dtype, width]) -> SIMD[
+         DType.bool, width
+     ]:
+         return SIMD[DType.bool, width](a | b)
+@@ -179,7 +179,7 @@ def logical_not[
+ 
+     def kernel[
+         dtype: DType, width: Int
+-    ](a: SIMD[dtype, width]) capturing -> SIMD[DType.bool, width]:
++    ](a: SIMD[dtype, width]) -> SIMD[DType.bool, width]:
+         return ~a.cast[DType.bool]()
+ 
+     return HostExecutor.apply_unary_predicate[dtype, kernel](a)
+@@ -230,7 +230,7 @@ def logical_xor[
+ 
+     def kernel[
+         dtype: DType, width: Int
+-    ](a: SIMD[dtype, width], b: SIMD[dtype, width]) capturing -> SIMD[
++    ](a: SIMD[dtype, width], b: SIMD[dtype, width]) -> SIMD[
+         DType.bool, width
+     ]:
+         return SIMD[DType.bool, width](a ^ b)
+diff --git a/routines/math/arithmetic.mojo b/routines/math/arithmetic.mojo
+index 5e79d36..af0b4ac 100644
+--- a/routines/math/arithmetic.mojo
++++ b/routines/math/arithmetic.mojo
+@@ -65,7 +65,7 @@ def add[
+ 
+     def add_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 + simd2
+@@ -94,7 +94,7 @@ def add[
+         dtype: DType, simd_w: Int
+     ](
+         simd: SIMD[dtype, simd_w], scalar_simd: SIMD[dtype, simd_w]
+-    ) capturing -> SIMD[dtype, simd_w]:
++    ) -> SIMD[dtype, simd_w]:
+         return simd + scalar_simd
+ 
+     return HostExecutor.apply_binary[dtype, add_kernel](array, scalar)
+@@ -121,7 +121,7 @@ def add[
+         dtype: DType, simd_w: Int
+     ](
+         scalar_simd: SIMD[dtype, simd_w], simd: SIMD[dtype, simd_w]
+-    ) capturing -> SIMD[dtype, simd_w]:
++    ) -> SIMD[dtype, simd_w]:
+         return scalar_simd + simd
+ 
+     return HostExecutor.apply_binary[dtype, add_kernel](scalar, array)
+@@ -196,7 +196,7 @@ def sub[
+ 
+     def sub_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 - simd2
+@@ -223,7 +223,7 @@ def sub[
+ 
+     def sub_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 - simd2
+@@ -250,7 +250,7 @@ def sub[
+ 
+     def sub_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 - simd2
+@@ -282,7 +282,7 @@ def mod[
+ 
+     def mod_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 % simd2
+@@ -309,7 +309,7 @@ def mod[
+ 
+     def mod_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 % simd2
+@@ -336,7 +336,7 @@ def mod[
+ 
+     def mod_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 % simd2
+@@ -371,7 +371,7 @@ def mul[
+ 
+     def mul_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 * simd2
+@@ -398,7 +398,7 @@ def mul[
+ 
+     def mul_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 * simd2
+@@ -425,7 +425,7 @@ def mul[
+ 
+     def mul_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 * simd2
+@@ -504,7 +504,7 @@ def div[
+ 
+     def truediv_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 / simd2
+@@ -531,7 +531,7 @@ def div[
+ 
+     def truediv_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 / simd2
+@@ -558,7 +558,7 @@ def div[
+ 
+     def truediv_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 / simd2
+@@ -593,7 +593,7 @@ def floor_div[
+ 
+     def floordiv_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 // simd2
+@@ -620,7 +620,7 @@ def floor_div[
+ 
+     def floordiv_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 // simd2
+@@ -647,7 +647,7 @@ def floor_div[
+ 
+     def floordiv_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 // simd2
+@@ -692,7 +692,7 @@ def fma[
+         simd1: SIMD[dtype, simd_w],
+         simd2: SIMD[dtype, simd_w],
+         simd3: SIMD[dtype, simd_w],
+-    ) capturing -> SIMD[dtype, simd_w]:
++    ) -> SIMD[dtype, simd_w]:
+         return simd1.fma(simd2, simd3)
+ 
+     return HostExecutor.apply_ternary[dtype, fma_kernel](array1, array2, array3)
+@@ -727,7 +727,7 @@ def fma[
+         simd1: SIMD[dtype, simd_w],
+         simd2: SIMD[dtype, simd_w],
+         simd3: SIMD[dtype, simd_w],
+-    ) capturing -> SIMD[dtype, simd_w]:
++    ) -> SIMD[dtype, simd_w]:
+         return simd1.fma(simd2, simd3)
+ 
+     return HostExecutor.apply_ternary[dtype, fma_kernel](array1, array2, simd)
+@@ -760,7 +760,7 @@ def remainder[
+ 
+     def mod_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 % simd2
+@@ -787,7 +787,7 @@ def remainder[
+ 
+     def mod_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 % simd2
+@@ -814,7 +814,7 @@ def remainder[
+ 
+     def mod_kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return simd1 % simd2
+diff --git a/routines/math/elementwise.mojo b/routines/math/elementwise.mojo
+index 861b02f..b866dd7 100644
+--- a/routines/math/elementwise.mojo
++++ b/routines/math/elementwise.mojo
+@@ -62,7 +62,7 @@ def sign[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](value: SIMD[dtype, width]) capturing -> SIMD[dtype, width]:
++    ](value: SIMD[dtype, width]) -> SIMD[dtype, width]:
+         var result = value.lt(0).select[dtype](
+             -1, value.eq(0).select[dtype](0, 1)
+         )
+@@ -102,7 +102,7 @@ def square[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](value: SIMD[dtype, width]) capturing -> SIMD[dtype, width]:
++    ](value: SIMD[dtype, width]) -> SIMD[dtype, width]:
+         return value * value
+ 
+     return HostExecutor.apply_unary[dtype, _kernel](array)
+@@ -137,7 +137,7 @@ def negative[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](value: SIMD[dtype, width]) capturing -> SIMD[dtype, width]:
++    ](value: SIMD[dtype, width]) -> SIMD[dtype, width]:
+         return -value
+ 
+     return HostExecutor.apply_unary[dtype, _kernel](array)
+@@ -172,7 +172,7 @@ def positive[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](value: SIMD[dtype, width]) capturing -> SIMD[dtype, width]:
++    ](value: SIMD[dtype, width]) -> SIMD[dtype, width]:
+         return +value
+ 
+     return HostExecutor.apply_unary[dtype, _kernel](array)
+@@ -211,7 +211,7 @@ def power[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](base: SIMD[dtype, width], exponent: SIMD[dtype, width]) capturing -> SIMD[
++    ](base: SIMD[dtype, width], exponent: SIMD[dtype, width]) -> SIMD[
+         dtype, width
+     ]:
+         return base**exponent
+@@ -252,7 +252,7 @@ def power[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](base: SIMD[dtype, width], exponent: SIMD[dtype, width]) capturing -> SIMD[
++    ](base: SIMD[dtype, width], exponent: SIMD[dtype, width]) -> SIMD[
+         dtype, width
+     ]:
+         return base**exponent
+@@ -293,7 +293,7 @@ def power[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](base: SIMD[dtype, width], exponent: SIMD[dtype, width]) capturing -> SIMD[
++    ](base: SIMD[dtype, width], exponent: SIMD[dtype, width]) -> SIMD[
+         dtype, width
+     ]:
+         return base**exponent
+@@ -345,7 +345,7 @@ def fmax[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) capturing -> SIMD[
++    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) -> SIMD[
+         dtype, width
+     ]:
+         return _fmax_value(lhs, rhs)
+@@ -386,7 +386,7 @@ def fmax[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) capturing -> SIMD[
++    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) -> SIMD[
+         dtype, width
+     ]:
+         return _fmax_value(lhs, rhs)
+@@ -427,7 +427,7 @@ def fmax[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) capturing -> SIMD[
++    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) -> SIMD[
+         dtype, width
+     ]:
+         return _fmax_value(lhs, rhs)
+@@ -479,7 +479,7 @@ def fmin[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) capturing -> SIMD[
++    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) -> SIMD[
+         dtype, width
+     ]:
+         return _fmin_value(lhs, rhs)
+@@ -520,7 +520,7 @@ def fmin[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) capturing -> SIMD[
++    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) -> SIMD[
+         dtype, width
+     ]:
+         return _fmin_value(lhs, rhs)
+@@ -561,7 +561,7 @@ def fmin[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) capturing -> SIMD[
++    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) -> SIMD[
+         dtype, width
+     ]:
+         return _fmin_value(lhs, rhs)
+@@ -612,7 +612,7 @@ def fmod[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) capturing -> SIMD[
++    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) -> SIMD[
+         dtype, width
+     ]:
+         return _fmod_value(lhs, rhs)
+@@ -653,7 +653,7 @@ def fmod[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) capturing -> SIMD[
++    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) -> SIMD[
+         dtype, width
+     ]:
+         return _fmod_value(lhs, rhs)
+@@ -694,7 +694,7 @@ def fmod[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) capturing -> SIMD[
++    ](lhs: SIMD[dtype, width], rhs: SIMD[dtype, width]) -> SIMD[
+         dtype, width
+     ]:
+         return _fmod_value(lhs, rhs)
+@@ -733,7 +733,7 @@ def rint[
+ 
+     def _kernel[
+         dtype: DType, width: Int
+-    ](value: SIMD[dtype, width]) capturing -> SIMD[dtype, width]:
++    ](value: SIMD[dtype, width]) -> SIMD[dtype, width]:
+         return value.__round__()
+ 
+     return HostExecutor.apply_unary[dtype, _kernel](array)
+diff --git a/routines/math/extrema.mojo b/routines/math/extrema.mojo
+index 602a45a..0fb4f26 100644
+--- a/routines/math/extrema.mojo
++++ b/routines/math/extrema.mojo
+@@ -47,7 +47,7 @@ from numojo.routines.manipulation import ravel
+ 
+ def extrema_1d[
+     dtype: DType, //, is_max: Bool
+-](a: NDArray[dtype]) capturing raises -> Scalar[dtype]:
++](a: NDArray[dtype]) raises -> Scalar[dtype]:
+     """
+     Find the max or min value in the buffer.
+ 
+@@ -125,7 +125,7 @@ def max[dtype: DType](a: NDArray[dtype]) raises -> Scalar[dtype]:
+ 
+ def extrema_1d_max[
+     dtype: DType
+-](a: NDArray[dtype]) capturing raises -> Scalar[dtype]:
++](a: NDArray[dtype]) raises -> Scalar[dtype]:
+     """
+     Find the max value in a 1-D array.
+     """
+@@ -371,7 +371,7 @@ def minimum[
+ 
+     def _kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return builtin_min(simd1, simd2)
+@@ -408,7 +408,7 @@ def maximum[
+ 
+     def _kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return builtin_max(simd1, simd2)
+diff --git a/routines/math/floating.mojo b/routines/math/floating.mojo
+index f531d2d..f70aeab 100644
+--- a/routines/math/floating.mojo
++++ b/routines/math/floating.mojo
+@@ -57,7 +57,7 @@ def copysign[
+ 
+     def _kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return math.copysign(simd1, simd2)
+diff --git a/routines/math/misc.mojo b/routines/math/misc.mojo
+index dca9689..60fac1f 100644
+--- a/routines/math/misc.mojo
++++ b/routines/math/misc.mojo
+@@ -146,7 +146,7 @@ def rsqrt[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
+ 
+     def _kernel[
+         dtype: DType, simd_w: Int
+-    ](simd: SIMD[dtype, simd_w]) capturing -> SIMD[dtype, simd_w]:
++    ](simd: SIMD[dtype, simd_w]) -> SIMD[dtype, simd_w]:
+         return _mt_rsqrt(simd)
+ 
+     return HostExecutor.apply_unary[dtype, _kernel](array)
+@@ -168,7 +168,7 @@ def sqrt[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
+ 
+     def _kernel[
+         dtype: DType, simd_w: Int
+-    ](simd: SIMD[dtype, simd_w]) capturing -> SIMD[dtype, simd_w]:
++    ](simd: SIMD[dtype, simd_w]) -> SIMD[dtype, simd_w]:
+         return stdlib_math.sqrt(simd)
+ 
+     return HostExecutor.apply_unary[dtype, _kernel](array)
+diff --git a/routines/math/rounding.mojo b/routines/math/rounding.mojo
+index a9a04d2..350f019 100644
+--- a/routines/math/rounding.mojo
++++ b/routines/math/rounding.mojo
+@@ -56,7 +56,7 @@ def tabs[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
+ 
+     def _kernel[
+         dtype: DType, simd_w: Int
+-    ](simd: SIMD[dtype, simd_w]) capturing -> SIMD[dtype, simd_w]:
++    ](simd: SIMD[dtype, simd_w]) -> SIMD[dtype, simd_w]:
+         return simd.__abs__()
+ 
+     return HostExecutor.apply_unary[dtype, _kernel](array)
+@@ -83,7 +83,7 @@ def tfloor[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
+ 
+     def _kernel[
+         dtype: DType, simd_w: Int
+-    ](simd: SIMD[dtype, simd_w]) capturing -> SIMD[dtype, simd_w]:
++    ](simd: SIMD[dtype, simd_w]) -> SIMD[dtype, simd_w]:
+         return simd.__floor__()
+ 
+     return HostExecutor.apply_unary[dtype, _kernel](array)
+@@ -105,7 +105,7 @@ def tceil[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
+ 
+     def _kernel[
+         dtype: DType, simd_w: Int
+-    ](simd: SIMD[dtype, simd_w]) capturing -> SIMD[dtype, simd_w]:
++    ](simd: SIMD[dtype, simd_w]) -> SIMD[dtype, simd_w]:
+         return simd.__ceil__()
+ 
+     return HostExecutor.apply_unary[dtype, _kernel](array)
+@@ -127,7 +127,7 @@ def ttrunc[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
+ 
+     def _kernel[
+         dtype: DType, simd_w: Int
+-    ](simd: SIMD[dtype, simd_w]) capturing -> SIMD[dtype, simd_w]:
++    ](simd: SIMD[dtype, simd_w]) -> SIMD[dtype, simd_w]:
+         return simd.__trunc__()
+ 
+     return HostExecutor.apply_unary[dtype, _kernel](array)
+@@ -149,7 +149,7 @@ def tround[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
+ 
+     def _kernel[
+         dtype: DType, simd_w: Int
+-    ](simd: SIMD[dtype, simd_w]) capturing -> SIMD[dtype, simd_w]:
++    ](simd: SIMD[dtype, simd_w]) -> SIMD[dtype, simd_w]:
+         return simd.__round__()
+ 
+     return HostExecutor.apply_unary[dtype, _kernel](array)
+@@ -171,7 +171,7 @@ def roundeven[dtype: DType](array: NDArray[dtype]) raises -> NDArray[dtype]:
+ 
+     def _kernel[
+         dtype: DType, simd_w: Int
+-    ](simd: SIMD[dtype, simd_w]) capturing -> SIMD[dtype, simd_w]:
++    ](simd: SIMD[dtype, simd_w]) -> SIMD[dtype, simd_w]:
+         return simd.__round__()
+ 
+     return HostExecutor.apply_unary[dtype, _kernel](array)
+@@ -247,7 +247,7 @@ def nextafter[
+ 
+     def _kernel[
+         dtype: DType, simd_w: Int
+-    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) capturing -> SIMD[
++    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) -> SIMD[
+         dtype, simd_w
+     ]:
+         return builtin_nextafter(simd1, simd2)
+diff --git a/routines/operations/backend.mojo b/routines/operations/backend.mojo
+index c84d32e..aaee71a 100644
+--- a/routines/operations/backend.mojo
++++ b/routines/operations/backend.mojo
+@@ -66,7 +66,7 @@ def _num_tasks_for(size: Int, simd_width: Int) -> Int:
+ def _apply_unary_chunk[
+     dtype: DType,
+     width: Int,
+-    kernel: def[type: DType, simd_w: Int](SIMD[type, simd_w]) capturing -> SIMD[
++    kernel: def[type: DType, simd_w: Int](SIMD[type, simd_w]) thin -> SIMD[
+         type, simd_w
+     ],
+     src_origin: Origin,
+@@ -120,7 +120,7 @@ def _apply_binary_chunk[
+     width: Int,
+     kernel: def[type: DType, simd_w: Int](
+         SIMD[type, simd_w], SIMD[type, simd_w]
+-    ) capturing -> SIMD[type, simd_w],
++    ) thin -> SIMD[type, simd_w],
+     src1_origin: Origin,
+     src2_origin: Origin,
+     dst_origin: MutOrigin,
+@@ -194,7 +194,7 @@ def _apply_binary_scalar_chunk[
+     width: Int,
+     kernel: def[type: DType, simd_w: Int](
+         SIMD[type, simd_w], SIMD[type, simd_w]
+-    ) capturing -> SIMD[type, simd_w],
++    ) thin -> SIMD[type, simd_w],
+     *,
+     scalar_first: Bool,
+     src_origin: Origin,
+@@ -264,7 +264,7 @@ def _apply_binary_int_chunk[
+     width: Int,
+     kernel: def[type: DType, simd_w: Int](
+         SIMD[type, simd_w], Int
+-    ) capturing -> SIMD[type, simd_w],
++    ) thin -> SIMD[type, simd_w],
+     src_origin: Origin,
+     dst_origin: MutOrigin,
+ ](
+@@ -293,7 +293,7 @@ def _apply_binary_predicate_chunk[
+     width: Int,
+     kernel: def[type: DType, simd_w: Int](
+         SIMD[type, simd_w], SIMD[type, simd_w]
+-    ) capturing -> SIMD[DType.bool, simd_w],
++    ) thin -> SIMD[DType.bool, simd_w],
+     src1_origin: Origin,
+     src2_origin: Origin,
+     dst_origin: MutOrigin,
+@@ -332,7 +332,7 @@ def _apply_binary_predicate_scalar_chunk[
+     width: Int,
+     kernel: def[type: DType, simd_w: Int](
+         SIMD[type, simd_w], SIMD[type, simd_w]
+-    ) capturing -> SIMD[DType.bool, simd_w],
++    ) thin -> SIMD[DType.bool, simd_w],
+     src_origin: Origin,
+     dst_origin: MutOrigin,
+ ](
+@@ -367,7 +367,7 @@ def _apply_binary_predicate_scalar_chunk[
+ def _apply_unary_predicate_chunk[
+     dtype: DType,
+     width: Int,
+-    kernel: def[type: DType, simd_w: Int](SIMD[type, simd_w]) capturing -> SIMD[
++    kernel: def[type: DType, simd_w: Int](SIMD[type, simd_w]) thin -> SIMD[
+         DType.bool, simd_w
+     ],
+     src_origin: Origin,
+@@ -397,7 +397,7 @@ def _apply_ternary_chunk[
+     width: Int,
+     kernel: def[type: DType, simd_w: Int](
+         SIMD[type, simd_w], SIMD[type, simd_w], SIMD[type, simd_w]
+-    ) capturing -> SIMD[type, simd_w],
++    ) thin -> SIMD[type, simd_w],
+     src1_origin: Origin,
+     src2_origin: Origin,
+     src3_origin: Origin,
+@@ -439,7 +439,7 @@ def _apply_ternary_scalar_chunk[
+     width: Int,
+     kernel: def[type: DType, simd_w: Int](
+         SIMD[type, simd_w], SIMD[type, simd_w], SIMD[type, simd_w]
+-    ) capturing -> SIMD[type, simd_w],
++    ) thin -> SIMD[type, simd_w],
+     src1_origin: Origin,
+     src2_origin: Origin,
+     dst_origin: MutOrigin,
+@@ -496,7 +496,7 @@ struct HostExecutor:
+         simd_width: Int,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w]
+-        ) capturing -> SIMD[type, simd_w],
++        ) thin -> SIMD[type, simd_w],
+     ](scalar: SIMD[dtype, simd_width]) -> SIMD[dtype, simd_width]:
+         """
+         Applies a SIMD-compatible unary function to a SIMD value.
+@@ -547,7 +547,7 @@ struct HostExecutor:
+         simd_width: Int,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w], SIMD[type, simd_w]
+-        ) capturing -> SIMD[type, simd_w],
++        ) thin -> SIMD[type, simd_w],
+     ](simd1: SIMD[dtype, simd_width], simd2: SIMD[dtype, simd_width]) -> SIMD[
+         dtype, simd_width
+     ]:
+@@ -602,7 +602,7 @@ struct HostExecutor:
+         simd_width: Int,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w]
+-        ) capturing -> SIMD[DType.bool, simd_w],
++        ) thin -> SIMD[DType.bool, simd_w],
+     ](simd: SIMD[dtype, simd_width]) -> SIMD[DType.bool, simd_width]:
+         """
+         Applies a SIMD-compatible unary predicate to a SIMD value.
+@@ -626,7 +626,7 @@ struct HostExecutor:
+         simd_width: Int,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w], SIMD[type, simd_w]
+-        ) capturing -> SIMD[DType.bool, simd_w],
++        ) thin -> SIMD[DType.bool, simd_w],
+     ](simd1: SIMD[dtype, simd_width], simd2: SIMD[dtype, simd_width]) -> SIMD[
+         DType.bool, simd_width
+     ]:
+@@ -652,7 +652,7 @@ struct HostExecutor:
+         dtype: DType,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w]
+-        ) capturing -> SIMD[type, simd_w],
++        ) thin -> SIMD[type, simd_w],
+     ](array: NDArray[dtype]) raises -> NDArray[dtype]:
+         """
+         Applies a SIMD-compatible unary function to an NDArray.
+@@ -767,7 +767,7 @@ struct HostExecutor:
+         dtype: DType,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w], SIMD[type, simd_w]
+-        ) capturing -> SIMD[type, simd_w],
++        ) thin -> SIMD[type, simd_w],
+     ](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[dtype]:
+         """
+         Applies a SIMD-compatible binary function to two NDArrays.
+@@ -986,7 +986,7 @@ struct HostExecutor:
+         dtype: DType,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w], SIMD[type, simd_w]
+-        ) capturing -> SIMD[type, simd_w],
++        ) thin -> SIMD[type, simd_w],
+     ](array: NDArray[dtype], scalar: SIMD[dtype, 1]) raises -> NDArray[dtype]:
+         """
+         Applies a SIMD-compatible binary function to an NDArray and a scalar.
+@@ -1045,7 +1045,7 @@ struct HostExecutor:
+         dtype: DType,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w], SIMD[type, simd_w]
+-        ) capturing -> SIMD[type, simd_w],
++        ) thin -> SIMD[type, simd_w],
+     ](scalar: SIMD[dtype, 1], array: NDArray[dtype]) raises -> NDArray[dtype]:
+         """
+         Applies a SIMD-compatible binary function to a scalar and an NDArray.
+@@ -1170,7 +1170,7 @@ struct HostExecutor:
+         dtype: DType,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w], Int
+-        ) capturing -> SIMD[type, simd_w],
++        ) thin -> SIMD[type, simd_w],
+     ](array: NDArray[dtype], intval: Int) raises -> NDArray[dtype]:
+         """
+         Applies a SIMD-compatible binary function to an NDArray and an Int scalar.
+@@ -1221,7 +1221,7 @@ struct HostExecutor:
+         dtype: DType,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w], SIMD[type, simd_w]
+-        ) capturing -> SIMD[DType.bool, simd_w],
++        ) thin -> SIMD[DType.bool, simd_w],
+     ](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[
+         DType.bool
+     ]:
+@@ -1302,7 +1302,7 @@ struct HostExecutor:
+         dtype: DType,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w], SIMD[type, simd_w]
+-        ) capturing -> SIMD[DType.bool, simd_w],
++        ) thin -> SIMD[DType.bool, simd_w],
+     ](array1: NDArray[dtype], scalar: SIMD[dtype, 1]) raises -> NDArray[
+         DType.bool
+     ]:
+@@ -1365,7 +1365,7 @@ struct HostExecutor:
+         dtype: DType,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w]
+-        ) capturing -> SIMD[DType.bool, simd_w],
++        ) thin -> SIMD[DType.bool, simd_w],
+     ](array: NDArray[dtype]) raises -> NDArray[DType.bool]:
+         """
+         Applies a SIMD-compatible unary predicate to an NDArray, returning a boolean NDArray.
+@@ -1415,7 +1415,7 @@ struct HostExecutor:
+         dtype: DType,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w], SIMD[type, simd_w], SIMD[type, simd_w]
+-        ) capturing -> SIMD[type, simd_w],
++        ) thin -> SIMD[type, simd_w],
+     ](
+         array1: NDArray[dtype], array2: NDArray[dtype], array3: NDArray[dtype]
+     ) raises -> NDArray[dtype]:
+@@ -1503,7 +1503,7 @@ struct HostExecutor:
+         dtype: DType,
+         kernel: def[type: DType, simd_w: Int](
+             SIMD[type, simd_w], SIMD[type, simd_w], SIMD[type, simd_w]
+-        ) capturing -> SIMD[type, simd_w],
++        ) thin -> SIMD[type, simd_w],
+     ](
+         array1: NDArray[dtype], array2: NDArray[dtype], scalar: SIMD[dtype, 1]
+     ) raises -> NDArray[dtype]:
+diff --git a/routines/searching.mojo b/routines/searching.mojo
+index 21c2a96..f6fbf40 100644
+--- a/routines/searching.mojo
++++ b/routines/searching.mojo
+@@ -32,7 +32,7 @@ from numojo.routines.manipulation import ravel
+ 
+ def argmax_1d[
+     dtype: DType
+-](a: NDArray[dtype]) capturing raises -> Scalar[DType.int]:
++](a: NDArray[dtype]) raises -> Scalar[DType.int]:
+     """Returns the index of the maximum value in the buffer.
+     Regardless of the shape of input, it is treated as a 1-d array.
+ 
+@@ -64,7 +64,7 @@ def argmax_1d[
+ 
+ def argmin_1d[
+     dtype: DType
+-](a: NDArray[dtype]) capturing raises -> Scalar[DType.int]:
++](a: NDArray[dtype]) raises -> Scalar[DType.int]:
+     """Returns the index of the minimum value in the buffer.
+     Regardless of the shape of input, it is treated as a 1-d array.
+ 
+diff --git a/routines/sorting.mojo b/routines/sorting.mojo
+index e3dffb2..b602f8e 100644
+--- a/routines/sorting.mojo
++++ b/routines/sorting.mojo
+@@ -567,7 +567,7 @@ def bubble_sort[dtype: DType](ndarray: NDArray[dtype]) raises -> NDArray[dtype]:
+ 
+ def quick_sort_1d[
+     dtype: DType
+-](a: NDArray[dtype]) capturing raises -> NDArray[dtype]:
++](a: NDArray[dtype]) raises -> NDArray[dtype]:
+     """
+     Sort array using quick sort method.
+     Regardless of the shape of input, it is treated as a 1-d array.
+@@ -593,7 +593,7 @@ def quick_sort_1d[
+ 
+ def quick_sort_stable_1d[
+     dtype: DType
+-](a: NDArray[dtype]) capturing raises -> NDArray[dtype]:
++](a: NDArray[dtype]) raises -> NDArray[dtype]:
+     """
+     Sort array using quick sort method.
+     Regardless of the shape of input, it is treated as a 1-d array.
+@@ -616,7 +616,7 @@ def quick_sort_stable_1d[
+     return result^
+ 
+ 
+-def quick_sort_inplace_1d[dtype: DType](mut a: NDArray[dtype]) capturing raises:
++def quick_sort_inplace_1d[dtype: DType](mut a: NDArray[dtype]) raises:
+     """
+     Sort array in-place using quick sort method.
+     Regardless of the shape of input, it is treated as a 1-d array.
+@@ -645,7 +645,7 @@ def quick_sort_inplace_1d[dtype: DType](mut a: NDArray[dtype]) capturing raises:
+ 
+ def quick_sort_stable_inplace_1d[
+     dtype: DType
+-](mut a: NDArray[dtype]) capturing raises:
++](mut a: NDArray[dtype]) raises:
+     """
+     Sort array in-place using quick sort method.
+     Regardless of the shape of input, it is treated as a 1-d array.
+@@ -674,7 +674,7 @@ def quick_sort_stable_inplace_1d[
+ 
+ def argsort_quick_sort_1d[
+     dtype: DType
+-](a: NDArray[dtype]) capturing raises -> NDArray[DType.int]:
++](a: NDArray[dtype]) raises -> NDArray[DType.int]:
+     """
+     Returns the indices that would sort the buffer of an array.
+     Regardless of the shape of input, it is treated as a 1-d array.
+diff --git a/routines/statistics/averages.mojo b/routines/statistics/averages.mojo
+index 709125b..6e9c6b9 100644
+--- a/routines/statistics/averages.mojo
++++ b/routines/statistics/averages.mojo
+@@ -40,7 +40,7 @@ from numojo.routines.sorting import sort
+ 
+ def mean_1d[
+     dtype: DType, //, returned_dtype: DType = DType.float64
+-](a: NDArray[dtype]) capturing raises -> Scalar[returned_dtype]:
++](a: NDArray[dtype]) raises -> Scalar[returned_dtype]:
+     """
+     Calculate the arithmetic average of all items in an array.
+     Regardless of the shape of input, it is treated as a 1-d array.
+@@ -118,7 +118,7 @@ def mean[
+ 
+ def median_1d[
+     dtype: DType, //, returned_dtype: DType = DType.float64
+-](a: NDArray[dtype]) capturing raises -> Scalar[returned_dtype]:
++](a: NDArray[dtype]) raises -> Scalar[returned_dtype]:
+     """
+     Median value of all items an array.
+     Regardless of the shape of input, it is treated as a 1-d array.
+@@ -199,7 +199,7 @@ def median[
+     ](a=a, axis=normalized_axis)
+ 
+ 
+-def mode_1d[dtype: DType](a: NDArray[dtype]) capturing raises -> Scalar[dtype]:
++def mode_1d[dtype: DType](a: NDArray[dtype]) raises -> Scalar[dtype]:
+     """
+     Returns mode of all items of an array.
+     Regardless of the shape of input, it is treated as a 1-d array.
+diff --git a/routines/statistics/nanfunctions.mojo b/routines/statistics/nanfunctions.mojo
+index 77382ff..b15f610 100644
+--- a/routines/statistics/nanfunctions.mojo
++++ b/routines/statistics/nanfunctions.mojo
+@@ -44,7 +44,7 @@ from numojo.routines.sorting import sort
+ 
+ def nansum_1d[
+     dtype: DType, //
+-](a: NDArray[dtype]) capturing raises -> Scalar[dtype]:
++](a: NDArray[dtype]) raises -> Scalar[dtype]:
+     """
+     Sum all items in an array, treating `NaN` elements as zero.
+     Regardless of the shape of input, it is treated as a 1-d array.
+@@ -139,7 +139,7 @@ def nansum[
+ 
+ def nanmean_1d[
+     dtype: DType, //
+-](a: NDArray[dtype]) capturing raises -> Scalar[dtype]:
++](a: NDArray[dtype]) raises -> Scalar[dtype]:
+     """
+     Calculate the arithmetic mean of all items in an array, ignoring `NaN`
+     elements. Regardless of the shape of input, it is treated as a 1-d
+@@ -254,7 +254,7 @@ def nanmean[
+ 
+ def nanextrema_1d[
+     dtype: DType, //, is_max: Bool
+-](a: NDArray[dtype]) capturing raises -> Scalar[dtype]:
++](a: NDArray[dtype]) raises -> Scalar[dtype]:
+     """
+     Find the max or min value in the buffer, ignoring `NaN` elements.
+ 
+@@ -307,14 +307,14 @@ def nanextrema_1d[
+ 
+ def nanextrema_1d_max[
+     dtype: DType, //
+-](a: NDArray[dtype]) capturing raises -> Scalar[dtype]:
++](a: NDArray[dtype]) raises -> Scalar[dtype]:
+     """Find the max value in a 1-D array, ignoring `NaN` elements."""
+     return nanextrema_1d[is_max=True](a)
+ 
+ 
+ def nanextrema_1d_min[
+     dtype: DType, //
+-](a: NDArray[dtype]) capturing raises -> Scalar[dtype]:
++](a: NDArray[dtype]) raises -> Scalar[dtype]:
+     """Find the min value in a 1-D array, ignoring `NaN` elements."""
+     return nanextrema_1d[is_max=False](a)
+ 

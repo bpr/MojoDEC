@@ -1,0 +1,26 @@
+// A 2 x 1 plate of two materials joined at x = 0.8, for the HeatConduction
+// example. Mesh it with:  gmsh -2 plate.geo -format msh41 -o plate.msh
+lc = 0.08;
+Point(1) = {0, 0, 0, lc};
+Point(2) = {0.8, 0, 0, lc};
+Point(3) = {2, 0, 0, lc};
+Point(4) = {2, 1, 0, lc};
+Point(5) = {0.8, 1, 0, lc};
+Point(6) = {0, 1, 0, lc};
+Line(1) = {1, 2};
+Line(2) = {2, 3};
+Line(3) = {3, 4};
+Line(4) = {4, 5};
+Line(5) = {5, 6};
+Line(6) = {6, 1};
+Line(7) = {2, 5};
+Curve Loop(1) = {1, 7, 5, 6};
+Plane Surface(1) = {1};
+Curve Loop(2) = {2, 3, 4, -7};
+Plane Surface(2) = {2};
+Physical Curve("hot") = {6};
+Physical Curve("cold") = {3};
+Physical Curve("insulated") = {1, 2, 4, 5};
+Physical Curve("interface") = {7};
+Physical Surface("insulator") = {1};
+Physical Surface("conductor") = {2};

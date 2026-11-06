@@ -1,0 +1,125 @@
+# ===----------------------------------------------------------------------=== #
+# NuMojo: Accelerator reduction kernels
+# Distributed under the Apache 2.0 License with LLVM Exceptions.
+# See LICENSE and the LLVM License for more information.
+# https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo/blob/main/LICENSE
+# https://llvm.org/LICENSE.txt
+# ===----------------------------------------------------------------------=== #
+"""
+Reduction Ops Kernels (numojo.core.accelerator.kernels.reduction_ops).
+======================================================================
+GPU kernels for reduction operations.
+
+GPU kernel functions and launch helpers for full-array reduction operations.
+
+Exports
+-------
+- Reduction operation kernel functions for GPU acceleration.
+"""
+
+# ===----------------------------------------------------------------------=== #
+# Stdlib
+# ===----------------------------------------------------------------------=== #
+from max.gpu import (
+    block_dim,
+    block_idx,
+    thread_idx,
+)
+from std.memory import (
+    AddressSpace,
+    stack_allocation,
+)
+from std.memory.alloc import unsafe_alloc
+
+# ===----------------------------------------------------------------------=== #
+# External
+# ===----------------------------------------------------------------------=== #
+from max.gpu.host import DeviceContext
+from max.gpu.sync import barrier
+
+# ===----------------------------------------------------------------------=== #
+# Local
+# ===----------------------------------------------------------------------=== #
+from .binary_ops import launch_config
+
+
+def sum_reduce_kernel[
+    dtype: DType, block_size: Int
+](
+    partial_sums: Pointer[Scalar[dtype], MutAnyOrigin],
+    a: Pointer[Scalar[dtype], MutAnyOrigin],
+    size: Int64,
+):
+    """GPU kernel: each block reduces its chunk of `a` to one partial sum.
+
+    The host is responsible for summing the `partial_sums` buffer
+    (one element per block) into the final scalar result.
+    """
+    var smem = stack_allocation[
+        block_size, Scalar[dtype], address_space=AddressSpace.SHARED
+    ]()
+
+    var tid = Int64(thread_idx.x)
+    var bid = Int64(block_idx.x)
+    var idx = bid * Int64(block_size) + tid
+
+    if idx < size:
+        smem[unsafe_offset=Int(tid)] = a[unsafe_offset=Int(idx)]
+    else:
+        smem[unsafe_offset=Int(tid)] = Scalar[dtype](0)
+    barrier()
+
+    var stride = Int64(block_size) >> 1
+    while stride > 0:
+        if tid < stride:
+            smem[unsafe_offset=Int(tid)] += smem[
+                unsafe_offset=Int(tid + stride)
+            ]
+        barrier()
+        stride >>= 1
+
+    if tid == 0:
+        partial_sums[unsafe_offset=Int(bid)] = smem[unsafe_offset=0]
+
+
+def launch_sum_reduce[
+    dtype: DType
+](
+    context: DeviceContext,
+    a: Pointer[Scalar[dtype], MutAnyOrigin],
+    size: Int,
+) raises -> Scalar[dtype]:
+    """Launch the GPU sum-reduction kernel and combine partial sums.
+
+    Args:
+        context: The `DeviceContext` backing `a`'s device memory.
+        a: Device pointer to the first element to reduce.
+        size: Number of contiguous elements to reduce.
+
+    Returns:
+        The sum of all `size` elements, as a host scalar.
+    """
+    comptime threads_per_block = 256
+    var num_blocks: Int
+    var block_dim_size: Int
+    num_blocks, block_dim_size = launch_config(size)
+
+    var partial_sums = context.enqueue_create_buffer[dtype](num_blocks)
+    context.enqueue_function[sum_reduce_kernel[dtype, threads_per_block]](
+        partial_sums.unsafe_ptr(),
+        a,
+        Int64(size),
+        grid_dim=num_blocks,
+        block_dim=block_dim_size,
+    )
+
+    var host_partial = unsafe_alloc[Scalar[dtype]](num_blocks)
+    partial_sums.enqueue_copy_to(host_partial)
+    context.synchronize()
+
+    var result = Scalar[dtype](0)
+    for i in range(num_blocks):
+        result += host_partial[unsafe_offset=i]
+
+    host_partial.unsafe_free()
+    return result

@@ -1,0 +1,326 @@
+# ===----------------------------------------------------------------------=== #
+# NuMojo: Trigonometric routines
+# Distributed under the Apache 2.0 License with LLVM Exceptions.
+# See LICENSE and the LLVM License for more information.
+# https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo/blob/main/LICENSE
+# https://llvm.org/LICENSE.txt
+# ===----------------------------------------------------------------------=== #
+"""
+Trigonometric routines (numojo.routines.math.trig).
+===================================================
+Trigonometric and inverse trigonometric functions for arrays.
+
+Element-wise trigonometric functions (sin, cos, tan) and their inverse/hyperbolic
+variants (arcsin, arccos, arctan, atan2, sinh, cosh, tanh, etc.) for NDArrays.
+
+Exports
+-------
+- Circular: `sin`, `cos`, `tan`, `arcsin`, `arccos`, `arctan`, `atan2`.
+- Hyperbolic: `sinh`, `cosh`, `tanh`, `arcsinh`, `arccosh`, `arctanh`.
+- Utilities: `hypot`, `hypot_fma`.
+"""
+
+# ===----------------------------------------------------------------------=== #
+# Stdlib
+# ===----------------------------------------------------------------------=== #
+import std.math as math
+
+# ===----------------------------------------------------------------------=== #
+# NuMojo
+# ===----------------------------------------------------------------------=== #
+from numojo.core.ndarray import NDArray
+from numojo.routines import HostExecutor
+from numojo.routines.math.arithmetic import fma
+from numojo.routines.math.misc import sqrt
+
+# ===------------------------------------------------------------------------===#
+# Inverse Trig (NDArray)
+# ===------------------------------------------------------------------------===#
+
+
+def acos[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
+    """
+    Apply inverse cosine.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        array: A NDArray.
+
+    Returns:
+        The element-wise acos of `array`.
+    """
+
+    def _kernel[
+        dtype: DType, simd_w: Int
+    ](simd: SIMD[dtype, simd_w]) {} -> SIMD[
+        dtype, simd_w
+    ] where dtype.is_floating_point():
+        return math.acos(simd)
+
+    return HostExecutor.apply_unary_float[dtype, _kernel](array)
+
+
+def arccos[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
+    """Apply inverse cosine element-wise."""
+    return acos(array)
+
+
+def asin[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
+    """
+    Apply inverse sine.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        array: A NDArray.
+
+    Returns:
+        The element-wise asin of `array`.
+    """
+
+    def _kernel[
+        dtype: DType, simd_w: Int
+    ](simd: SIMD[dtype, simd_w]) {} -> SIMD[
+        dtype, simd_w
+    ] where dtype.is_floating_point():
+        return math.asin(simd)
+
+    return HostExecutor.apply_unary_float[dtype, _kernel](array)
+
+
+def arcsin[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
+    """Apply inverse sine element-wise."""
+    return asin(array)
+
+
+def atan[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
+    """
+    Apply inverse tangent.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        array: A NDArray.
+
+    Returns:
+        The element-wise atan of `array`.
+    """
+
+    def _kernel[
+        dtype: DType, simd_w: Int
+    ](simd: SIMD[dtype, simd_w]) {} -> SIMD[
+        dtype, simd_w
+    ] where dtype.is_floating_point():
+        return math.atan(simd)
+
+    return HostExecutor.apply_unary_float[dtype, _kernel](array)
+
+
+def arctan[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
+    """Apply inverse tangent element-wise."""
+    return atan(array)
+
+
+def atan2[
+    dtype: DType
+](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
+    """
+    Apply inverse tangent with two arrays.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        array1: A NDArray.
+        array2: A NDArray.
+
+    Constraints:
+        Both arrays must have the same shapes.
+
+    Returns:
+        The element-wise atan2 of `array1` and `array2`.
+
+    References:
+        https://en.wikipedia.org/wiki/Atan2.
+    """
+
+    def _kernel[
+        dtype: DType, simd_w: Int
+    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) {} -> SIMD[
+        dtype, simd_w
+    ] where dtype.is_floating_point():
+        return math.atan2(simd1, simd2)
+
+    return HostExecutor.apply_binary_float[dtype, _kernel](array1, array2)
+
+
+def cos[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
+    """
+    Apply cosine.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        array: A NDArray.
+
+    Returns:
+        The element-wise cos of `array`.
+    """
+
+    def _kernel[
+        dtype: DType, simd_w: Int
+    ](simd: SIMD[dtype, simd_w]) {} -> SIMD[
+        dtype, simd_w
+    ] where dtype.is_floating_point():
+        return math.cos(simd)
+
+    return HostExecutor.apply_unary_float[dtype, _kernel](array)
+
+
+def sin[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
+    """
+    Apply sine.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        array: A NDArray.
+
+    Returns:
+        The element-wise sin of `array`.
+    """
+
+    def _kernel[
+        dtype: DType, simd_w: Int
+    ](simd: SIMD[dtype, simd_w]) {} -> SIMD[
+        dtype, simd_w
+    ] where dtype.is_floating_point():
+        return math.sin(simd)
+
+    return HostExecutor.apply_unary_float[dtype, _kernel](array)
+
+
+def tan[
+    dtype: DType
+](array: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
+    """
+    Apply tangent.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        array: A NDArray.
+
+    Returns:
+        The element-wise tan of `array`.
+    """
+
+    def _kernel[
+        dtype: DType, simd_w: Int
+    ](simd: SIMD[dtype, simd_w]) {} -> SIMD[
+        dtype, simd_w
+    ] where dtype.is_floating_point():
+        return math.tan(simd)
+
+    return HostExecutor.apply_unary_float[dtype, _kernel](array)
+
+
+# ===------------------------------------------------------------------------===#
+# Trig (NDArray)
+# ===------------------------------------------------------------------------===#
+def hypot[
+    dtype: DType
+](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[
+    dtype
+] where dtype.is_floating_point():
+    """
+    Apply hypotenuse calculation to two arrays.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        array1: A NDArray.
+        array2: A NDArray.
+
+    Constraints:
+        Both arrays must have the same shapes.
+
+    Returns:
+        The element-wise hypotenuse of `array1` and `array2`.
+    """
+
+    def _kernel[
+        dtype: DType, simd_w: Int
+    ](simd1: SIMD[dtype, simd_w], simd2: SIMD[dtype, simd_w]) {} -> SIMD[
+        dtype, simd_w
+    ] where dtype.is_floating_point():
+        return math.hypot(simd1, simd2)
+
+    return HostExecutor.apply_binary_float[dtype, _kernel](array1, array2)
+
+
+def hypot_fma[
+    dtype: DType
+](array1: NDArray[dtype], array2: NDArray[dtype]) raises -> NDArray[dtype]:
+    """
+    Apply hypotenuse calculation using fused multiply-add.
+
+    Parameters:
+        dtype: The element type.
+
+    Args:
+        array1: A NDArray.
+        array2: A NDArray.
+
+    Constraints:
+        Both arrays must have the same shapes.
+
+    Returns:
+        The element-wise hypotenuse of `array1` and `array2`.
+    """
+    var array2_squared = fma[dtype](array2, array2, SIMD[dtype, 1](0))
+    return sqrt[dtype](fma[dtype](array1, array1, array2_squared))

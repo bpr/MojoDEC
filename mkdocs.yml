@@ -1,0 +1,33 @@
+# `pixi run docs-site` builds the site into build/site;
+# `pixi run docs-serve` serves it at http://127.0.0.1:8000 while you edit.
+site_name: MojoDEC
+site_description: Discrete exterior calculus in Mojo, ported from PyDEC
+docs_dir: docs
+site_dir: build/site
+exclude_docs: |
+  *.py
+  *.txt
+theme:
+  name: material
+  features:
+    - navigation.indexes
+    - navigation.sections
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Light mode
+markdown_extensions:
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
