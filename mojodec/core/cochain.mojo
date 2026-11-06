@@ -702,8 +702,11 @@ def d[C: CochainLike](f: C) raises -> C:
         )
     if k < -1 or k >= n:
         return f.mapped(CSRMatrix(1, f.value_rows()), k + 1, .DUAL)
-    var sign: Float64 = -1.0 if k % 2 == 1 else 1.0
-    return f.mapped(sc[n - k].boundary * sign, k + 1, .DUAL)
+    # (-1)^k B_{n-k}: negate the result rather than copy the matrix
+    var df = f.mapped(sc[n - k].boundary, k + 1, .DUAL)
+    if k % 2 == 1:
+        return df.scaled(-1.0)
+    return df^
 
 
 def star[C: CochainLike](f: C) raises -> C:

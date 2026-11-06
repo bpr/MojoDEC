@@ -21,6 +21,7 @@ Conventions:
 import numojo as nm
 from numojo.prelude import *
 
+from mojodec.core.parallel import parallel_ranges
 from mojodec.core.subset import Subset
 from mojodec.core.utils import (
     RealArray,
@@ -29,6 +30,11 @@ from mojodec.core.utils import (
     rows_of,
     cols_of,
 )
+
+
+comptime PARALLEL_NNZ = 1_000_000
+"""Stored entries from which `CSRMatrix.matvec_into` runs in parallel
+(about 0.3 ms serially; below it, starting the threads costs more)."""
 
 
 struct COOEntries(Copyable, Movable):
@@ -753,7 +759,9 @@ struct CSRMatrix(Copyable, Movable, Writable):
         """The matrix-vector product `self @ x`, written into `y`.
 
         Iterative solvers call this once per iteration with the same `y`,
-        so nothing is allocated.
+        so nothing is allocated. Matrices with at least `PARALLEL_NNZ`
+        stored entries are multiplied in parallel, by blocks of rows; the
+        sums are the same as serially.
 
         Args:
             x: A vector of length `ncols`.
@@ -769,11 +777,35 @@ struct CSRMatrix(Copyable, Movable, Writable):
         var dv = self.data.unsafe_ptr()
         var xp = x.unsafe_ptr()
         var yp = y.unsafe_ptr()
+
+        if self.nnz() >= PARALLEL_NNZ:
+            self._matvec_parallel(x, y)
+            return
         for i in range(self.nrows):
             var s: Float64 = 0
             for k in range(ip[unsafe_offset=i], ip[unsafe_offset=i + 1]):
                 s += dv[unsafe_offset=k] * xp[unsafe_offset=ix[unsafe_offset=k]]
             yp[unsafe_offset=i] = s
+
+    def _matvec_parallel(self, x: RealArray, mut y: RealArray):
+        """`matvec_into` by blocks of rows on every core (sizes checked)."""
+        var ip = self.indptr.unsafe_ptr()
+        var ix = self.indices.unsafe_ptr()
+        var dv = self.data.unsafe_ptr()
+        var xp = x.unsafe_ptr()
+        var yp = y.unsafe_ptr()
+
+        def rows(chunk: Int, lo: Int, hi: Int) {ip, ix, dv, xp, yp}:
+            for i in range(lo, hi):
+                var s: Float64 = 0
+                for k in range(ip[unsafe_offset=i], ip[unsafe_offset=i + 1]):
+                    s += (
+                        dv[unsafe_offset=k]
+                        * xp[unsafe_offset=ix[unsafe_offset=k]]
+                    )
+                yp[unsafe_offset=i] = s
+
+        parallel_ranges(self.nrows, 0, rows)
 
     def __mul__(self, s: Float64) -> Self:
         """Every entry multiplied by `s`.

@@ -7,7 +7,8 @@
 #   pixi run examples --show                # all of them, showing every figure
 #
 # Without pixi, run `bash examples/run.sh ...` inside the pixi environment
-# after `pixi run numojo`.
+# after `pixi run numojo`. MOJO_FLAGS is passed to `mojo run`;
+# `pixi run examples-release` sets it to "-D ASSERT=none".
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 all=(Ranking RipsComplex HodgeDecomposition DarcyFlow HeatConduction ResonantCavity Sphere Neighborhoods Neighborhoods3D MakeMesh)
@@ -24,8 +25,8 @@ run() {
         echo "unknown example '$name'; the examples are: ${all[*]}" >&2
         exit 1
     fi
-    echo "=== $name"
-    (cd "$dir" && mojo run -I "$root" -I "$root/build" "$main" "$@")
+    echo "=== $name${MOJO_FLAGS:+ ($MOJO_FLAGS)}"
+    (cd "$dir" && mojo run $MOJO_FLAGS -I "$root" -I "$root/build" "$main" "$@")
 }
 
 if [ $# -eq 0 ] || [[ $1 == -* ]]; then

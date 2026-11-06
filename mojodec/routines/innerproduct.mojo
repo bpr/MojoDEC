@@ -13,6 +13,7 @@ a typed operator from primal k-cochains to dual (n-k)-cochains.
 
 from std.math import sqrt
 
+from mojodec.core.parallel import num_chunks, parallel_ranges
 from mojodec.core.regular_cube_complex import RegularCubeComplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
@@ -216,83 +217,120 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
     # determinant of pair (a, b) is that of the k x k block of G in the rows
     # of form a and the columns of form b (1 when k = 0).
     var dim = cols_of(sc.vertices())
-    var edges = List[Float64](length=p * dim, fill=0)
-    var gram = List[Float64](length=p * p, fill=0)
-    var grads = List[Float64](length=(p + 1) * dim, fill=0)
-    var G = List[Float64](length=(p + 1) * (p + 1), fill=0)
-    var dets = List[Float64](length=num_forms * num_forms, fill=1)
-    var work = List[Float64](length=k * k, fill=0)
-    var ep = edges.unsafe_ptr()
-    var gp = gram.unsafe_ptr()
-    var Dp = grads.unsafe_ptr()
-    var Gp = G.unsafe_ptr()
-    var dp = dets.unsafe_ptr()
     var tsp = term_start.unsafe_ptr()
     var tpp = term_pair.unsafe_ptr()
     var tcp = term_coef.unsafe_ptr()
 
     var data = List[Float64](length=len(rc.rows), fill=0)
     var datap = data.unsafe_ptr()
-    ref X = sc.vertices()
     ref top = sc[p]
-    ref simplices = top.simplices
-    for i in range(top.num_simplices):
-        if k > 0:
-            var v0 = Int(simplices.unsafe_get(i * (p + 1)))
-            for r in range(p):
-                var v = Int(simplices.unsafe_get(i * (p + 1) + r + 1))
-                for c in range(dim):
-                    ep[unsafe_offset=r * dim + c] = X.unsafe_get(
-                        v * dim + c
-                    ) - X.unsafe_get(v0 * dim + c)
-            for r in range(p):
-                for s in range(r + 1):
-                    var t: Float64 = 0
-                    for c in range(dim):
-                        t += (
-                            ep[unsafe_offset=r * dim + c]
-                            * ep[unsafe_offset=s * dim + c]
-                        )
-                    gp[unsafe_offset=r * p + s] = t
-            if not _cholesky_solve(gram, edges, p, dim):
-                raise Error(
-                    String(
-                        "whitney_innerproduct: top simplex ",
-                        i,
-                        " is degenerate",
-                    )
-                )
-            for c in range(dim):
-                var t: Float64 = 0
+    var Xp = sc.vertices().unsafe_ptr()
+    var Sp = top.simplices.unsafe_ptr()
+    var volp = top.primal_volume.unsafe_ptr()
+    # top simplices in parallel chunks (meshes of a few thousand run
+    # serially), each with its own scratch; a chunk records its first
+    # degenerate simplex, raised after the loop
+    comptime SERIAL_BELOW = 4096
+    var num_top = top.num_simplices
+    var degenerate = List[Int](
+        length=num_chunks(num_top, SERIAL_BELOW), fill=-1
+    )
+    var badp = degenerate.unsafe_ptr()
+
+    def simplices(
+        chunk: Int, lo: Int, hi: Int
+    ) {
+        k,
+        p,
+        dim,
+        num_forms,
+        nfp,
+        scale_integration,
+        imm forms,
+        tsp,
+        tpp,
+        tcp,
+        datap,
+        Xp,
+        Sp,
+        volp,
+        badp,
+    }:
+        var edges = List[Float64](length=p * dim, fill=0)
+        var gram = List[Float64](length=p * p, fill=0)
+        var grads = List[Float64](length=(p + 1) * dim, fill=0)
+        var G = List[Float64](length=(p + 1) * (p + 1), fill=0)
+        var dets = List[Float64](length=num_forms * num_forms, fill=1)
+        var work = List[Float64](length=k * k, fill=0)
+        var ep = edges.unsafe_ptr()
+        var gp = gram.unsafe_ptr()
+        var Dp = grads.unsafe_ptr()
+        var Gp = G.unsafe_ptr()
+        var dp = dets.unsafe_ptr()
+        for i in range(lo, hi):
+            if k > 0:
+                var v0 = Int(Sp[unsafe_offset=i * (p + 1)])
                 for r in range(p):
-                    var g = ep[unsafe_offset=r * dim + c]
-                    Dp[unsafe_offset=(r + 1) * dim + c] = g
-                    t += g
-                Dp[unsafe_offset=c] = -t
-            for r in range(p + 1):
-                for s in range(r + 1):
-                    var t: Float64 = 0
+                    var v = Int(Sp[unsafe_offset=i * (p + 1) + r + 1])
                     for c in range(dim):
-                        t += (
-                            Dp[unsafe_offset=r * dim + c]
-                            * Dp[unsafe_offset=s * dim + c]
+                        ep[unsafe_offset=r * dim + c] = (
+                            Xp[unsafe_offset=v * dim + c]
+                            - Xp[unsafe_offset=v0 * dim + c]
                         )
-                    Gp[unsafe_offset=r * (p + 1) + s] = t
-                    Gp[unsafe_offset=s * (p + 1) + r] = t
-            for a in range(num_forms):
-                for b in range(a, num_forms):
-                    var det = _minor_det(G, p + 1, forms, a * k, b * k, k, work)
-                    dp[unsafe_offset=a * num_forms + b] = det
-                    dp[unsafe_offset=b * num_forms + a] = det
-        var weight = abs(top.primal_volume.unsafe_get(i)) * scale_integration
-        for t in range(nfp):
-            var s: Float64 = 0
-            for q in range(tsp[unsafe_offset=t], tsp[unsafe_offset=t + 1]):
-                s += (
-                    tcp[unsafe_offset=q]
-                    * dp[unsafe_offset=tpp[unsafe_offset=q]]
+                for r in range(p):
+                    for s in range(r + 1):
+                        var t: Float64 = 0
+                        for c in range(dim):
+                            t += (
+                                ep[unsafe_offset=r * dim + c]
+                                * ep[unsafe_offset=s * dim + c]
+                            )
+                        gp[unsafe_offset=r * p + s] = t
+                if not _cholesky_solve(gram, edges, p, dim):
+                    badp[unsafe_offset=chunk] = i
+                    return
+                for c in range(dim):
+                    var t: Float64 = 0
+                    for r in range(p):
+                        var g = ep[unsafe_offset=r * dim + c]
+                        Dp[unsafe_offset=(r + 1) * dim + c] = g
+                        t += g
+                    Dp[unsafe_offset=c] = -t
+                for r in range(p + 1):
+                    for s in range(r + 1):
+                        var t: Float64 = 0
+                        for c in range(dim):
+                            t += (
+                                Dp[unsafe_offset=r * dim + c]
+                                * Dp[unsafe_offset=s * dim + c]
+                            )
+                        Gp[unsafe_offset=r * (p + 1) + s] = t
+                        Gp[unsafe_offset=s * (p + 1) + r] = t
+                for a in range(num_forms):
+                    for b in range(a, num_forms):
+                        var det = _minor_det(
+                            G, p + 1, forms, a * k, b * k, k, work
+                        )
+                        dp[unsafe_offset=a * num_forms + b] = det
+                        dp[unsafe_offset=b * num_forms + a] = det
+            var weight = abs(volp[unsafe_offset=i]) * scale_integration
+            for t in range(nfp):
+                var s: Float64 = 0
+                for q in range(tsp[unsafe_offset=t], tsp[unsafe_offset=t + 1]):
+                    s += (
+                        tcp[unsafe_offset=q]
+                        * dp[unsafe_offset=tpp[unsafe_offset=q]]
+                    )
+                datap[unsafe_offset=i * nfp + t] = s * weight
+
+    parallel_ranges(num_top, SERIAL_BELOW, simplices)
+    for i in degenerate:
+        if i >= 0:
+            raise Error(
+                String(
+                    "whitney_innerproduct: top simplex ", i, " is degenerate"
                 )
-            datap[unsafe_offset=i * nfp + t] = s * weight
+            )
     var N = sc[k].num_simplices
     return CSRMatrix.from_coo(N, N, rc.rows, rc.cols, data)
 

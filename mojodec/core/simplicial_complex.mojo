@@ -37,6 +37,7 @@ from mojodec.core.diagonal import DiagonalOperator
 from mojodec.core.primality import Primality
 from mojodec.core.mesh import SimplicialMesh
 from mojodec.core.simplex import Simplex
+from mojodec.core.parallel import num_chunks, parallel_ranges
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.subset import Subset
 from mojodec.core.utils import (
@@ -807,7 +808,7 @@ struct SimplicialComplex(
         `c (a + b - c)` over their sum, with `a`, `b`, `c` the squared lengths
         of the edges opposite each vertex. Higher dimensions solve PyDEC's
         system `[[2 P P^T, 1], [1^T, 0]] [b; mu] = [|p_i|^2; 1]` per simplex,
-        in place, with buffers reused across simplices.
+        in place. Simplices are handled in parallel chunks.
 
         Args:
             dim: The dimension of the simplices.
@@ -816,47 +817,103 @@ struct SimplicialComplex(
             If `dim` is out of range or a simplex is degenerate.
         """
         ref data = self[dim]
-        ref V = self.vertices()
         var E = self.embedding_dimension()
         var w = dim + 1
         var m = w + 1
-        var out = real_array(data.num_simplices, E)
-        var bary = real_array(data.num_simplices, w)
-        if dim <= 2:
-            _small_circumcenters(V, data.simplices, dim, out, bary)
-            data.circumcenter = out^
-            data.bary_circumcenter = bary^
-            return
-        var A = List[Float64](length=m * m, fill=0)
-        var b = List[Float64](length=m, fill=0)
-        var verts = List[Int](length=w, fill=0)
-        for i in range(data.num_simplices):
-            for r in range(w):
-                verts.unsafe_set(r, Int(data.simplices.unsafe_get(i * w + r)))
-            for r in range(w):
-                for c in range(w):
-                    var s: Float64 = 0
+        var N = data.num_simplices
+        var out = real_array(N, E)
+        var bary = real_array(N, w)
+        var Vp = self.vertices().unsafe_ptr()
+        var Sp = data.simplices.unsafe_ptr()
+        var op = out.unsafe_ptr()
+        var bp = bary.unsafe_ptr()
+        # simplices in parallel chunks (below SERIAL_BELOW, serially); a
+        # chunk that meets a degenerate simplex flags it, and the error is
+        # raised after the loop
+        comptime SERIAL_BELOW = 50_000
+        var degenerate = List[Bool](
+            length=num_chunks(N, SERIAL_BELOW), fill=False
+        )
+        var badp = degenerate.unsafe_ptr()
+
+        def simplices(
+            chunk: Int, lo: Int, hi: Int
+        ) {dim, E, w, m, Vp, Sp, op, bp, badp}:
+            var A = List[Float64](length=m * m, fill=0)
+            var b = List[Float64](length=m, fill=0)
+            for i in range(lo, hi):
+                if dim == 0:
+                    bp[unsafe_offset=i] = 1.0
+                elif dim == 1:
+                    bp[unsafe_offset=2 * i] = 0.5
+                    bp[unsafe_offset=2 * i + 1] = 0.5
+                elif dim == 2:
+                    var v0 = Int(Sp[unsafe_offset=3 * i]) * E
+                    var v1 = Int(Sp[unsafe_offset=3 * i + 1]) * E
+                    var v2 = Int(Sp[unsafe_offset=3 * i + 2]) * E
+                    # squared lengths of the edges opposite vertices 0, 1, 2
+                    var a2: Float64 = 0
+                    var b2: Float64 = 0
+                    var c2: Float64 = 0
                     for k in range(E):
-                        s += V.unsafe_get(
-                            verts.unsafe_get(r) * E + k
-                        ) * V.unsafe_get(verts.unsafe_get(c) * E + k)
-                    A.unsafe_set(r * m + c, 2 * s)
-                    if r == c:
-                        b.unsafe_set(r, s)
-                A.unsafe_set(r * m + w, 1.0)
-                A.unsafe_set(w * m + r, 1.0)
-            A.unsafe_set(w * m + w, 0.0)
-            b.unsafe_set(w, 1.0)
-            _solve_in_place(A, b, m)
-            for r in range(w):
-                bary.unsafe_set(i * w + r, b.unsafe_get(r))
-            for k in range(E):
-                var s: Float64 = 0
-                for r in range(w):
-                    s += b.unsafe_get(r) * V.unsafe_get(
-                        verts.unsafe_get(r) * E + k
-                    )
-                out.unsafe_set(i * E + k, s)
+                        var x0 = Vp[unsafe_offset=v0 + k]
+                        var x1 = Vp[unsafe_offset=v1 + k]
+                        var x2 = Vp[unsafe_offset=v2 + k]
+                        a2 += (x1 - x2) * (x1 - x2)
+                        b2 += (x0 - x2) * (x0 - x2)
+                        c2 += (x0 - x1) * (x0 - x1)
+                    var w0 = a2 * (b2 + c2 - a2)
+                    var w1 = b2 * (c2 + a2 - b2)
+                    var w2 = c2 * (a2 + b2 - c2)
+                    var total = w0 + w1 + w2
+                    if total == 0:
+                        badp[unsafe_offset=chunk] = True
+                        return
+                    bp[unsafe_offset=3 * i] = w0 / total
+                    bp[unsafe_offset=3 * i + 1] = w1 / total
+                    bp[unsafe_offset=3 * i + 2] = w2 / total
+                else:
+                    for r in range(w):
+                        var vr = Int(Sp[unsafe_offset=i * w + r]) * E
+                        for c in range(w):
+                            var vc = Int(Sp[unsafe_offset=i * w + c]) * E
+                            var s: Float64 = 0
+                            for k in range(E):
+                                s += (
+                                    Vp[unsafe_offset=vr + k]
+                                    * Vp[unsafe_offset=vc + k]
+                                )
+                            A.unsafe_set(r * m + c, 2 * s)
+                            if r == c:
+                                b.unsafe_set(r, s)
+                        A.unsafe_set(r * m + w, 1.0)
+                        A.unsafe_set(w * m + r, 1.0)
+                    A.unsafe_set(w * m + w, 0.0)
+                    b.unsafe_set(w, 1.0)
+                    if not _solve_in_place(A, b, m):
+                        badp[unsafe_offset=chunk] = True
+                        return
+                    for r in range(w):
+                        bp[unsafe_offset=i * w + r] = b.unsafe_get(r)
+                for k in range(E):
+                    var x: Float64 = 0
+                    for r in range(w):
+                        x += (
+                            bp[unsafe_offset=i * w + r]
+                            * Vp[
+                                unsafe_offset=Int(Sp[unsafe_offset=i * w + r])
+                                * E
+                                + k
+                            ]
+                        )
+                    op[unsafe_offset=i * E + k] = x
+
+        parallel_ranges(N, SERIAL_BELOW, simplices)
+        for bad in degenerate:
+            if bad:
+                raise Error(
+                    "circumcenter: degenerate simplex (singular system)"
+                )
         data.circumcenter = out^
         data.bary_circumcenter = bary^
 
@@ -1159,66 +1216,16 @@ def _factorials(n: Int) -> List[Float64]:
     return out^
 
 
-def _small_circumcenters(
-    V: RealArray,
-    S: IntArray,
-    dim: Int,
-    mut out: RealArray,
-    mut bary: RealArray,
-) raises:
-    """Circumcenters of vertices, edges, or triangles in closed form."""
-    var E = cols_of(V)
-    var w = dim + 1
-    for i in range(rows_of(S)):
-        if dim == 0:
-            bary.unsafe_set(i, 1.0)
-        elif dim == 1:
-            bary.unsafe_set(2 * i, 0.5)
-            bary.unsafe_set(2 * i + 1, 0.5)
-        else:
-            var v0 = Int(S.unsafe_get(3 * i)) * E
-            var v1 = Int(S.unsafe_get(3 * i + 1)) * E
-            var v2 = Int(S.unsafe_get(3 * i + 2)) * E
-            # squared lengths of the edges opposite vertices 0, 1, 2
-            var a: Float64 = 0
-            var b: Float64 = 0
-            var c: Float64 = 0
-            for k in range(E):
-                var x0 = V.unsafe_get(v0 + k)
-                var x1 = V.unsafe_get(v1 + k)
-                var x2 = V.unsafe_get(v2 + k)
-                a += (x1 - x2) * (x1 - x2)
-                b += (x0 - x2) * (x0 - x2)
-                c += (x0 - x1) * (x0 - x1)
-            var w0 = a * (b + c - a)
-            var w1 = b * (c + a - b)
-            var w2 = c * (a + b - c)
-            var total = w0 + w1 + w2
-            if total == 0:
-                raise Error(
-                    "circumcenter: degenerate simplex (singular system)"
-                )
-            bary.unsafe_set(3 * i, w0 / total)
-            bary.unsafe_set(3 * i + 1, w1 / total)
-            bary.unsafe_set(3 * i + 2, w2 / total)
-        for k in range(E):
-            var x: Float64 = 0
-            for r in range(w):
-                x += bary.unsafe_get(i * w + r) * V.unsafe_get(
-                    Int(S.unsafe_get(i * w + r)) * E + k
-                )
-            out.unsafe_set(i * E + k, x)
-
-
 def _is_negative_zero(x: Float64) -> Bool:
     return x == 0 and (1.0 / x) < 0
 
 
-def _solve_in_place(mut A: List[Float64], mut b: List[Float64], n: Int) raises:
+def _solve_in_place(mut A: List[Float64], mut b: List[Float64], n: Int) -> Bool:
     """Solve the `n x n` system `A x = b` by Gaussian elimination with
     partial pivoting, overwriting `b` with `x` (and `A` with scratch).
 
-    Raises if `A` is singular to working precision, like `dense.solve`.
+    Returns False, leaving `b` undefined, if `A` is singular to working
+    precision (an exactly zero pivot column, as `dense.solve` raises on).
     """
     for k in range(n):
         var p = k
@@ -1229,7 +1236,7 @@ def _solve_in_place(mut A: List[Float64], mut b: List[Float64], n: Int) raises:
                 best = v
                 p = r
         if best == 0:
-            raise Error("circumcenter: degenerate simplex (singular system)")
+            return False
         if p != k:
             for c in range(n):
                 var t = A.unsafe_get(k * n + c)
@@ -1253,6 +1260,7 @@ def _solve_in_place(mut A: List[Float64], mut b: List[Float64], n: Int) raises:
         for c in range(k + 1, n):
             s -= A.unsafe_get(k * n + c) * b.unsafe_get(c)
         b.unsafe_set(k, s / A.unsafe_get(k * n + k))
+    return True
 
 
 def _det_in_place(mut A: List[Float64], n: Int) -> Float64:
@@ -1305,34 +1313,43 @@ def _simplex_volumes(
 
     Signed: the determinant of the edge vectors over `dim!` (needs
     `dim` equal to the embedding dimension). Unsigned: the square root of
-    the determinant of their Gram matrix over `dim!`. Buffers are reused
-    across simplices.
+    the determinant of their Gram matrix over `dim!`. Runs in parallel
+    chunks, each with its own buffers.
     """
     var E = cols_of(V)
     var w = dim + 1
-    var edges = List[Float64](length=dim * E, fill=0)
-    var M = List[Float64](length=dim * dim, fill=0)
     var scale = factorial(dim)
-    for i in range(rows_of(S)):
-        var v0 = Int(S.unsafe_get(i * w))
-        for r in range(dim):
-            var v = Int(S.unsafe_get(i * w + r + 1))
-            for k in range(E):
-                edges.unsafe_set(
-                    r * E + k,
-                    V.unsafe_get(v * E + k) - V.unsafe_get(v0 * E + k),
-                )
-        if signed:
-            for r in range(dim * dim):
-                M.unsafe_set(r, edges.unsafe_get(r))
-            out.unsafe_set(i, _det_in_place(M, dim) / scale)
-        else:
+    var Vp = V.unsafe_ptr()
+    var Sp = S.unsafe_ptr()
+    var op = out.unsafe_ptr()
+
+    def simplices(
+        chunk: Int, lo: Int, hi: Int
+    ) {dim, E, w, signed, scale, Vp, Sp, op}:
+        var edges = List[Float64](length=dim * E, fill=0)
+        var M = List[Float64](length=dim * dim, fill=0)
+        for i in range(lo, hi):
+            var v0 = Int(Sp[unsafe_offset=i * w]) * E
             for r in range(dim):
-                for c in range(dim):
-                    var g: Float64 = 0
-                    for k in range(E):
-                        g += edges.unsafe_get(r * E + k) * edges.unsafe_get(
-                            c * E + k
-                        )
-                    M.unsafe_set(r * dim + c, g)
-            out.unsafe_set(i, sqrt(abs(_det_in_place(M, dim))) / scale)
+                var v = Int(Sp[unsafe_offset=i * w + r + 1]) * E
+                for k in range(E):
+                    edges.unsafe_set(
+                        r * E + k,
+                        Vp[unsafe_offset=v + k] - Vp[unsafe_offset=v0 + k],
+                    )
+            if signed:
+                for r in range(dim * dim):
+                    M.unsafe_set(r, edges.unsafe_get(r))
+                op[unsafe_offset=i] = _det_in_place(M, dim) / scale
+            else:
+                for r in range(dim):
+                    for c in range(dim):
+                        var g: Float64 = 0
+                        for k in range(E):
+                            g += edges.unsafe_get(r * E + k) * edges.unsafe_get(
+                                c * E + k
+                            )
+                        M.unsafe_set(r * dim + c, g)
+                op[unsafe_offset=i] = sqrt(abs(_det_in_place(M, dim))) / scale
+
+    parallel_ranges(rows_of(S), 50_000, simplices)

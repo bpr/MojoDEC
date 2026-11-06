@@ -12,6 +12,11 @@ numojo = "mkdir -p build && mojo precompile third_party/numojo -o build/numojo.m
 test = { cmd = "bash tests/run_all.sh", depends-on = ["numojo"] }
 # `pixi run examples [NAME] [--show]`: see examples/README.md
 examples = { cmd = "bash examples/run.sh", depends-on = ["numojo"] }
+# release builds: bounds checks (debug_assert) compiled out
+examples-release = { cmd = "bash examples/run.sh", env = { MOJO_FLAGS = "-D ASSERT=none" }, depends-on = ["numojo"] }
+test-release = { cmd = "bash tests/run_all.sh", env = { MOJO_FLAGS = "-D ASSERT=none" }, depends-on = ["numojo"] }
+# timings of the parallel loops, in a release build
+bench = { cmd = "mojo run -D ASSERT=none -I . -I build benchmarks/geometry_and_solvers.mojo", depends-on = ["numojo"] }
 package = { cmd = "mojo precompile -I build mojodec -o build/mojodec.mojoc", depends-on = ["numojo"] }
 format = "mojo format mojodec tests examples"
 # `pixi run doc-check [--update | --list PATTERN]`: doc string warnings

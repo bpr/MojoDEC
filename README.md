@@ -70,6 +70,8 @@ Other tasks:
 pixi run test                        # all unit tests
 pixi run examples                    # every example; figures saved as PNG
 pixi run examples DarcyFlow --show   # one example, figures in windows
+pixi run examples-release            # the same with bounds checks compiled out
+pixi run bench                       # timings of the parallel loops
 pixi run format
 ```
 
@@ -323,6 +325,11 @@ the published mathematics:
   `TypedSubset[n, k, PRIMAL]`. `complex()`, `untyped()`, `.mat`, and
   `.diag` lead back to the untyped API, and `TypedCochain(c)` checks an
   untyped cochain's kind at run time.
+- **Parallel loops** on large meshes: circumcenters and primal volumes
+  (from 50k simplices), Whitney mass matrices (from 4096 top simplices),
+  and sparse matrix-vector products in `cg` and `lsqr` (from 1M stored
+  entries), through MAX's `parallelize`. Smaller problems run serially, and
+  the results are the same either way.
 - **`icosahedron` and `icosphere`**, closed surfaces to test on.
 - **`read_ply` and `write_ply`**, for meshes from MeshLab, Blender, and
   scanners (ASCII and binary, either byte order; `write_ply` takes

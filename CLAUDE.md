@@ -20,6 +20,8 @@ pixi run numojo                       # precompile vendored NuMojo -> build/numo
 pixi run test                         # every tests/test_*.mojo (builds numojo first)
 pixi run examples                     # all examples; figures saved as PNG
 pixi run examples DarcyFlow --show    # one example, figures in windows
+pixi run test-release                 # tests with -D ASSERT=none (also examples-release)
+pixi run bench                        # timings of the parallel loops (release build)
 pixi run package                      # build/mojodec.mojoc
 pixi run format                       # mojo format mojodec tests examples
 pixi run doc-check                    # doc string warnings vs docs/docstring-baseline.txt
@@ -45,8 +47,12 @@ mesh fixtures live in `tests/meshes/`. Examples run from their own directory
   1.3.0); `pixi.lock` records the build actually tested. Don't pin exact
   versions in `pixi.toml` except temporarily while testing one. `max-core`
   is needed by the vendored NuMojo (`max.algorithm`, `max.gpu`); MojoDEC
-  may use `max.algorithm.parallelize` too. `benchmarks/parallel_for.mojo`
-  is a pure-Mojo POSIX-threads baseline to time it against.
+  uses `max.algorithm.parallelize` only through `core/parallel.mojo`.
+  `benchmarks/parallel_for.mojo` is a pure-Mojo POSIX-threads baseline to
+  time it against.
+- `-D ASSERT=none` removes `debug_assert` bounds checks. `mojo run`/`build`
+  accept it (the `*-release` tasks pass it via `MOJO_FLAGS`); `mojo
+  precompile` does not, so it applies only to code compiled from source.
 - NuMojo v0.12.0 is vendored in `third_party/numojo` with a Mojo 1.3 patch
   (`third_party/numojo-mojo-1.3.patch`; see `third_party/README.md`) because
   the published package requires Mojo < 1.3. Code is compiled against
@@ -163,6 +169,21 @@ Key design points that span several files:
   The Gmsh fixtures in `tests/meshes/gmsh/` are generated from the `.geo`
   files there: `pixi exec --spec gmsh gmsh -2 square.geo -format msh41
   [-bin] -o square_v41[_bin].msh` (and `msh22`; `-3` for the cube).
+
+## Parallel loops
+
+`parallel_ranges(n, serial_below, body)` (`core/parallel.mojo`) runs
+`body(chunk, lo, hi)` on one chunk per physical core, or serially when
+`n < serial_below`. A MAX `parallelize` call costs about 200 µs whatever the
+work (POSIX threads cost 20–50 µs), so thresholds are set where the serial
+loop takes a few hundred µs: matvec at `PARALLEL_NNZ` (1M stored entries),
+circumcenters and primal volumes at 50k simplices, `whitney_innerproduct`
+at 4096 top simplices. Bodies must not raise: record failures per chunk
+and raise afterwards. Keep a hot serial loop out of a function that also
+holds the parallel branch (`CSRMatrix._matvec_parallel` is separate): in
+the same function the serial loop ran about 15% slower. Dual volumes stay
+serial (each top simplex adds into shared faces). `tests/test_parallel.mojo`
+uses meshes past every threshold; the other tests' meshes run serially.
 
 ## Conventions
 
