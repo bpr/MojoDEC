@@ -11,6 +11,7 @@ whose rows are the coordinates of its `M+1` vertices in `N`-space; the dense
 small dense solves use the pivoted LU of `mojodec.routines.dense`.
 """
 
+from std.math import sqrt
 import numojo as nm
 from numojo.prelude import *
 
@@ -58,7 +59,7 @@ def unsigned_volume(pts: RealArray) raises -> Float64:
             for k in range(N):
                 s += A.unsafe_get(i * N + k) * A.unsafe_get(j * N + k)
             gram.unsafe_set(i * M + j, s)
-    return abs(_det(gram)) ** 0.5 / factorial(M)
+    return sqrt(abs(_det(gram))) / factorial(M)
 
 
 def signed_volume(pts: RealArray) raises -> Float64:
@@ -129,12 +130,31 @@ def circumcenter_barycentric(pts: RealArray) raises -> RealArray:
     return out^
 
 
-def circumcenter(pts: RealArray) raises -> Tuple[RealArray, Float64]:
+struct Circumsphere(Copyable, Movable):
+    """The circumscribed sphere of a simplex."""
+
+    var center: RealArray
+    """The circumcenter, one coordinate per column of the vertices."""
+    var radius: Float64
+    """The circumradius."""
+
+    def __init__(out self, var center: RealArray, radius: Float64):
+        """A sphere from its center and radius.
+
+        Args:
+            center: The center.
+            radius: The radius.
+        """
+        self.center = center^
+        self.radius = radius
+
+
+def circumcenter(pts: RealArray) raises -> Circumsphere:
     """Circumcenter and circumradius of a simplex.
 
     ```mojo
-    var (c, r) = circumcenter(nm.array[f64]("[[0, 0], [1, 0], [0, 1]]"))
-    # c == [0.5, 0.5], r == 0.7071...
+    var s = circumcenter(nm.array[f64]("[[0, 0], [1, 0], [0, 1]]"))
+    # s.center == [0.5, 0.5], s.radius == 0.7071...
     ```
 
     Args:
@@ -159,7 +179,7 @@ def circumcenter(pts: RealArray) raises -> Tuple[RealArray, Float64]:
     for k in range(cols):
         var d = pts.unsafe_get(k) - center.unsafe_get(k)
         r2 += d * d
-    return (center^, r2**0.5)
+    return Circumsphere(center^, sqrt(r2))
 
 
 def is_wellcentered(pts: RealArray, tol: Float64 = 1e-8) raises -> Bool:

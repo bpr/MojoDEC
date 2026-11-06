@@ -7,6 +7,7 @@ from std.testing import (
 )
 
 from mojodec import (
+    Primality,
     CSRMatrix,
     DUAL,
     MatrixOp,
@@ -14,6 +15,7 @@ from mojodec import (
     SimplicialComplex,
     TypedCochain,
     TypedComplex,
+    TypedSubset,
     d,
     delta,
     laplace_derham,
@@ -29,7 +31,7 @@ def _grid(n: Int) raises -> TypedComplex[2]:
     """A grid with its interior vertices moved a little, so no dual edge has
     zero length (as the diagonals of the right triangles would)."""
     var m = simplicial_grid_2d(n)
-    var V = m[0].copy()
+    var V = m.vertices.copy()
     var h = 1.0 / Float64(n)
     for i in range(1, n):
         for j in range(1, n):
@@ -40,7 +42,7 @@ def _grid(n: Int) raises -> TypedComplex[2]:
             fset(
                 V, v, 1, fget(V, v, 1) + 0.15 * h * Float64((v * 3) % 5 - 2) / 2
             )
-    return TypedComplex[2](V, m[1])
+    return TypedComplex[2](V, m.elements)
 
 
 def _torus() raises -> TypedComplex[3]:
@@ -55,7 +57,7 @@ def _diff(A: CSRMatrix, B: CSRMatrix) raises -> Float64:
 
 def _check_level[n: Int, k: Int, primal: Bool](tc: TypedComplex[n]) raises:
     """Typed operators on k-cochains agree with the untyped ones."""
-    var basis = tc.sc.get_cochain_basis(k, primal)
+    var basis = tc.sc.get_cochain_basis(k, Primality(primal))
     var S = tc.star[k, primal]()
     assert_equal(_diff(S.diag.to_csr(), star(basis).v), 0.0)
     comptime if k < n:
@@ -126,7 +128,7 @@ def test_composition() raises:
 
 def test_dirichlet_poisson() raises:
     var tc = _grid(8)
-    var fixed = tc.boundary_subset[0]()
+    var fixed = tc.boundary_cells[0]()
     var A = tc.laplacian[0, PRIMAL]().exclude_subset(fixed) + tc.identity[
         0, PRIMAL
     ]().restrict_to_subset(fixed)
@@ -141,27 +143,58 @@ def test_dirichlet_poisson() raises:
         assert_almost_equal(u[i], g[i], atol=1e-12)
 
 
+def test_typed_subset() raises:
+    var tc = _grid(4)
+    var bd = tc.boundary_cells[1]()
+    assert_equal(len(bd), 16)
+    # the boundary of the boundary edges is the boundary vertices
+    var verts = bd.boundary()
+    assert_true(verts.untyped() == tc.boundary_cells[0]().untyped())
+    # dual() swaps the kind in the type
+    var dual_bd: TypedSubset[2, 1, DUAL] = bd.dual()
+    assert_equal(len(dual_bd), 16)
+    var back: TypedSubset[2, 1, PRIMAL] = dual_bd.dual()
+    assert_true(back.untyped() == bd.untyped())
+    # set operations and the cofaces of the boundary vertices
+    var some = tc.subset[1, PRIMAL]([0, 1, 2])
+    assert_equal(len(bd | some), len(bd) + len(some) - len(bd & some))
+    assert_true((bd - bd).is_empty())
+    assert_equal(len(bd.complement()), tc.num_cells[1, PRIMAL]() - 16)
+    var cof = verts.coboundary()
+    assert_true(len(cof) >= len(bd))
+    assert_equal(len(TypedSubset[2, 2, DUAL].full(tc.sc)), 25)
+    # an untyped subset of the wrong kind is refused at run time
+    with assert_raises(contains="other cells"):
+        _ = TypedSubset[2, 0, PRIMAL](tc.sc, tc.sc.boundary_cells()[1].copy())
+    with assert_raises(contains="other cells"):
+        _ = TypedSubset[2, 0, DUAL](tc.sc, tc.sc.boundary_cells()[0].copy())
+    # subsets of another complex are refused by cochains and operators
+    var other = _grid(4)
+    var c = tc.cochain[0, PRIMAL]()
+    with assert_raises(contains="another complex"):
+        c.overwrite(other.boundary_cells[0](), c.copy())
+    with assert_raises(contains="different complexes"):
+        _ = tc.laplacian[0, PRIMAL]().exclude_subset(other.boundary_cells[0]())
+
+
 def test_errors() raises:
     var m = simplicial_grid_2d(2)
     with assert_raises():
-        _ = TypedComplex[3](m[0], m[1])
-    var tc = TypedComplex[2](m[0], m[1])
+        _ = TypedComplex[3](m.vertices, m.elements)
+    var tc = TypedComplex[2](m.vertices, m.elements)
     with assert_raises():
-        _ = TypedCochain[2, 1, PRIMAL](tc.sc.get_cochain(1, False))
+        _ = TypedCochain[2, 1, PRIMAL](tc.sc.get_cochain(1, .DUAL))
     var c = TypedCochain[2, 1, PRIMAL](tc.sc.get_cochain(1))
     assert_equal(len(c), tc.num_cells[1, PRIMAL]())
     var u = c.untyped()
     assert_equal(u.k, 1)
     with assert_raises():
         _ = tc.cochain[0, PRIMAL](c.v.copy())
-    # subsets must be of the output cells
-    with assert_raises():
-        _ = tc.d[0, PRIMAL]().exclude_subset(tc.boundary_subset[0]())
-    _ = tc.d[0, PRIMAL]().exclude_subset(tc.boundary_subset[1]())
-    with assert_raises():
-        _ = tc.star[1, PRIMAL]().restrict_to_subset(tc.boundary_subset[1]())
-    _ = tc.star[1, PRIMAL]().restrict_to_subset(tc.boundary_subset[1]().dual())
-    var nogeom = TypedComplex[2](m[0], m[1], compute_geometry=False)
+    # subsets must be of the output cells; other kinds do not compile:
+    # tc.d[0, PRIMAL]().exclude_subset(tc.boundary_cells[0]())
+    _ = tc.d[0, PRIMAL]().exclude_subset(tc.boundary_cells[1]())
+    _ = tc.star[1, PRIMAL]().restrict_to_subset(tc.boundary_cells[1]().dual())
+    var nogeom = TypedComplex[2](m.vertices, m.elements, compute_geometry=False)
     with assert_raises():
         _ = nogeom.star[0, PRIMAL]()
     # cochains from different complexes do not mix
@@ -171,8 +204,8 @@ def test_errors() raises:
 
 def test_operators_keep_their_complex() raises:
     var m = simplicial_grid_2d(2)
-    var a = TypedComplex[2](m[0], m[1])
-    var b = TypedComplex[2](m[0], m[1])
+    var a = TypedComplex[2](m.vertices, m.elements)
+    var b = TypedComplex[2](m.vertices, m.elements)
     var ua = a.cochain[0, PRIMAL]()
     var ub = b.cochain[0, PRIMAL]()
     var L = a.laplacian[0, PRIMAL]()

@@ -7,6 +7,7 @@
 # plots each one to harmonic_<n>.png. harmonic.vtu holds all four, sampled
 # at the triangle barycenters, for ParaView.
 
+from std.math import sqrt
 import numojo as nm
 from numojo.prelude import *
 
@@ -55,12 +56,12 @@ def hodge_decomposition(
     # solve for alpha
     var A = delta(d(sc.get_cochain_basis(p - 1))).v.copy()
     var b = delta(omega).v.copy()
-    alpha.v = cg(A, b, rtol=1e-8).x.copy()
+    alpha.v = cg(A, b, rtol=1e-8).take_x()
 
     # solve for beta
     A = d(delta(sc.get_cochain_basis(p + 1))).v.copy()
     b = d(omega).v.copy()
-    beta.v = lsqr(A, b, atol=1e-12, btol=1e-12, iter_lim=20 * A.ncols).x.copy()
+    beta.v = lsqr(A, b, atol=1e-12, btol=1e-12, iter_lim=20 * A.ncols).take_x()
 
     # solve for h
     var h = omega - d(alpha) - delta(beta)
@@ -82,7 +83,7 @@ def ortho(var A: RealArray) raises -> RealArray:
         for r in range(m):
             v.append(fget(A, r, j))
             vn += v[r] * v[r]
-        vn = vn**0.5
+        vn = sqrt(vn)
         v[i] += vn if fget(A, i, j) > 0 else -vn
         var vv: Float64 = 0
         for r in range(m):
@@ -179,13 +180,13 @@ def main() raises:
         plt.figure()
         plt.title("Harmonic 1-cochain #" + String(n))
         _ = triplot(sc.vertices(), sc.simplices())
-        var bd = simplex_quivers(sc, h.v)
-        var bases = bd[0].to_numpy()
-        var dirs = bd[1].to_numpy()
+        var q = simplex_quivers(sc, h.v)
+        var bases = q.bases.to_numpy()
+        var dirs = q.vectors.to_numpy()
         plt.quiver(bases.T[0], bases.T[1], dirs.T[0], dirs.T[1])
         plt.axis("equal")
         plt.savefig("harmonic_" + String(n) + ".png")
-        fields.append(VTKField("harmonic_" + String(n), bd[1]))
+        fields.append(VTKField("harmonic_" + String(n), q.vectors))
     print("wrote harmonic_0.png ... harmonic_3.png")
     write_vtu("harmonic.vtu", sc.vertices(), sc.simplices(), cell_data=fields)
     print("wrote harmonic.vtu")

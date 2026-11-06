@@ -70,9 +70,9 @@ def test_circumcenter_examples() raises:
     assert_almost_equal(b.unsafe_get(1), 0.5)
     assert_almost_equal(b.unsafe_get(2), 0.5)
     var cr = circumcenter(A("[[0,0],[1,0],[0,1]]"))
-    assert_almost_equal(cr[0].unsafe_get(0), 0.5)
-    assert_almost_equal(cr[0].unsafe_get(1), 0.5)
-    assert_almost_equal(cr[1], 0.5**0.5)
+    assert_almost_equal(cr.center.unsafe_get(0), 0.5)
+    assert_almost_equal(cr.center.unsafe_get(1), 0.5)
+    assert_almost_equal(cr.radius, 0.5**0.5)
 
 
 def test_circumcenter_random() raises:
@@ -86,7 +86,7 @@ def test_circumcenter_random() raises:
             for i in range(M):
                 var d2: Float64 = 0
                 for k in range(N):
-                    d2 += (fget(pts, i, k) - cr[0].unsafe_get(k)) ** 2
+                    d2 += (fget(pts, i, k) - cr.center.unsafe_get(k)) ** 2
                 lo = min(lo, d2**0.5)
                 hi = max(hi, d2**0.5)
             assert_almost_equal(lo, hi, atol=1e-6)

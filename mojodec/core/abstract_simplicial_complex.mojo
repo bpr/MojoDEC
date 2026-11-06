@@ -24,6 +24,9 @@ from mojodec.core.utils import (
     take_int_rows,
     vstack_int,
 )
+from mojodec.core.cell_set import CellComplex, CellSet
+from mojodec.core.chain_complex import ChainComplex
+from mojodec.core.subset import Subset
 from mojodec.routines.topology import (
     boundary_of,
     closure_of,
@@ -38,7 +41,7 @@ from mojodec.routines.simplex_array import (
 )
 
 
-struct AbstractSimplicialComplex(Copyable, Movable):
+struct AbstractSimplicialComplex(CellComplex, Copyable, Movable):
     """A simplicial complex given only by its simplices.
 
     ```mojo
@@ -47,15 +50,14 @@ struct AbstractSimplicialComplex(Copyable, Movable):
     simplices.append(nm.fromstring[DType.int]("[[4]]"))
     simplices.append(nm.fromstring[DType.int]("[[0,1],[2,3]]"))
     var asc = AbstractSimplicialComplex(simplices)
-    var B1 = asc.chain_complex()[1].copy()
+    ref B1 = asc.chain_complex().boundary(1)
     ```
     """
 
     var simplices: List[IntArray]
     """`simplices[k]`: the k-simplices. Lower dimensions hold sorted rows in
     lexicographic order; the top dimension is the array given, unchanged."""
-    var _chain_complex: List[CSRMatrix]
-    var _cochain_complex: List[CSRMatrix]
+    var _chains: ChainComplex
 
     def __init__(out self, simplices: List[IntArray]) raises:
         """Build the complex from arrays of (maximal) simplices.
@@ -94,8 +96,8 @@ struct AbstractSimplicialComplex(Copyable, Movable):
 
         for d in range(D - 1, -1, -1):
             var fb = simplex_array_boundary(s, parity)
-            s = fb[0].copy()
-            var B = fb[1].copy()
+            s = fb.faces.copy()
+            var B = fb.boundary.copy()
             if given[d]:
                 var old_s = s.copy()
                 var user = given[d].value().copy()
@@ -105,11 +107,11 @@ struct AbstractSimplicialComplex(Copyable, Movable):
                 s = _unique_rows(merged)
                 var remap = simplex_array_searchsorted(s, old_s)
                 var coo = B.to_coo()
-                var rows = List[Int](capacity=len(coo[0]))
-                for r in coo[0]:
+                var rows = List[Int](capacity=len(coo.rows))
+                for r in coo.rows:
                     rows.append(Int(remap.unsafe_get(r)))
                 B = CSRMatrix.from_coo(
-                    rows_of(s), B.ncols, rows, coo[1], coo[2]
+                    rows_of(s), B.ncols, rows, coo.cols, coo.values
                 )
             parity = int_vector(rows_of(s))
             out_simplices[d] = s.copy()
@@ -119,26 +121,20 @@ struct AbstractSimplicialComplex(Copyable, Movable):
         var num_vertices = max_entry(s) + 1 if rows_of(s) > 0 else 0
         if D >= 1:
             var coo = chain[1].to_coo()
-            var rows = List[Int](capacity=len(coo[0]))
-            for r in coo[0]:
+            var rows = List[Int](capacity=len(coo.rows))
+            for r in coo.rows:
                 rows.append(Int(s.unsafe_get(r)))
             chain[1] = CSRMatrix.from_coo(
-                num_vertices, chain[1].ncols, rows, coo[1], coo[2]
+                num_vertices, chain[1].ncols, rows, coo.cols, coo.values
             )
         var verts = int_array(num_vertices, 1)
         for i in range(num_vertices):
             verts.unsafe_set(i, Scalar[DType.int](i))
         out_simplices[0] = verts^
-        chain[0] = CSRMatrix(1, num_vertices)
 
-        var cochain = List[CSRMatrix]()
-        for k in range(1, len(chain)):
-            cochain.append(chain[k].transpose())
-        cochain.append(CSRMatrix(1, chain[len(chain) - 1].ncols))
-
+        _ = chain.pop(0)
         self.simplices = out_simplices^
-        self._chain_complex = chain^
-        self._cochain_complex = cochain^
+        self._chains = ChainComplex(num_vertices, chain^)
 
     def complex_dimension(self) -> Int:
         """Dimension of the top simplices.
@@ -146,7 +142,169 @@ struct AbstractSimplicialComplex(Copyable, Movable):
         Returns:
             The highest dimension given to the constructor.
         """
-        return len(self._cochain_complex) - 1
+        return self._chains.complex_dimension()
+
+    def chain_complex(self) -> ref[self._chains] ChainComplex:
+        """The boundary operators `B_k` and coboundary operators `d_k`.
+
+        Returns:
+            The complex's `ChainComplex`, by reference.
+        """
+        return self._chains
+
+    def star(self, cells: CellSet) raises -> CellSet:
+        """Every cell that has a cell of `cells` as a face, `cells` included.
+
+        See `mojodec.routines.topology` for the definitions.
+
+        Args:
+            cells: Simplices of this complex.
+
+        Returns:
+            The star.
+
+        Raises:
+            If `cells` does not belong to this complex.
+        """
+        return star_of(self, cells)
+
+    def closure(self, cells: CellSet) raises -> CellSet:
+        """Every face of every cell of `cells`: the subcomplex they generate.
+
+        Args:
+            cells: Simplices of this complex.
+
+        Returns:
+            The closure.
+
+        Raises:
+            If `cells` does not belong to this complex.
+        """
+        return closure_of(self, cells)
+
+    def link(self, cells: CellSet) raises -> CellSet:
+        """The closure of the star minus the star of the closure of `cells`.
+
+        Args:
+            cells: Simplices of this complex.
+
+        Returns:
+            The link.
+
+        Raises:
+            If `cells` does not belong to this complex.
+        """
+        return link_of(self, cells)
+
+    def boundary(self, cells: CellSet) raises -> CellSet:
+        """The closure of the faces bounding exactly one top cell of `cells`.
+
+        Args:
+            cells: Simplices of this complex.
+
+        Returns:
+            The boundary, a closed set.
+
+        Raises:
+            If `cells` does not belong to this complex or is not pure (a
+            lower cell is not a face of a top cell).
+        """
+        return boundary_of(self, cells)
+
+    def interior(self, cells: CellSet) raises -> CellSet:
+        """The closure of `cells` minus its boundary.
+
+        Args:
+            cells: Simplices of this complex.
+
+        Returns:
+            The interior.
+
+        Raises:
+            If `cells` does not belong to this complex or is not pure.
+        """
+        return interior_of(self, cells)
+
+    def boundary_cells(self) raises -> CellSet:
+        """The boundary of the whole complex: the faces bounding exactly one
+        top cell, and their faces.
+
+        `boundary_cells()[k]` is the `Subset` of boundary k-cells.
+
+        Returns:
+            The boundary cells.
+
+        Raises:
+            If the complex's operators are inconsistent.
+        """
+        return boundary_of(self)
+
+    def interior_cells(self) raises -> CellSet:
+        """The cells not on the boundary of the whole complex.
+
+        Returns:
+            The interior cells.
+
+        Raises:
+            If the complex's operators are inconsistent.
+        """
+        return interior_of(self)
+
+    def num_cells(self, k: Int) raises -> Int:
+        """The number of k-cells.
+
+        Args:
+            k: A dimension in `0..n`.
+
+        Returns:
+            The cell count.
+
+        Raises:
+            If `k` is outside `0..n`.
+        """
+        return self._chains.num_cells(k)
+
+    def faces_of(self, cells: Subset) raises -> Subset:
+        """The (k-1)-cells that are faces of some k-cell of `cells`.
+
+        Args:
+            cells: Primal k-cells, k > 0.
+
+        Returns:
+            Primal (k-1)-cells.
+
+        Raises:
+            If k = 0 or `cells` does not fit the complex.
+        """
+        return self._chains.faces_of(cells)
+
+    def cofaces_of(self, cells: Subset) raises -> Subset:
+        """The (k+1)-cells that have some k-cell of `cells` as a face.
+
+        Args:
+            cells: Primal k-cells, k < n.
+
+        Returns:
+            Primal (k+1)-cells.
+
+        Raises:
+            If k = n or `cells` does not fit the complex.
+        """
+        return self._chains.cofaces_of(cells)
+
+    def boundary_faces_of(self, cells: Subset) raises -> Subset:
+        """The (k-1)-cells that are faces of exactly one k-cell of `cells`.
+
+        Args:
+            cells: Primal k-cells, k > 0.
+
+        Returns:
+            Primal (k-1)-cells.
+
+        Raises:
+            If k = 0 or `cells` does not fit the complex.
+        """
+        return self._chains.boundary_faces_of(cells)
 
     def complex(self) -> List[IntArray]:
         """The simplex arrays of every dimension.
@@ -155,108 +313,6 @@ struct AbstractSimplicialComplex(Copyable, Movable):
             A copy of `simplices`.
         """
         return self.simplices.copy()
-
-    def star(self, cells: List[List[Int]]) raises -> List[List[Int]]:
-        """Every cell that has a cell of `cells` as a face, `cells` included.
-
-        See `mojodec.routines.topology` for the definitions.
-
-        Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-simplices,
-                and may stop short of the top dimension.
-
-        Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
-
-        Raises:
-            If `cells` has too many dimensions or an index is out of range.
-        """
-        return star_of(self.chain_complex(), cells)
-
-    def closure(self, cells: List[List[Int]]) raises -> List[List[Int]]:
-        """Every face of every cell of `cells`: the subcomplex they generate.
-
-        Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-simplices,
-                and may stop short of the top dimension.
-
-        Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
-
-        Raises:
-            If `cells` has too many dimensions or an index is out of range.
-        """
-        return closure_of(self.chain_complex(), cells)
-
-    def link(self, cells: List[List[Int]]) raises -> List[List[Int]]:
-        """The closure of the star minus the star of the closure of `cells`.
-
-        Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-simplices,
-                and may stop short of the top dimension.
-
-        Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
-
-        Raises:
-            If `cells` has too many dimensions or an index is out of range.
-        """
-        return link_of(self.chain_complex(), cells)
-
-    def boundary(self, cells: List[List[Int]]) raises -> List[List[Int]]:
-        """The closure of the faces bounding exactly one top cell of `cells`.
-
-        Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-simplices,
-                and may stop short of the top dimension.
-
-        Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
-
-        Raises:
-            If `cells` has too many dimensions, an index is out of range, or
-            `cells` is not pure (a lower cell is not a face of a top cell).
-        """
-        return boundary_of(self.chain_complex(), cells)
-
-    def interior(self, cells: List[List[Int]]) raises -> List[List[Int]]:
-        """The closure of `cells` minus its boundary.
-
-        Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-simplices,
-                and may stop short of the top dimension.
-
-        Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
-
-        Raises:
-            If `cells` has too many dimensions, an index is out of range, or
-            `cells` is not pure.
-        """
-        return interior_of(self.chain_complex(), cells)
-
-    def boundary_cells(self) raises -> List[List[Int]]:
-        """The boundary of the whole complex: the faces bounding exactly one
-        top cell, and their faces.
-
-        Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
-
-        Raises:
-            If the complex's operators are inconsistent.
-        """
-        return boundary_of(self.chain_complex())
-
-    def interior_cells(self) raises -> List[List[Int]]:
-        """The cells not on the boundary of the whole complex.
-
-        Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
-
-        Raises:
-            If the complex's operators are inconsistent.
-        """
-        return interior_of(self.chain_complex())
 
     def euler_characteristic(self) -> Int:
         """The alternating sum of the numbers of k-simplices.
@@ -269,23 +325,6 @@ struct AbstractSimplicialComplex(Copyable, Movable):
             var n = rows_of(self.simplices[k])
             chi += -n if k % 2 == 1 else n
         return chi
-
-    def chain_complex(self) -> List[CSRMatrix]:
-        """The boundary operators `B_k` (k-chains to (k-1)-chains).
-
-        Returns:
-            `B_0, ..., B_n`, with `B_k` the `N_{k-1} x N_k` matrix and `B_0`
-            the `1 x N_0` zero matrix.
-        """
-        return self._chain_complex.copy()
-
-    def cochain_complex(self) -> List[CSRMatrix]:
-        """The coboundary operators `d_k = B_{k+1}^T`.
-
-        Returns:
-            `d_0, ..., d_n`, with `d_n` the `1 x N_n` zero matrix.
-        """
-        return self._cochain_complex.copy()
 
 
 def _unique_rows(a: IntArray) raises -> IntArray:

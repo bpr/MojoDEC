@@ -24,20 +24,21 @@
 from std.python import Python, PythonObject
 
 from mojodec import (
+    CellSet,
     Simplex,
     SimplicialComplex,
     VTKField,
     simplicial_grid_2d,
     write_vtu,
 )
+from mojodec import Subset
 from mojodec.core.utils import real_vector, take_int_rows, take_rows
 from mojodec.vis import lineplot, pyplot, show_requested, triplot
 
 
 def main() raises:
     var n = 8
-    var vt = simplicial_grid_2d(n)
-    var sc = SimplicialComplex(vt[0], vt[1])
+    var sc = SimplicialComplex(simplicial_grid_2d(n))
     print(sc)
 
     # (n+1)^2 vertices numbered row by row, x fastest
@@ -57,60 +58,63 @@ def main() raises:
             + _pad(names[i] + " " + String(v), 14)
             + _pad(String(len(st[0]), "/", len(st[1]), "/", len(st[2])), 14)
             + _pad(String(len(lk[0]), "/", len(lk[1])), 12)
-            + String(_euler(lk))
+            + String(lk.euler_characteristic())
         )
-    _check(_euler(sc.link(Simplex([center]))) == 0, "interior link is closed")
-    _check(_euler(sc.link(Simplex([side]))) == 1, "boundary link is a path")
+    _check(
+        sc.link(Simplex([center])).euler_characteristic() == 0,
+        "interior link is closed",
+    )
+    _check(
+        sc.link(Simplex([side])).euler_characteristic() == 1,
+        "boundary link is a path",
+    )
     print(
         "\nlink of vertex",
         center,
         ":",
-        _join(sc.simplices_in(sc.link(Simplex([center])))),
+        _join(sc.link(Simplex([center])).simplices(sc)),
     )
 
     # an edge from the center vertex: its two triangles' opposite vertices
     var e = sc[1].simplex_to_index(Simplex([center, center + 1]))
-    var lk_e = sc.link([[], [e]])
-    print("link of edge", center, center + 1, ":", _join(sc.simplices_in(lk_e)))
+    var lk_e = sc.link(CellSet.from_indices(sc, 1, [e]))
+    print("link of edge", center, center + 1, ":", _join(lk_e.simplices(sc)))
     _check(len(lk_e[0]) == 2 and len(lk_e[1]) == 0, "edge link is two vertices")
 
     # the closed star is a disk with the link as its boundary
     var st = sc.star(Simplex([center]))
     var closed = sc.closure(st)
     _check(
-        _same(sc.boundary(closed), sc.link(Simplex([center]))),
+        sc.boundary(closed) == sc.link(Simplex([center])),
         "Bd(Cl(St(v))) = Lk(v)",
     )
-    _check(_same(sc.interior(closed), st), "Int(Cl(St(v))) = St(v)")
+    _check(sc.interior(closed) == st, "Int(Cl(St(v))) = St(v)")
 
     # grow rings around the center: R_0 = Cl(St(v)), R_k = Cl(St(R_{k-1}))
     var ring = real_vector(sc[2].num_simplices)
     for t in range(ring.size):
         ring.unsafe_set(t, -1)
     var on_edge = sc.boundary_cells()
-    var regions = List[List[List[Int]]]()
+    var regions = List[CellSet]()
     var region = closed.copy()
     print(
         "\n  ring  triangles  Bd edges  chi(Bd)  Bd edges on the square's edge"
     )
     for k in range(n):
-        for t in region[2]:
+        for t in region[2].indices():
             if ring.unsafe_get(t) < 0:
                 ring.unsafe_set(t, Float64(k))
         var bd = sc.boundary(region)
-        var shared = 0
-        for b in bd[1]:
-            if b in on_edge[1]:
-                shared += 1
+        var shared = len(bd[1] & on_edge[1])
         print(
             "  "
             + _pad(String(k), 6)
             + _pad(String(len(region[2])), 11)
             + _pad(String(len(bd[1])), 10)
-            + _pad(String(_euler(bd)), 9)
+            + _pad(String(bd.euler_characteristic()), 9)
             + String(shared)
         )
-        _check(_euler(bd) == 0, "ring boundary is a polygon")
+        _check(bd.euler_characteristic() == 0, "ring boundary is a polygon")
         regions.append(region.copy())
         if len(region[2]) == sc[2].num_simplices:
             break
@@ -132,7 +136,7 @@ def main() raises:
         "triangles",
     )
     _check(len(on_edge[1]) == 4 * n, "the boundary has 4n edges")
-    _check(_same(sc.boundary(on_edge), [[], [], []]), "Bd(Bd(M)) is empty")
+    _check(sc.boundary(on_edge).is_empty(), "Bd(Bd(M)) is empty")
 
     var show = show_requested()
     var plt = pyplot(interactive=show)
@@ -155,7 +159,8 @@ def main() raises:
     var cmap = plt.get_cmap("viridis")
     for k in range(len(regions) - 1, -1, -1):
         var col = triplot(
-            sc.vertices(), take_int_rows(sc[2].simplices, regions[k][2])
+            sc.vertices(),
+            take_int_rows(sc[2].simplices, regions[k][2].indices()),
         )
         col.set_facecolor(cmap(Float64(k) / Float64(max(len(regions) - 1, 1))))
         col.set_alpha(1.0)
@@ -167,8 +172,8 @@ def main() raises:
     plt.sca(fig_axes[1][2])
     _ = triplot(sc.vertices(), sc.simplices())
     _edges(sc, on_edge[1], "tab:blue", 3.0)
-    _dots(plt, sc, on_edge[0], "tab:blue")
-    _dots(plt, sc, interior[0], "w")
+    _dots(plt, sc, on_edge[0].indices(), "tab:blue")
+    _dots(plt, sc, interior[0].indices(), "w")
     plt.title("boundary (blue) and interior vertices (white)")
 
     for i in range(3):
@@ -185,23 +190,6 @@ def main() raises:
     print("wrote neighborhoods.vtu")
     if show:
         plt.show()
-
-
-def _euler(cells: List[List[Int]]) -> Int:
-    """The alternating sum of the numbers of k-cells."""
-    var chi = 0
-    for k in range(len(cells)):
-        chi += -len(cells[k]) if k % 2 == 1 else len(cells[k])
-    return chi
-
-
-def _same(a: List[List[Int]], b: List[List[Int]]) -> Bool:
-    if len(a) != len(b):
-        return False
-    for k in range(len(a)):
-        if a[k] != b[k]:
-            return False
-    return True
 
 
 def _check(ok: Bool, what: String) raises:
@@ -227,19 +215,23 @@ def _pad(s: String, width: Int) -> String:
     return out
 
 
-def _fill(sc: SimplicialComplex, triangles: List[Int], color: String) raises:
-    var col = triplot(sc.vertices(), take_int_rows(sc[2].simplices, triangles))
+def _fill(sc: SimplicialComplex, triangles: Subset, color: String) raises:
+    var col = triplot(
+        sc.vertices(), take_int_rows(sc[2].simplices, triangles.indices())
+    )
     col.set_facecolor(color)
     col.set_alpha(0.8)
 
 
 def _edges(
-    sc: SimplicialComplex, edges: List[Int], color: String, width: Float64
+    sc: SimplicialComplex, edges: Subset, color: String, width: Float64
 ) raises:
-    if len(edges) == 0:
+    if edges.is_empty():
         return
     var col = lineplot(
-        sc.vertices(), take_int_rows(sc[1].simplices, edges), linewidths=width
+        sc.vertices(),
+        take_int_rows(sc[1].simplices, edges.indices()),
+        linewidths=width,
     )
     col.set_color(color)
 

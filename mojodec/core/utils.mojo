@@ -13,6 +13,7 @@ MojoDEC stores integer arrays (simplex arrays, cube arrays, index lists) as
 `(i, j)` of an `r x c` array lives at flat offset `i * c + j`.
 """
 
+from std.math import sqrt
 import numojo as nm
 from numojo.prelude import *
 
@@ -361,7 +362,10 @@ def lexsort_rows(a: IntArray) -> List[Int]:
     """Stable permutation that sorts the rows of `a` lexicographically.
 
     Equivalent to NumPy's `lexsort(a.T[::-1])`: the first column is the
-    primary key.
+    primary key. When the entries span a range not much larger than the
+    number of rows, as vertex ids in a simplex array do, this is a radix
+    sort (a counting sort per column, last column first); otherwise a merge
+    sort.
 
     Args:
         a: A 2-D integer array.
@@ -373,8 +377,19 @@ def lexsort_rows(a: IntArray) -> List[Int]:
     var perm = List[Int](capacity=n)
     for i in range(n):
         perm.append(i)
-    var scratch = List[Int](length=n, fill=0)
-    _merge_sort_rows(a, perm, scratch, 0, n)
+    if n < 2 or a.size == 0:
+        return perm^
+    var lo = Int(a.unsafe_get(0))
+    var hi = lo
+    for i in range(1, a.size):
+        var x = Int(a.unsafe_get(i))
+        lo = min(lo, x)
+        hi = max(hi, x)
+    if hi - lo <= 4 * n + 1024:
+        _radix_sort_rows(a, perm, lo, hi - lo + 1)
+    else:
+        var scratch = List[Int](length=n, fill=0)
+        _merge_sort_rows(a, perm, scratch, 0, n)
     return perm^
 
 
@@ -470,6 +485,10 @@ def vstack_int(a: IntArray, b: IntArray) raises -> IntArray:
     return out^
 
 
+comptime _W = 8
+"""SIMD width of the vector kernels: 8 doubles, two AVX2 registers."""
+
+
 def dot(x: RealArray, y: RealArray) -> Float64:
     """Inner product of two 1-D real arrays of equal length.
 
@@ -480,9 +499,16 @@ def dot(x: RealArray, y: RealArray) -> Float64:
     Returns:
         The sum of `x[i] * y[i]`.
     """
-    var s: Float64 = 0
-    for i in range(x.size):
+    var n = x.size
+    var acc = SIMD[DType.float64, _W](0)
+    var i = 0
+    while i + _W <= n:
+        acc += x.unsafe_load[_W](i) * y.unsafe_load[_W](i)
+        i += _W
+    var s = acc.reduce_add()
+    while i < n:
         s += x.unsafe_get(i) * y.unsafe_get(i)
+        i += 1
     return s
 
 
@@ -495,7 +521,7 @@ def norm2(x: RealArray) -> Float64:
     Returns:
         The square root of the sum of squared entries.
     """
-    return dot(x, x) ** 0.5
+    return sqrt(dot(x, x))
 
 
 def axpy(alpha: Float64, x: RealArray, mut y: RealArray):
@@ -506,8 +532,16 @@ def axpy(alpha: Float64, x: RealArray, mut y: RealArray):
         x: The vector to add.
         y: The vector to update (length not checked).
     """
-    for i in range(x.size):
+    var n = x.size
+    var i = 0
+    while i + _W <= n:
+        y.unsafe_store[_W](
+            i, y.unsafe_load[_W](i) + alpha * x.unsafe_load[_W](i)
+        )
+        i += _W
+    while i < n:
         y.unsafe_set(i, y.unsafe_get(i) + alpha * x.unsafe_get(i))
+        i += 1
 
 
 def scaled(x: RealArray, alpha: Float64) raises -> RealArray:
@@ -524,8 +558,14 @@ def scaled(x: RealArray, alpha: Float64) raises -> RealArray:
         If NuMojo cannot allocate the array.
     """
     var y = real_vector(x.size)
-    for i in range(x.size):
+    var n = x.size
+    var i = 0
+    while i + _W <= n:
+        y.unsafe_store[_W](i, alpha * x.unsafe_load[_W](i))
+        i += _W
+    while i < n:
         y.unsafe_set(i, alpha * x.unsafe_get(i))
+        i += 1
     return y^
 
 
@@ -547,6 +587,31 @@ def factorial(n: Int) -> Float64:
 # ===----------------------------------------------------------------------=== #
 # Private helpers
 # ===----------------------------------------------------------------------=== #
+
+
+def _radix_sort_rows(a: IntArray, mut perm: List[Int], lo: Int, span: Int):
+    """Stable LSD radix sort of `perm` by the rows of `a`, whose entries lie
+    in `[lo, lo + span)`."""
+    var n = rows_of(a)
+    var c = cols_of(a)
+    var tmp = List[Int](length=n, fill=0)
+    var count = List[Int](length=span + 1, fill=0)
+    var cp = count.unsafe_ptr()
+    for col in range(c - 1, -1, -1):
+        for v in range(span + 1):
+            cp[unsafe_offset=v] = 0
+        for i in range(n):
+            cp[unsafe_offset=Int(a.unsafe_get(i * c + col)) - lo + 1] += 1
+        for v in range(span):
+            cp[unsafe_offset=v + 1] += cp[unsafe_offset=v]
+        var pp = perm.unsafe_ptr()
+        var tp = tmp.unsafe_ptr()
+        for i in range(n):
+            var r = pp[unsafe_offset=i]
+            var key = Int(a.unsafe_get(r * c + col)) - lo
+            tp[unsafe_offset=cp[unsafe_offset=key]] = r
+            cp[unsafe_offset=key] += 1
+        swap(perm, tmp)
 
 
 def _merge_sort_rows(

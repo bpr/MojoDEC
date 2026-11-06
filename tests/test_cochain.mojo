@@ -19,6 +19,7 @@ from mojodec.core.cochain import (
     laplace_derham,
 )
 from mojodec.core.sparse import CSRMatrix
+from mojodec.core.primality import Primality
 from mojodec.core.subset import Subset
 
 
@@ -62,13 +63,13 @@ def test_three_edges() raises:
     var f0 = sc.get_cochain(0)
     assert_true(f0.complex.is_same(sc))
     assert_equal(f0.k, 0)
-    assert_true(f0.is_primal)
+    assert_true(f0.primality() == Primality.PRIMAL)
     for i in range(4):
         assert_equal(f0[i], 0.0)
         f0[i] = 10.0
     var f1 = d(f0)
     assert_equal(f1.k, 1)
-    assert_true(f1.is_primal)
+    assert_true(f1.primality().is_primal())
     assert_equal(f1.v.size, 3)
     for i in range(3):
         assert_equal(f1[i], 0.0)
@@ -97,18 +98,18 @@ def test_kinds_must_match() raises:
         R("[[0,0],[1,0],[1,1],[0,1]]"), I("[[0,1,3],[1,2,3]]")
     )
     var p0 = sc.get_cochain(0)  # 4 vertices
-    var d0 = sc.get_cochain(0, False)  # 2 triangles
+    var d0 = sc.get_cochain(0, .DUAL)  # 2 triangles
     with assert_raises(contains="primal/dual"):
         _ = p0 + d0
     with assert_raises(contains="primal/dual"):
         _ = d0 - p0
     # the same size (5 edges each way) is still a different kind
     with assert_raises(contains="primal/dual"):
-        _ = sc.get_cochain(1) + sc.get_cochain(1, False)
+        _ = sc.get_cochain(1) + sc.get_cochain(1, .DUAL)
     with assert_raises(contains="primal/dual"):
         p0.overwrite(Subset.full(sc, 0), d0)
     with assert_raises(contains="primal/dual"):
-        _ = sc.get_cochain_basis(1) + sc.get_cochain_basis(1, False)
+        _ = sc.get_cochain_basis(1) + sc.get_cochain_basis(1, .DUAL)
     # a dual 0-cochain is indexed by triangles, a primal one by vertices
     d0[Simplex([0, 1, 3])] = 2.0
     assert_equal(d0[0], 2.0)
@@ -133,7 +134,7 @@ def test_dual_d() raises:
     for ref sc in all_cases():
         var N = sc.complex_dimension()
         for p in range(N):
-            var df = d(sc.get_cochain_basis(p, is_primal=False))
+            var df = d(sc.get_cochain_basis(p, .DUAL))
             var sign: Float64 = -1.0 if p % 2 == 1 else 1.0
             assert_equal((df.v - sc[N - p].boundary * sign).max_abs(), 0.0)
             assert_equal(d(df).v.max_abs(), 0.0)

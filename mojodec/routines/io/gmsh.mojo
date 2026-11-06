@@ -29,7 +29,8 @@ or the triangles are missing. Passing the expected `dim` turns that into an
 error instead of a mesh of line segments.
 """
 
-from std.memory import bitcast
+import numojo as nm
+from numojo.prelude import *
 
 from mojodec.core.mesh import SimplicialMesh
 from mojodec.core.simplex import Simplex
@@ -46,6 +47,7 @@ from mojodec.core.utils import (
     rows_of,
     sort_each_row,
 )
+from mojodec.routines.io.scan import ByteReader
 
 
 struct GmshGroup(Copyable, Movable, Writable):
@@ -57,29 +59,32 @@ struct GmshGroup(Copyable, Movable, Writable):
     """Dimension of the tagged cells."""
     var tag: Int
     """The physical tag, unique among the groups of one dimension."""
-    var cells: List[Int]
-    """Vertex indices of the cells, `dim + 1` per cell, in file order."""
+    var cells: IntArray
+    """The cells, one row of `dim + 1` vertex indices each, in file order."""
 
-    def __init__(out self, name: String, dim: Int, tag: Int):
-        """An empty group; `read_gmsh` appends the cells.
+    def __init__(
+        out self, name: String, dim: Int, tag: Int, var cells: IntArray
+    ):
+        """A group; normally built by `read_gmsh`.
 
         Args:
             name: The group's name, or "" if it has none.
             dim: Dimension of the tagged cells.
             tag: The physical tag.
+            cells: The cells, `num_cells x (dim + 1)` vertex indices.
         """
         self.name = name
         self.dim = dim
         self.tag = tag
-        self.cells = List[Int]()
+        self.cells = cells^
 
     def num_cells(self) -> Int:
         """The number of cells in the group.
 
         Returns:
-            `len(cells) // (dim + 1)`.
+            The number of rows of `cells`.
         """
-        return len(self.cells) // (self.dim + 1)
+        return self.cells.size // (self.dim + 1)
 
     def simplices(self) raises -> List[Simplex]:
         """The cells as `Simplex`es.
@@ -95,7 +100,7 @@ struct GmshGroup(Copyable, Movable, Writable):
         for c in range(self.num_cells()):
             var v = List[Int](capacity=w)
             for j in range(w):
-                v.append(self.cells[c * w + j])
+                v.append(Int(self.cells.unsafe_get(c * w + j)))
             out.append(Simplex(v))
         return out^
 
@@ -238,10 +243,14 @@ struct GmshMesh(Movable, Writable):
         return out^
 
     def subset(
-        self, sc: SimplicialComplex, group_dim: Int, tag: Int, dim: Int
+        self, sc: SimplicialComplex, *, group_dim: Int, tag: Int, dim: Int
     ) raises -> Subset:
         """The primal `dim`-simplices of the group with this dimension and
         physical tag (for unnamed groups).
+
+        ```mojo
+        var g = msh.subset(sc, group_dim=1, tag=42, dim=0)
+        ```
 
         Args:
             sc: The complex built from `self.mesh()`.
@@ -320,7 +329,7 @@ def _group_subset(
 
 
 def read_gmsh(
-    path: String, dim: Int = -1, drop_z: Bool = True
+    path: String, dim: Optional[Int] = None, drop_z: Bool = True
 ) raises -> GmshMesh:
     """Read a Gmsh `.msh` file (format 4.1 or 2.2, ASCII or binary).
 
@@ -337,8 +346,8 @@ def read_gmsh(
 
     Args:
         path: The file.
-        dim: The expected dimension of the mesh (-1, the default, accepts
-            any). Pass it: once a `.geo` file defines physical groups, Gmsh
+        dim: The expected dimension of the mesh (`None`, the default,
+            accepts any). Pass it: once a `.geo` file defines physical groups, Gmsh
             saves only their elements, so a file that tags only boundary
             curves holds no triangles and would otherwise read as a mesh of
             line segments (tag the domain too, or set `Mesh.SaveAll = 1`).
@@ -365,11 +374,11 @@ def read_gmsh(
         top = max(top, b.dim)
     if top < 0:
         raise Error("read_gmsh: no elements in " + path)
-    if dim >= 0 and top != dim:
+    if dim and top != dim.value():
         raise Error(
             String(
                 "read_gmsh: expected a ",
-                dim,
+                dim.value(),
                 "-dimensional mesh but the highest elements in ",
                 path,
                 " have dimension ",
@@ -385,7 +394,7 @@ def read_gmsh(
     var tagged = List[Int]()
     for ref b in raw.blocks:
         if b.dim == top:
-            tagged.extend(b.nodes.copy())
+            tagged.extend(Span(b.nodes))
     var rows = _unique_rows(tagged, w)
     # number the nodes of the top elements in tag order
     var max_tag = 0
@@ -393,37 +402,43 @@ def read_gmsh(
         max_tag = max(max_tag, t)
     var slot = List[Int](length=max_tag + 1, fill=-1)
     for i in range(len(raw.node_tags)):
-        slot[raw.node_tags[i]] = i
+        var t = raw.node_tags.unsafe_get(i)
+        if t < 0:
+            raise Error(String("read_gmsh: negative node tag ", t))
+        slot.unsafe_set(t, i)
+    # every index into slot and index below is a checked tag in 0..max_tag
     var index = List[Int](length=max_tag + 1, fill=-1)
     for r in rows:
         for j in range(w):
-            var t = tagged[r * w + j]
-            if t < 0 or t > max_tag or slot[t] < 0:
+            var t = tagged.unsafe_get(r * w + j)
+            if t < 0 or t > max_tag or slot.unsafe_get(t) < 0:
                 raise Error(String("read_gmsh: element uses unknown node ", t))
-            index[t] = 0
+            index.unsafe_set(t, 0)
     var node_tags = List[Int]()
     for t in range(max_tag + 1):
-        if index[t] == 0:
-            index[t] = len(node_tags)
+        if index.unsafe_get(t) == 0:
+            index.unsafe_set(t, len(node_tags))
             node_tags.append(t)
     var elements = int_array(len(rows), w)
     for i in range(len(rows)):
+        var r = rows.unsafe_get(i)
         for j in range(w):
+            var t = tagged.unsafe_get(r * w + j)
             elements.unsafe_set(
-                i * w + j, Scalar[DType.int](index[tagged[rows[i] * w + j]])
+                i * w + j, Scalar[DType.int](index.unsafe_get(t))
             )
     # coordinates
     var flat = True
     for t in node_tags:
-        if raw.coords[3 * slot[t] + 2] != 0:
+        if raw.coords.unsafe_get(3 * slot.unsafe_get(t) + 2) != 0:
             flat = False
+            break
     var e = 2 if drop_z and top <= 2 and flat else 3
     var vertices = real_array(len(node_tags), e)
     for i in range(len(node_tags)):
+        var at = 3 * slot.unsafe_get(node_tags.unsafe_get(i))
         for c in range(e):
-            vertices.unsafe_set(
-                i * e + c, raw.coords[3 * slot[node_tags[i]] + c]
-            )
+            vertices.unsafe_set(i * e + c, raw.coords.unsafe_get(at + c))
     # physical groups, ordered by dimension and tag
     var groups = List[GmshGroup]()
     for d in range(top + 1):
@@ -438,11 +453,12 @@ def read_gmsh(
                 tags.append(n.tag)
         sort(tags)
         for p in tags:
-            var g = GmshGroup(raw.name_of(d, p), d, p)
+            var cells = List[Int]()
             for ref b in raw.blocks:
                 if b.dim == d and p in b.physical:
+                    cells.reserve(len(cells) + len(b.nodes))
                     for t in b.nodes:
-                        if t < 0 or t > max_tag or index[t] < 0:
+                        if t < 0 or t > max_tag or index.unsafe_get(t) < 0:
                             raise Error(
                                 String(
                                     "read_gmsh: physical group ",
@@ -454,8 +470,11 @@ def read_gmsh(
                                     "-simplex has",
                                 )
                             )
-                        g.cells.append(index[t])
-            groups.append(g^)
+                        cells.append(index.unsafe_get(t))
+            var array = int_array(len(cells) // (d + 1), d + 1)
+            for i in range(len(cells)):
+                array.unsafe_set(i, Scalar[DType.int](cells.unsafe_get(i)))
+            groups.append(GmshGroup(raw.name_of(d, p), d, p, array^))
     return GmshMesh(vertices^, elements^, node_tags^, groups^)
 
 
@@ -540,10 +559,7 @@ struct _Raw(Movable):
 
 
 def _parse(path: String) raises -> _Raw:
-    var data: List[Byte]
-    with open(path, "r") as f:
-        data = f.read_bytes()
-    var cur = _Cursor(data^, path)
+    var cur = _Cursor(ByteReader.open(path, "read_gmsh", " in " + path))
     var raw = _Raw()
     var version = 0
     # physical tags of each entity (format 4.1), per entity dimension
@@ -633,8 +649,24 @@ def _read_nodes_v4(mut cur: _Cursor, mut raw: _Raw) raises:
         _ = cur.i32()
         var parametric = cur.i32()
         var n = cur.size_t()
-        for _ in range(n):
-            raw.node_tags.append(cur.size_t())
+        if cur.binary:
+            # the tags, then the coordinates, as contiguous blocks
+            cur.r.require(8 * n)
+            var tags = nm.zeros[DType.uint64](Shape(n))
+            cur.r.binary_into(tags, 0, n)
+            for i in range(n):
+                raw.node_tags.append(Int(tags.unsafe_get(i)))
+            if parametric == 0:
+                cur.r.require(24 * n)
+                var xyz = nm.zeros[DType.float64](Shape(3 * n))
+                cur.r.binary_into(xyz, 0, 3 * n)
+                raw.coords.reserve(len(raw.coords) + 3 * n)
+                for i in range(3 * n):
+                    raw.coords.append(xyz.unsafe_get(i))
+                continue
+        else:
+            for _ in range(n):
+                raw.node_tags.append(cur.size_t())
         for _ in range(n):
             for _ in range(3):
                 raw.coords.append(cur.f64())
@@ -677,10 +709,23 @@ def _read_elements_v4(
         if block.dim != d:
             raise cur.err("element type does not match its entity")
         var nn = _nodes_per_element(type)
-        for _ in range(n):
-            _ = cur.size_t()
-            for _ in range(nn):
-                block.nodes.append(cur.size_t())
+        if cur.binary:
+            cur.r.require(8 * n * (nn + 1))
+        block.nodes.reserve(min(n, len(cur.r.data)) * nn)
+        if cur.binary:
+            # each element is its tag and its nodes, all size_t
+            var rows = nm.zeros[DType.uint64](Shape(n * (nn + 1)))
+            cur.r.binary_into(rows, 0, n * (nn + 1))
+            for e in range(n):
+                for j in range(nn):
+                    block.nodes.append(
+                        Int(rows.unsafe_get(e * (nn + 1) + 1 + j))
+                    )
+        else:
+            for _ in range(n):
+                _ = cur.size_t()
+                for _ in range(nn):
+                    block.nodes.append(cur.size_t())
         raw.blocks.append(block^)
 
 
@@ -694,48 +739,65 @@ def _read_elements_v2(mut cur: _Cursor, mut raw: _Raw) raises:
             var count = cur.i32()
             var num_tags = cur.i32()
             var nn = _nodes_per_element(type)
-            for _ in range(count):
-                _ = cur.i32()
-                var phys = List[Int]()
-                for t in range(num_tags):
-                    var tag = cur.i32()
-                    if t == 0 and tag != 0:
-                        phys.append(tag)
-                var nodes = List[Int](capacity=nn)
-                for _ in range(nn):
-                    nodes.append(cur.i32())
-                _add_v2(raw, type, phys^, nodes)
+            # each element is its number, its tags, and its nodes, all int32
+            var width = 1 + num_tags + nn
+            cur.r.require(4 * count * width)
+            if count < 16:
+                for _ in range(count):
+                    _ = cur.i32()
+                    var phys = 0
+                    for t in range(num_tags):
+                        var tag = cur.i32()
+                        if t == 0:
+                            phys = tag
+                    var b = _block_v2(raw, type, phys)
+                    for _ in range(nn):
+                        raw.blocks[b].nodes.append(cur.i32())
+            else:
+                var rows = nm.zeros[DType.int32](Shape(count * width))
+                cur.r.binary_into(rows, 0, count * width)
+                for e in range(count):
+                    var phys = (
+                        Int(rows.unsafe_get(e * width + 1)) if num_tags
+                        > 0 else 0
+                    )
+                    var b = _block_v2(raw, type, phys)
+                    for j in range(nn):
+                        raw.blocks[b].nodes.append(
+                            Int(rows.unsafe_get(e * width + 1 + num_tags + j))
+                        )
             done += count
         return
     for _ in range(n):
         _ = cur.int_()
         var type = cur.int_()
         var num_tags = cur.int_()
-        var phys = List[Int]()
+        var phys = 0
         for t in range(num_tags):
             var tag = cur.int_()
-            if t == 0 and tag != 0:
-                phys.append(tag)
+            if t == 0:
+                phys = tag
         var nn = _nodes_per_element(type)
-        var nodes = List[Int](capacity=nn)
+        var b = _block_v2(raw, type, phys)
         for _ in range(nn):
-            nodes.append(cur.int_())
-        _add_v2(raw, type, phys^, nodes)
+            raw.blocks[b].nodes.append(cur.int_())
 
 
-def _add_v2(
-    mut raw: _Raw, type: Int, var phys: List[Int], nodes: List[Int]
-) raises:
-    """Append an element, extending the last block when it matches."""
+def _block_v2(mut raw: _Raw, type: Int, phys: Int) raises -> Int:
+    """The block for the next element, of this type and physical tag (0 for
+    none): the last block if it matches, else a new one."""
     var last = len(raw.blocks) - 1
-    if (
-        last < 0
-        or raw.blocks[last].type != type
-        or raw.blocks[last].physical != phys
-    ):
-        raw.blocks.append(_Block(type, phys^))
-        last += 1
-    raw.blocks[last].nodes.extend(nodes.copy())
+    if last >= 0 and raw.blocks[last].type == type:
+        ref p = raw.blocks[last].physical
+        if (phys == 0 and len(p) == 0) or (
+            phys != 0 and len(p) == 1 and p[0] == phys
+        ):
+            return last
+    var physical = List[Int]()
+    if phys != 0:
+        physical.append(phys)
+    raw.blocks.append(_Block(type, physical^))
+    return last + 1
 
 
 def _element_dim(type: Int) raises -> Int:
@@ -778,36 +840,27 @@ struct _Cursor(Movable):
     """A position in the file: ASCII tokens, or binary numbers after
     `start_binary`."""
 
-    var data: List[Byte]
-    var pos: Int
+    var r: ByteReader
     var binary: Bool
-    var swap: Bool
-    """Big-endian binary data."""
-    var path: String
 
-    def __init__(out self, var data: List[Byte], path: String):
-        self.data = data^
-        self.pos = 0
+    def __init__(out self, var r: ByteReader):
+        self.r = r^
         self.binary = False
-        self.swap = False
-        self.path = path
 
     def err(self, message: String) -> Error:
-        return Error(String("read_gmsh: ", message, " in ", self.path))
+        return self.r.err(message)
 
     def more(mut self) -> Bool:
-        self._skip_space()
-        return self.pos < len(self.data)
+        return self.r.more()
 
     def section(mut self) raises -> String:
         """The name of the section starting here: `$Name` -> `Name`."""
-        self._skip_space()
-        if self.pos >= len(self.data):
+        if not self.r.more():
             raise self.err("file ends early")
-        if self.data[self.pos] != Byte(ord("$")):
+        if self.r.data[self.r.pos] != Byte(ord("$")):
             raise self.err("expected a $Section line")
-        self.pos += 1
-        return self.line()
+        self.r.pos += 1
+        return self.r.line()
 
     def end(mut self, section: String) raises:
         """Read the `$EndName` line closing a section."""
@@ -817,107 +870,68 @@ struct _Cursor(Movable):
 
     def skip_section(mut self, section: String) raises:
         var marker = ("$End" + section).as_bytes()
-        while self.pos + len(marker) <= len(self.data):
+        ref data = self.r.data
+        while self.r.pos + len(marker) <= len(data):
             var found = True
             for j in range(len(marker)):
-                if self.data[self.pos + j] != marker[j]:
+                if data[self.r.pos + j] != marker[j]:
                     found = False
                     break
             if found:
-                self.pos += len(marker)
-                _ = self.line()
+                self.r.pos += len(marker)
+                _ = self.r.line()
                 return
-            self.pos += 1
+            self.r.pos += 1
         raise self.err("unterminated $" + section)
 
     def start_binary(mut self) raises:
         """Read the integer 1 that follows a binary `$MeshFormat` line to
         find the byte order."""
-        if self.pos + 4 > len(self.data):
+        if self.r.pos + 4 > len(self.r.data):
             raise self.err("file ends early")
-        self.swap = self.data[self.pos] == 0
+        self.r.big_endian = self.r.data[self.r.pos] == 0
         self.binary = True
         if self.i32() != 1:
             raise self.err("bad binary byte-order marker")
-        _ = self.line()
+        _ = self.r.line()
 
     def line(mut self) -> String:
         """The rest of the current line, without its line break."""
-        var start = self.pos
-        while self.pos < len(self.data) and self.data[self.pos] != Byte(
-            ord("\n")
-        ):
-            self.pos += 1
-        var end = self.pos
-        if self.pos < len(self.data):
-            self.pos += 1
-        if end > start and self.data[end - 1] == Byte(ord("\r")):
-            end -= 1
-        return String(unsafe_from_utf8=Span(self.data)[start:end])
+        return self.r.line()
 
     def token(mut self) raises -> String:
-        self._skip_space()
-        var start = self.pos
-        while self.pos < len(self.data) and not _is_space(self.data[self.pos]):
-            self.pos += 1
-        if start == self.pos:
-            raise self.err("file ends early")
-        return String(unsafe_from_utf8=Span(self.data)[start : self.pos])
+        return self.r.token()
 
     def quoted(mut self) raises -> String:
         """A double-quoted string (may contain spaces)."""
-        self._skip_space()
-        if self.pos >= len(self.data) or self.data[self.pos] != Byte(ord('"')):
+        self.r.skip_space()
+        ref data = self.r.data
+        if self.r.pos >= len(data) or data[self.r.pos] != Byte(ord('"')):
             raise self.err("expected a quoted name")
-        var start = self.pos + 1
-        self.pos = start
-        while self.pos < len(self.data) and self.data[self.pos] != Byte(
-            ord('"')
-        ):
-            self.pos += 1
-        if self.pos >= len(self.data):
+        var start = self.r.pos + 1
+        self.r.pos = start
+        while self.r.pos < len(data) and data[self.r.pos] != Byte(ord('"')):
+            self.r.pos += 1
+        if self.r.pos >= len(data):
             raise self.err("unterminated quoted name")
-        self.pos += 1
-        return String(unsafe_from_utf8=Span(self.data)[start : self.pos - 1])
+        self.r.pos += 1
+        return String(unsafe_from_utf8=Span(data)[start : self.r.pos - 1])
 
     def int_(mut self) raises -> Int:
         """An ASCII integer, even in a binary file (counts, names)."""
-        return atol(self.token())
+        return self.r.int_()
 
     def i32(mut self) raises -> Int:
         if not self.binary:
-            return self.int_()
-        return Int(bitcast[DType.int32](UInt32(self._bytes(4))))
+            return self.r.int_()
+        return Int(self.r.binary[DType.int32]())
 
     def size_t(mut self) raises -> Int:
         if not self.binary:
-            return self.int_()
-        return Int(self._bytes(8))
+            return self.r.int_()
+        return Int(self.r.binary[DType.uint64]())
 
     def f64(mut self) raises -> Float64:
         if not self.binary:
-            return atof(self.token())
-        return bitcast[DType.float64](self._bytes(8))
-
-    def _bytes(mut self, n: Int) raises -> UInt64:
-        if self.pos + n > len(self.data):
-            raise self.err("file ends early")
-        var u: UInt64 = 0
-        for b in range(n):
-            var shift = 8 * (n - 1 - b) if self.swap else 8 * b
-            u |= UInt64(self.data[self.pos + b]) << UInt64(shift)
-        self.pos += n
-        return u
-
-    def _skip_space(mut self):
-        while self.pos < len(self.data) and _is_space(self.data[self.pos]):
-            self.pos += 1
-
-
-def _is_space(b: Byte) -> Bool:
-    return (
-        b == Byte(ord(" "))
-        or b == Byte(ord("\n"))
-        or b == Byte(ord("\r"))
-        or b == Byte(ord("\t"))
-    )
+            return self.r.float_()
+        return self.r.binary[DType.float64]()

@@ -31,6 +31,42 @@ from mojodec.core.utils import (
 )
 
 
+struct COOEntries(Copyable, Movable):
+    """A matrix's stored entries as coordinate (COO) triplets."""
+
+    var rows: List[Int]
+    """The row of each entry."""
+    var cols: List[Int]
+    """The column of each entry."""
+    var values: List[Float64]
+    """The value of each entry."""
+
+    def __init__(
+        out self,
+        var rows: List[Int],
+        var cols: List[Int],
+        var values: List[Float64],
+    ):
+        """Triplets from their three lists.
+
+        Args:
+            rows: The rows.
+            cols: The columns.
+            values: The values.
+        """
+        self.rows = rows^
+        self.cols = cols^
+        self.values = values^
+
+    def __len__(self) -> Int:
+        """The number of entries.
+
+        Returns:
+            `len(rows)`.
+        """
+        return len(self.rows)
+
+
 struct CSRMatrix(Copyable, Movable, Writable):
     """A sparse matrix in compressed sparse row format."""
 
@@ -138,11 +174,19 @@ struct CSRMatrix(Copyable, Movable, Writable):
         var indices = List[Int](length=nnz, fill=0)
         var data = List[Float64](length=nnz, fill=0)
         var next = indptr.copy()
+        # every row index was checked above
+        var rp = rows.unsafe_ptr()
+        var cp = cols.unsafe_ptr()
+        var vp = values.unsafe_ptr()
+        var np = next.unsafe_ptr()
+        var ixp = indices.unsafe_ptr()
+        var dp = data.unsafe_ptr()
         for k in range(nnz):
-            var r = rows[k]
-            indices[next[r]] = cols[k]
-            data[next[r]] = values[k]
-            next[r] += 1
+            var r = rp[unsafe_offset=k]
+            var at = np[unsafe_offset=r]
+            ixp[unsafe_offset=at] = cp[unsafe_offset=k]
+            dp[unsafe_offset=at] = vp[unsafe_offset=k]
+            np[unsafe_offset=r] = at + 1
         return Self(nrows, ncols, indptr^, indices^, data^)
 
     @staticmethod
@@ -448,20 +492,28 @@ struct CSRMatrix(Copyable, Movable, Writable):
             Does not raise in practice.
         """
         var indptr = List[Int](length=self.ncols + 1, fill=0)
-        for c in self.indices:
-            indptr[c + 1] += 1
-        for j in range(self.ncols):
-            indptr[j + 1] += indptr[j]
         var nnz = self.nnz()
+        var ip = self.indptr.unsafe_ptr()
+        var ix = self.indices.unsafe_ptr()
+        var dv = self.data.unsafe_ptr()
+        var tp = indptr.unsafe_ptr()
+        for k in range(nnz):
+            tp[unsafe_offset=ix[unsafe_offset=k] + 1] += 1
+        for j in range(self.ncols):
+            tp[unsafe_offset=j + 1] += tp[unsafe_offset=j]
         var indices = List[Int](length=nnz, fill=0)
         var data = List[Float64](length=nnz, fill=0)
         var next = indptr.copy()
+        var np = next.unsafe_ptr()
+        var tix = indices.unsafe_ptr()
+        var tdv = data.unsafe_ptr()
         for i in range(self.nrows):
-            for k in range(self.indptr[i], self.indptr[i + 1]):
-                var c = self.indices[k]
-                indices[next[c]] = i
-                data[next[c]] = self.data[k]
-                next[c] += 1
+            for k in range(ip[unsafe_offset=i], ip[unsafe_offset=i + 1]):
+                var c = ix[unsafe_offset=k]
+                var at = np[unsafe_offset=c]
+                tix[unsafe_offset=at] = i
+                tdv[unsafe_offset=at] = dv[unsafe_offset=k]
+                np[unsafe_offset=c] = at + 1
         var out = Self(self.ncols, self.nrows)
         out.indptr = indptr^
         out.indices = indices^
@@ -611,17 +663,17 @@ struct CSRMatrix(Copyable, Movable, Writable):
         """
         return self.select(_range(self.nrows), cols)
 
-    def to_coo(self) -> Tuple[List[Int], List[Int], List[Float64]]:
+    def to_coo(self) -> COOEntries:
         """The stored entries as COO triplets.
 
         Returns:
-            `(rows, cols, values)`, in row-major order.
+            The rows, columns and values, in row-major order.
         """
         var rows = List[Int](capacity=self.nnz())
         for i in range(self.nrows):
             for _ in range(self.indptr[i], self.indptr[i + 1]):
                 rows.append(i)
-        return (rows^, self.indices.copy(), self.data.copy())
+        return COOEntries(rows^, self.indices.copy(), self.data.copy())
 
     # ===------------------------------------------------------------------=== #
     # Arithmetic
@@ -648,22 +700,30 @@ struct CSRMatrix(Copyable, Movable, Writable):
         var acc = List[Float64](length=other.ncols, fill=0)
         var marker = List[Int](length=other.ncols, fill=-1)
         var touched = List[Int]()
+        var aip = self.indptr.unsafe_ptr()
+        var aix = self.indices.unsafe_ptr()
+        var adv = self.data.unsafe_ptr()
+        var bip = other.indptr.unsafe_ptr()
+        var bix = other.indices.unsafe_ptr()
+        var bdv = other.data.unsafe_ptr()
+        var accp = acc.unsafe_ptr()
+        var markp = marker.unsafe_ptr()
         for i in range(self.nrows):
             touched.clear()
-            for ka in range(self.indptr[i], self.indptr[i + 1]):
-                var j = self.indices[ka]
-                var a = self.data[ka]
-                for kb in range(other.indptr[j], other.indptr[j + 1]):
-                    var c = other.indices[kb]
-                    if marker[c] != i:
-                        marker[c] = i
-                        acc[c] = 0
+            for ka in range(aip[unsafe_offset=i], aip[unsafe_offset=i + 1]):
+                var j = aix[unsafe_offset=ka]
+                var a = adv[unsafe_offset=ka]
+                for kb in range(bip[unsafe_offset=j], bip[unsafe_offset=j + 1]):
+                    var c = bix[unsafe_offset=kb]
+                    if markp[unsafe_offset=c] != i:
+                        markp[unsafe_offset=c] = i
+                        accp[unsafe_offset=c] = 0
                         touched.append(c)
-                    acc[c] += a * other.data[kb]
+                    accp[unsafe_offset=c] += a * bdv[unsafe_offset=kb]
             sort(Span(touched))
             for c in touched:
                 indices.append(c)
-                data.append(acc[c])
+                data.append(accp[unsafe_offset=c])
             indptr.append(len(indices))
         var out = Self(self.nrows, other.ncols)
         out.indptr = indptr^
@@ -686,12 +746,34 @@ struct CSRMatrix(Copyable, Movable, Writable):
         if x.size != self.ncols:
             raise Error("CSRMatrix @ vector: dimension mismatch")
         var y = real_vector(self.nrows)
+        self.matvec_into(x, y)
+        return y^
+
+    def matvec_into(self, x: RealArray, mut y: RealArray) raises:
+        """The matrix-vector product `self @ x`, written into `y`.
+
+        Iterative solvers call this once per iteration with the same `y`,
+        so nothing is allocated.
+
+        Args:
+            x: A vector of length `ncols`.
+            y: A vector of length `nrows`, overwritten with the product.
+
+        Raises:
+            If `x.size` differs from `ncols` or `y.size` from `nrows`.
+        """
+        if x.size != self.ncols or y.size != self.nrows:
+            raise Error("CSRMatrix.matvec_into: dimension mismatch")
+        var ip = self.indptr.unsafe_ptr()
+        var ix = self.indices.unsafe_ptr()
+        var dv = self.data.unsafe_ptr()
+        var xp = x.unsafe_ptr()
+        var yp = y.unsafe_ptr()
         for i in range(self.nrows):
             var s: Float64 = 0
-            for k in range(self.indptr[i], self.indptr[i + 1]):
-                s += self.data[k] * x.unsafe_get(self.indices[k])
-            y.unsafe_set(i, s)
-        return y^
+            for k in range(ip[unsafe_offset=i], ip[unsafe_offset=i + 1]):
+                s += dv[unsafe_offset=k] * xp[unsafe_offset=ix[unsafe_offset=k]]
+            yp[unsafe_offset=i] = s
 
     def __mul__(self, s: Float64) -> Self:
         """Every entry multiplied by `s`.
@@ -813,27 +895,43 @@ struct CSRMatrix(Copyable, Movable, Writable):
 
     def _canonicalize(mut self):
         """Sort column indices within each row and sum duplicates."""
+        var ip = self.indptr.unsafe_ptr()
+        var ix = self.indices.unsafe_ptr()
+        var canonical = True
+        for i in range(self.nrows):
+            for k in range(ip[unsafe_offset=i] + 1, ip[unsafe_offset=i + 1]):
+                if ix[unsafe_offset=k - 1] >= ix[unsafe_offset=k]:
+                    canonical = False
+                    break
+            if not canonical:
+                break
+        if canonical:
+            return
         var new_indices = List[Int](capacity=len(self.indices))
         var new_data = List[Float64](capacity=len(self.data))
         var new_indptr = List[Int](capacity=self.nrows + 1)
         new_indptr.append(0)
         var perm = List[Int]()
         for i in range(self.nrows):
-            var lo = self.indptr[i]
-            var hi = self.indptr[i + 1]
+            var lo = ip[unsafe_offset=i]
+            var hi = ip[unsafe_offset=i + 1]
             perm.clear()
             for k in range(lo, hi):
                 perm.append(k)
             # insertion sort by column: rows of DEC operators are short
             for a in range(1, len(perm)):
-                var key = perm[a]
+                var key = perm.unsafe_get(a)
                 var b = a - 1
-                while b >= 0 and self.indices[perm[b]] > self.indices[key]:
-                    perm[b + 1] = perm[b]
+                while (
+                    b >= 0
+                    and ix[unsafe_offset=perm.unsafe_get(b)]
+                    > ix[unsafe_offset=key]
+                ):
+                    perm.unsafe_set(b + 1, perm.unsafe_get(b))
                     b -= 1
-                perm[b + 1] = key
+                perm.unsafe_set(b + 1, key)
             for p in perm:
-                var c = self.indices[p]
+                var c = ix[unsafe_offset=p]
                 if (
                     len(new_indices) > new_indptr[i]
                     and new_indices[len(new_indices) - 1] == c

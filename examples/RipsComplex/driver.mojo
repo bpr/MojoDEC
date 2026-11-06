@@ -23,9 +23,9 @@ from mojodec.vis import lineplot, pyplot, show_requested, triplot
 def main() raises:
     var pts = read_array("300pts.mtx")  # 300 random points in 2D
     var rc = RipsComplex(pts, 0.15)
-    var cmplx = rc.chain_complex()  # boundary operators [b0, b1, b2]
-    ref b1 = cmplx[1]  # edge boundary operator
-    ref b2 = cmplx[2]  # face boundary operator
+    ref cmplx = rc.chain_complex()  # boundary operators B_1, B_2
+    ref b1 = cmplx.boundary(1)  # edge boundary operator
+    ref b2 = cmplx.boundary(2)  # face boundary operator
     print(
         "vertices:",
         rows_of(rc.simplices[0]),
@@ -38,8 +38,8 @@ def main() raises:
     nm.random.seed(0)
     var x = nm.random.rand[f64](Shape(b1.ncols))  # random 1-chain
     # decompose x using the discrete Hodge decomposition
-    var alpha = cg(b1 @ b1.T(), b1 @ x, rtol=1e-8).x.copy()
-    var beta = cg(b2.T() @ b2, b2.T() @ x, rtol=1e-8).x.copy()
+    var alpha = cg(b1 @ b1.T(), b1 @ x, rtol=1e-8).take_x()
+    var beta = cg(b2.T() @ b2, b2.T() @ x, rtol=1e-8).take_x()
     var h = x - b1.T() @ alpha - b2 @ beta  # harmonic component of x
     var hmax: Float64 = 0
     for i in range(h.size):
@@ -66,7 +66,7 @@ def main() raises:
         pts,
         rc.simplices[1],
         cell_data=[VTKField("h", h)],
-        format="appended",
+        format=.APPENDED,
     )
     print("wrote harmonic.vtu")
 

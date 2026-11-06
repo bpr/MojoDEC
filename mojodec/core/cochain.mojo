@@ -23,6 +23,7 @@ from numojo.prelude import *
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.diagonal import DiagonalOperator
+from mojodec.core.primality import Primality
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.subset import Subset
 from mojodec.core.utils import RealArray, real_vector, rows_of
@@ -55,11 +56,11 @@ trait CochainLike(Copyable, Deinitable, Movable, Writable):
         """
         ...
 
-    def primal(self) -> Bool:
-        """Whether this is a primal (vs dual) cochain.
+    def primality(self) -> Primality:
+        """Whether this is a primal or a dual cochain.
 
         Returns:
-            True for a primal cochain, false for a dual one.
+            `PRIMAL` or `DUAL`.
         """
         ...
 
@@ -71,13 +72,13 @@ trait CochainLike(Copyable, Deinitable, Movable, Writable):
         """
         ...
 
-    def mapped(self, A: CSRMatrix, k: Int, is_primal: Bool) raises -> Self:
+    def mapped(self, A: CSRMatrix, k: Int, primality: Primality) raises -> Self:
         """A cochain of dimension `k` whose values are `A @ self.v`.
 
         Args:
             A: The operator, with `self.value_rows()` columns.
             k: The dimension of the result.
-            is_primal: Whether the result is primal.
+            primality: Whether the result is primal or dual.
 
         Returns:
             A cochain on the same complex.
@@ -88,14 +89,14 @@ trait CochainLike(Copyable, Deinitable, Movable, Writable):
         ...
 
     def mapped(
-        self, D: DiagonalOperator, k: Int, is_primal: Bool
+        self, D: DiagonalOperator, k: Int, primality: Primality
     ) raises -> Self:
         """A cochain of dimension `k` whose values are `D @ self.v`.
 
         Args:
             D: The diagonal operator, of size `self.value_rows()`.
             k: The dimension of the result.
-            is_primal: Whether the result is primal.
+            primality: Whether the result is primal or dual.
 
         Returns:
             A cochain on the same complex.
@@ -105,12 +106,12 @@ trait CochainLike(Copyable, Deinitable, Movable, Writable):
         """
         ...
 
-    def relabeled(self, k: Int, is_primal: Bool) -> Self:
+    def relabeled(self, k: Int, primality: Primality) -> Self:
         """The same values viewed as a cochain of dimension `k`.
 
         Args:
             k: The new dimension.
-            is_primal: Whether the result is primal.
+            primality: Whether the result is primal or dual.
 
         Returns:
             A copy of the cochain with the new dimension and kind.
@@ -173,7 +174,7 @@ struct Cochain(CochainLike):
     """Cochain dimension."""
     var n: Int
     """Complex dimension."""
-    var is_primal: Bool
+    var _primality: Primality
     """Primal or dual."""
     var v: RealArray
     """One value per simplex (primal k-simplex or dual of an (n-k)-simplex)."""
@@ -182,7 +183,7 @@ struct Cochain(CochainLike):
         out self,
         complex: SimplicialComplex,
         dimension: Int,
-        is_primal: Bool,
+        primality: Primality,
         var v: RealArray,
     ):
         """Wrap values as a cochain on `complex`.
@@ -190,14 +191,14 @@ struct Cochain(CochainLike):
         Args:
             complex: The complex.
             dimension: The cochain dimension k.
-            is_primal: Whether the cochain is primal.
+            primality: `PRIMAL` or `DUAL`.
             v: One value per cell. The values are not checked against
                 the number of cells.
         """
         self.complex = complex
         self.k = dimension
         self.n = complex.complex_dimension()
-        self.is_primal = is_primal
+        self._primality = primality
         self.v = v^
 
     def __getitem__(self, i: Int) -> Float64:
@@ -285,7 +286,7 @@ struct Cochain(CochainLike):
         _check_same_size(self, other, "Cochain.overwrite")
         if (
             subset.dim != self.k
-            or subset.is_primal != self.is_primal
+            or subset.primality() != self._primality
             or subset.size != self.v.size
         ):
             raise Error("Cochain.overwrite: subset is of other cells")
@@ -295,14 +296,15 @@ struct Cochain(CochainLike):
     def _level_of(self, s: Simplex) raises -> Int:
         """The level of the complex holding this cochain's cells, checked
         against the dimension of `s`."""
-        var level = self.k if self.is_primal else self.n - self.k
+        var level = self._primality.level(self.n, self.k)
         if len(s) - 1 != level:
             raise Error(
                 String(
                     "Cochain: a ",
                     len(s) - 1,
                     "-simplex does not index a ",
-                    "primal " if self.is_primal else "dual ",
+                    self._primality,
+                    " ",
                     self.k,
                     "-cochain (expected a ",
                     level,
@@ -335,13 +337,13 @@ struct Cochain(CochainLike):
         """
         return self.n
 
-    def primal(self) -> Bool:
-        """Whether this is a primal (vs dual) cochain.
+    def primality(self) -> Primality:
+        """Whether this is a primal or a dual cochain.
 
         Returns:
-            `self.is_primal`.
+            `PRIMAL` or `DUAL`.
         """
-        return self.is_primal
+        return self._primality
 
     def value_rows(self) -> Int:
         """Number of values (one per cell).
@@ -351,13 +353,13 @@ struct Cochain(CochainLike):
         """
         return self.v.size
 
-    def mapped(self, A: CSRMatrix, k: Int, is_primal: Bool) raises -> Self:
+    def mapped(self, A: CSRMatrix, k: Int, primality: Primality) raises -> Self:
         """A cochain of dimension `k` whose values are `A @ self.v`.
 
         Args:
             A: The operator, with `self.value_rows()` columns.
             k: The dimension of the result.
-            is_primal: Whether the result is primal.
+            primality: Whether the result is primal or dual.
 
         Returns:
             A cochain on the same complex.
@@ -365,17 +367,17 @@ struct Cochain(CochainLike):
         Raises:
             If `A` has a different number of columns than `v` has rows.
         """
-        return Self(self.complex, k, is_primal, A @ self.v)
+        return Self(self.complex, k, primality, A @ self.v)
 
     def mapped(
-        self, D: DiagonalOperator, k: Int, is_primal: Bool
+        self, D: DiagonalOperator, k: Int, primality: Primality
     ) raises -> Self:
         """A cochain of dimension `k` whose values are `D @ self.v`.
 
         Args:
             D: The diagonal operator, of size `self.value_rows()`.
             k: The dimension of the result.
-            is_primal: Whether the result is primal.
+            primality: Whether the result is primal or dual.
 
         Returns:
             A cochain on the same complex.
@@ -383,19 +385,19 @@ struct Cochain(CochainLike):
         Raises:
             If `D` has a different size than `v` has rows.
         """
-        return Self(self.complex, k, is_primal, D @ self.v)
+        return Self(self.complex, k, primality, D @ self.v)
 
-    def relabeled(self, k: Int, is_primal: Bool) -> Self:
+    def relabeled(self, k: Int, primality: Primality) -> Self:
         """The same values viewed as a cochain of dimension `k`.
 
         Args:
             k: The new dimension.
-            is_primal: Whether the result is primal.
+            primality: Whether the result is primal or dual.
 
         Returns:
             A cochain with a copy of the values.
         """
-        return Self(self.complex, k, is_primal, self.v.copy())
+        return Self(self.complex, k, primality, self.v.copy())
 
     def scaled(self, s: Float64) -> Self:
         """The values multiplied by `s`.
@@ -465,7 +467,7 @@ struct Cochain(CochainLike):
             ",n=",
             self.n,
             ",is_primal=",
-            self.is_primal,
+            self._primality.is_primal(),
             "\n",
             self.v,
             ")",
@@ -488,7 +490,7 @@ struct CochainBasis(CochainLike):
     """Cochain dimension."""
     var n: Int
     """Complex dimension."""
-    var is_primal: Bool
+    var _primality: Primality
     """Primal or dual."""
     var v: CSRMatrix
     """One column per cochain, one row per simplex."""
@@ -497,7 +499,7 @@ struct CochainBasis(CochainLike):
         out self,
         complex: SimplicialComplex,
         dimension: Int,
-        is_primal: Bool,
+        primality: Primality,
         var v: CSRMatrix,
     ):
         """Wrap values as a cochain on `complex`.
@@ -505,14 +507,14 @@ struct CochainBasis(CochainLike):
         Args:
             complex: The complex.
             dimension: The cochain dimension k.
-            is_primal: Whether the cochain is primal.
+            primality: `PRIMAL` or `DUAL`.
             v: One column per cochain, one row per cell. The values are not checked against
                 the number of cells.
         """
         self.complex = complex
         self.k = dimension
         self.n = complex.complex_dimension()
-        self.is_primal = is_primal
+        self._primality = primality
         self.v = v^
 
     def get_complex(self) -> SimplicialComplex:
@@ -539,13 +541,13 @@ struct CochainBasis(CochainLike):
         """
         return self.n
 
-    def primal(self) -> Bool:
-        """Whether this is a primal (vs dual) cochain.
+    def primality(self) -> Primality:
+        """Whether this is a primal or a dual cochain.
 
         Returns:
-            `self.is_primal`.
+            `PRIMAL` or `DUAL`.
         """
-        return self.is_primal
+        return self._primality
 
     def value_rows(self) -> Int:
         """Number of rows of the values (one per cell).
@@ -555,13 +557,13 @@ struct CochainBasis(CochainLike):
         """
         return self.v.nrows
 
-    def mapped(self, A: CSRMatrix, k: Int, is_primal: Bool) raises -> Self:
+    def mapped(self, A: CSRMatrix, k: Int, primality: Primality) raises -> Self:
         """A cochain of dimension `k` whose values are `A @ self.v`.
 
         Args:
             A: The operator, with `self.value_rows()` columns.
             k: The dimension of the result.
-            is_primal: Whether the result is primal.
+            primality: Whether the result is primal or dual.
 
         Returns:
             A cochain on the same complex.
@@ -569,17 +571,17 @@ struct CochainBasis(CochainLike):
         Raises:
             If `A` has a different number of columns than `v` has rows.
         """
-        return Self(self.complex, k, is_primal, A @ self.v)
+        return Self(self.complex, k, primality, A @ self.v)
 
     def mapped(
-        self, D: DiagonalOperator, k: Int, is_primal: Bool
+        self, D: DiagonalOperator, k: Int, primality: Primality
     ) raises -> Self:
         """A cochain of dimension `k` whose values are `D @ self.v`.
 
         Args:
             D: The diagonal operator, of size `self.value_rows()`.
             k: The dimension of the result.
-            is_primal: Whether the result is primal.
+            primality: Whether the result is primal or dual.
 
         Returns:
             A cochain on the same complex.
@@ -587,19 +589,19 @@ struct CochainBasis(CochainLike):
         Raises:
             If `D` has a different size than `v` has rows.
         """
-        return Self(self.complex, k, is_primal, D @ self.v)
+        return Self(self.complex, k, primality, D @ self.v)
 
-    def relabeled(self, k: Int, is_primal: Bool) -> Self:
+    def relabeled(self, k: Int, primality: Primality) -> Self:
         """The same values viewed as a cochain of dimension `k`.
 
         Args:
             k: The new dimension.
-            is_primal: Whether the result is primal.
+            primality: Whether the result is primal or dual.
 
         Returns:
             A cochain with a copy of the values.
         """
-        return Self(self.complex, k, is_primal, self.v.copy())
+        return Self(self.complex, k, primality, self.v.copy())
 
     def scaled(self, s: Float64) -> Self:
         """The values multiplied by `s`.
@@ -610,7 +612,7 @@ struct CochainBasis(CochainLike):
         Returns:
             A new cochain.
         """
-        return Self(self.complex, self.k, self.is_primal, self.v * s)
+        return Self(self.complex, self.k, self._primality, self.v * s)
 
     def __add__(self, other: Self) raises -> Self:
         """The sum of two cochain bases.
@@ -626,7 +628,7 @@ struct CochainBasis(CochainLike):
             matrices differ in shape.
         """
         _check_compatible(self, other)
-        return Self(self.complex, self.k, self.is_primal, self.v + other.v)
+        return Self(self.complex, self.k, self._primality, self.v + other.v)
 
     def __sub__(self, other: Self) raises -> Self:
         """The difference of two cochain bases.
@@ -642,7 +644,7 @@ struct CochainBasis(CochainLike):
             matrices differ in shape.
         """
         _check_compatible(self, other)
-        return Self(self.complex, self.k, self.is_primal, self.v - other.v)
+        return Self(self.complex, self.k, self._primality, self.v - other.v)
 
     def write_to(self, mut writer: Some[Writer]):
         """Write the dimensions, kind, and values, as PyDEC prints a cochain.
@@ -656,7 +658,7 @@ struct CochainBasis(CochainLike):
             ",n=",
             self.n,
             ",is_primal=",
-            self.is_primal,
+            self._primality.is_primal(),
             "\n",
             self.v,
             ")",
@@ -686,22 +688,22 @@ def d[C: CochainLike](f: C) raises -> C:
     var k = f.degree()
     var n = f.complex_dim()
     var sc = f.get_complex()
-    if f.primal():
+    if f.primality().is_primal():
         if k == -1:
             return f.mapped(
-                CSRMatrix(sc[0].num_simplices, f.value_rows()), k + 1, True
+                CSRMatrix(sc[0].num_simplices, f.value_rows()), k + 1, .PRIMAL
             )
         if k < -1 or k >= n:
-            return f.mapped(CSRMatrix(1, f.value_rows()), k + 1, True)
-        return f.mapped(sc[k].d, k + 1, True)
+            return f.mapped(CSRMatrix(1, f.value_rows()), k + 1, .PRIMAL)
+        return f.mapped(sc[k].d, k + 1, .PRIMAL)
     if k == -1:
         return f.mapped(
-            CSRMatrix(sc[n].num_simplices, f.value_rows()), k + 1, False
+            CSRMatrix(sc[n].num_simplices, f.value_rows()), k + 1, .DUAL
         )
     if k < -1 or k >= n:
-        return f.mapped(CSRMatrix(1, f.value_rows()), k + 1, False)
+        return f.mapped(CSRMatrix(1, f.value_rows()), k + 1, .DUAL)
     var sign: Float64 = -1.0 if k % 2 == 1 else 1.0
-    return f.mapped(sc[n - k].boundary * sign, k + 1, False)
+    return f.mapped(sc[n - k].boundary * sign, k + 1, .DUAL)
 
 
 def star[C: CochainLike](f: C) raises -> C:
@@ -727,13 +729,13 @@ def star[C: CochainLike](f: C) raises -> C:
     var k = f.degree()
     var n = f.complex_dim()
     if k == -1 or k == n + 1:
-        return f.relabeled(n - k, not f.primal())
+        return f.relabeled(n - k, f.primality().dual())
     var sc = f.get_complex()
     if not sc.has_geometry():
         raise Error("star: the complex was built without geometry")
-    if f.primal():
-        return f.mapped(sc[k].star, n - k, False)
-    return f.mapped(sc[n - k].star_inv, n - k, True)
+    if f.primality().is_primal():
+        return f.mapped(sc[k].star, n - k, .DUAL)
+    return f.mapped(sc[n - k].star_inv, n - k, .PRIMAL)
 
 
 def delta[C: CochainLike](f: C) raises -> C:
@@ -798,7 +800,7 @@ def _check_compatible[C: CochainLike](a: C, b: C) raises:
     """Raise unless `a` and `b` are cochains of one kind on one complex."""
     if (
         a.degree() != b.degree()
-        or a.primal() != b.primal()
+        or a.primality() != b.primality()
         or not a.get_complex().is_same(b.get_complex())
     ):
         raise Error(

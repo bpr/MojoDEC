@@ -30,6 +30,7 @@ and `.diag`.
 
 from mojodec.core.cochain import Cochain
 from mojodec.core.diagonal import DiagonalOperator
+from mojodec.core.primality import Primality
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.subset import Subset
@@ -37,7 +38,11 @@ from mojodec.core.utils import IntArray, RealArray, real_vector
 
 
 comptime PRIMAL = True
-"""Primality parameter of primal cochains."""
+"""Primality parameter of primal cochains.
+
+The parameter is a `Bool` rather than a `Primality`: Mojo 1.3 does not fold
+`p.dual()` in a parameter, so `star`'s result type would not match `DUAL`.
+"""
 comptime DUAL = False
 """Primality parameter of dual cochains."""
 
@@ -331,21 +336,297 @@ struct TypedComplex[n: Int](ImplicitlyCopyable, Movable):
     # Subsets
     # ===------------------------------------------------------------------=== #
 
-    def boundary_subset[k: Int](self) raises -> Subset:
+    def boundary_cells[k: Int](self) raises -> TypedSubset[Self.n, k, PRIMAL]:
         """The primal k-simplices on the mesh boundary.
 
         Parameters:
             k: The dimension of the simplices, `0..n`.
 
         Returns:
-            A primal `Subset` of the k-simplices (empty for `k = n`).
+            The k-simplices of `sc.boundary_cells()` (none for `k = n`).
 
         Raises:
-            Only if `SimplicialComplex.boundary_subset` fails, which the
-            degree check rules out.
+            Only if `SimplicialComplex.boundary_cells` fails, which a valid
+            complex rules out.
         """
         comptime assert 0 <= k and k <= Self.n, "degree out of range"
-        return self.sc.boundary_subset(k)
+        return TypedSubset[Self.n, k, PRIMAL](
+            self.sc, self.sc.boundary_cells()[k].copy()
+        )
+
+    def subset[
+        k: Int, primal: Bool
+    ](self, indices: List[Int]) raises -> TypedSubset[Self.n, k, primal]:
+        """The primal k-simplices or dual k-cells with the given indices.
+
+        Parameters:
+            k: The cell dimension, `0..n`.
+            primal: `PRIMAL` or `DUAL`.
+
+        Args:
+            indices: Cell indices, `0 <= i < num_cells[k, primal]()`.
+
+        Returns:
+            The subset.
+
+        Raises:
+            If an index is out of range.
+        """
+        comptime assert 0 <= k and k <= Self.n, "degree out of range"
+        return TypedSubset[Self.n, k, primal](
+            self.sc,
+            Subset.from_indices(self.sc, k, indices, Primality(primal)),
+        )
+
+
+struct TypedSubset[n: Int, k: Int, primal: Bool](
+    Copyable, Movable, Sized, Writable
+):
+    """A set of primal k-simplices or dual k-cells of an n-complex, with its
+    kind in its type.
+
+    `boundary`, `coboundary`, and `dual` give the kind of their result in
+    its type, and the typed operators and cochains take only subsets of
+    the cells they act on:
+
+    ```mojo
+    var fixed = tc.boundary_cells[0]()        # TypedSubset[2, 0, PRIMAL]
+    var A = tc.laplacian[0, PRIMAL]().exclude_subset(fixed)
+    # tc.d[0, PRIMAL]().exclude_subset(fixed)  # error: d gives 1-cochains
+    ```
+
+    Parameters:
+        n: The dimension of the complex.
+        k: The dimension of the cells.
+        primal: `PRIMAL` for k-simplices, `DUAL` for dual k-cells.
+    """
+
+    var cells: Subset
+    """The untyped set."""
+    var complex: SimplicialComplex
+    """The complex the cells belong to."""
+
+    def __init__(out self, sc: SimplicialComplex, var cells: Subset) raises:
+        """The typed view of an untyped subset of `sc`.
+
+        Args:
+            sc: The complex.
+            cells: A subset of `sc`'s cells of this kind.
+
+        Raises:
+            If `sc` does not have dimension `n`, or `cells` is not a set of
+            `k`-cells of this primality of `sc`.
+        """
+        comptime assert 0 <= Self.k and Self.k <= Self.n, "degree out of range"
+        if sc.complex_dimension() != Self.n:
+            raise Error("TypedSubset: the complex has another dimension")
+        var level = _level(Self.n, Self.k, Self.primal)
+        if (
+            cells.n != Self.n
+            or cells.dim != Self.k
+            or cells.primality().is_primal() != Self.primal
+            or cells.size != sc[level].num_simplices
+        ):
+            raise Error("TypedSubset: the subset is of other cells")
+        self.cells = cells^
+        self.complex = sc
+
+    @staticmethod
+    def empty(sc: SimplicialComplex) raises -> Self:
+        """No cells of `sc`.
+
+        Args:
+            sc: An n-complex.
+
+        Returns:
+            The empty set.
+
+        Raises:
+            If `sc` does not have dimension `n`.
+        """
+        return Self(sc, Subset.empty(sc, Self.k, Primality(Self.primal)))
+
+    @staticmethod
+    def full(sc: SimplicialComplex) raises -> Self:
+        """Every cell of this kind of `sc`.
+
+        Args:
+            sc: An n-complex.
+
+        Returns:
+            The full set.
+
+        Raises:
+            If `sc` does not have dimension `n`.
+        """
+        return Self(sc, Subset.full(sc, Self.k, Primality(Self.primal)))
+
+    def untyped(self) -> Subset:
+        """The cells as an untyped `Subset`.
+
+        Returns:
+            A copy of `cells`.
+        """
+        return self.cells.copy()
+
+    def __len__(self) -> Int:
+        """The number of cells in the set.
+
+        Returns:
+            The cell count.
+        """
+        return len(self.cells)
+
+    def __contains__(self, i: Int) -> Bool:
+        """Whether cell `i` is in the set.
+
+        Args:
+            i: A cell index.
+
+        Returns:
+            True if it is in the set.
+        """
+        return i in self.cells
+
+    def indices(self) -> List[Int]:
+        """The cells' indices, ascending.
+
+        Returns:
+            The indices.
+        """
+        return self.cells.indices()
+
+    def is_empty(self) -> Bool:
+        """Whether the set has no cells.
+
+        Returns:
+            True if empty.
+        """
+        return self.cells.is_empty()
+
+    def __or__(self, other: Self) raises -> Self:
+        """The union.
+
+        Args:
+            other: A set of the same kind on the same complex.
+
+        Returns:
+            `self | other`.
+
+        Raises:
+            If `other` belongs to another complex.
+        """
+        self._check_same(other)
+        return Self(self.complex, self.cells | other.cells)
+
+    def __and__(self, other: Self) raises -> Self:
+        """The intersection.
+
+        Args:
+            other: A set of the same kind on the same complex.
+
+        Returns:
+            `self & other`.
+
+        Raises:
+            If `other` belongs to another complex.
+        """
+        self._check_same(other)
+        return Self(self.complex, self.cells & other.cells)
+
+    def __sub__(self, other: Self) raises -> Self:
+        """The difference.
+
+        Args:
+            other: A set of the same kind on the same complex.
+
+        Returns:
+            The cells of `self` not in `other`.
+
+        Raises:
+            If `other` belongs to another complex.
+        """
+        self._check_same(other)
+        return Self(self.complex, self.cells - other.cells)
+
+    def complement(self) raises -> Self:
+        """The cells of this kind not in the set.
+
+        Returns:
+            The complement.
+
+        Raises:
+            Does not raise in practice.
+        """
+        return Self(self.complex, self.cells.complement())
+
+    def dual(
+        self,
+    ) raises -> TypedSubset[Self.n, Self.n - Self.k, not Self.primal]:
+        """The same cells seen from the other side: primal k-simplices as
+        dual (n-k)-cells, and back.
+
+        Returns:
+            The subset of the other kind.
+
+        Raises:
+            Does not raise in practice.
+        """
+        return TypedSubset[Self.n, Self.n - Self.k, not Self.primal](
+            self.complex, self.cells.dual()
+        )
+
+    def boundary(self) raises -> TypedSubset[Self.n, Self.k - 1, Self.primal]:
+        """The (k-1)-cells on the boundary of some cell of the set.
+
+        Returns:
+            The faces, of the same kind.
+
+        Raises:
+            Does not raise in practice.
+        """
+        comptime assert Self.k >= 1, "boundary of 0-cells"
+        return TypedSubset[Self.n, Self.k - 1, Self.primal](
+            self.complex, self.cells.boundary(self.complex)
+        )
+
+    def coboundary(
+        self,
+    ) raises -> TypedSubset[Self.n, Self.k + 1, Self.primal]:
+        """The (k+1)-cells with some cell of the set on their boundary.
+
+        Returns:
+            The cofaces, of the same kind.
+
+        Raises:
+            Does not raise in practice.
+        """
+        comptime assert Self.k < Self.n, "coboundary of n-cells"
+        return TypedSubset[Self.n, Self.k + 1, Self.primal](
+            self.complex, self.cells.coboundary(self.complex)
+        )
+
+    def write_to(self, mut writer: Some[Writer]):
+        """Write the type and the cells, e.g. `TypedSubset[2, 0, PRIMAL](...)`.
+
+        Args:
+            writer: The destination.
+        """
+        writer.write(
+            "TypedSubset[",
+            Self.n,
+            ", ",
+            Self.k,
+            ", ",
+            "PRIMAL" if Self.primal else "DUAL",
+            "](",
+            self.cells,
+            ")",
+        )
+
+    def _check_same(self, other: Self) raises:
+        if not self.complex.is_same(other.complex):
+            raise Error("TypedSubset: subsets of different complexes")
 
 
 struct TypedCochain[n: Int, k: Int, primal: Bool](
@@ -388,7 +669,11 @@ struct TypedCochain[n: Int, k: Int, primal: Bool](
             Unless `c` is a `k`-cochain of the right primality on an
             `n`-complex.
         """
-        if c.n != Self.n or c.k != Self.k or c.is_primal != Self.primal:
+        if (
+            c.n != Self.n
+            or c.k != Self.k
+            or c.primality().is_primal() != Self.primal
+        ):
             raise Error("TypedCochain: the cochain is of another kind")
         self.complex = c.complex
         self.v = c.v.copy()
@@ -399,7 +684,9 @@ struct TypedCochain[n: Int, k: Int, primal: Bool](
         Returns:
             A `Cochain` with a copy of the values.
         """
-        return Cochain(self.complex, Self.k, Self.primal, self.v.copy())
+        return Cochain(
+            self.complex, Self.k, Primality(Self.primal), self.v.copy()
+        )
 
     def __len__(self) -> Int:
         """The number of values.
@@ -429,7 +716,11 @@ struct TypedCochain[n: Int, k: Int, primal: Bool](
         """
         self.v.unsafe_set(i, value)
 
-    def overwrite(mut self, subset: Subset, other: Self) raises:
+    def overwrite(
+        mut self,
+        subset: TypedSubset[Self.n, Self.k, Self.primal],
+        other: Self,
+    ) raises:
         """Copy the values of `other` on the cells of `subset`.
 
         Args:
@@ -437,11 +728,11 @@ struct TypedCochain[n: Int, k: Int, primal: Bool](
             other: A cochain of the same kind on the same complex.
 
         Raises:
-            If `other` lives on another complex, or `subset` is not of
-            k-cells of this primality and size.
+            If `other` or `subset` belongs to another complex.
         """
         self._check_same(other)
-        _check_subset[Self.k, Self.primal](subset, self.v.size)
+        if not subset.complex.is_same(self.complex):
+            raise Error("TypedCochain.overwrite: subset of another complex")
         for i in subset.indices():
             self.v.unsafe_set(i, other.v.unsafe_get(i))
 
@@ -535,11 +826,6 @@ struct TypedCochain[n: Int, k: Int, primal: Bool](
     def _check_same(self, other: Self) raises:
         if not self.complex.is_same(other.complex):
             raise Error("TypedCochain: cochains on different complexes")
-
-
-def _check_subset[k: Int, primal: Bool](subset: Subset, size: Int) raises:
-    if subset.dim != k or subset.is_primal != primal or subset.size != size:
-        raise Error("subset is of other cells than the cochain or operator")
 
 
 def _join(
@@ -764,8 +1050,11 @@ struct MatrixOp[
         """
         return self * -1.0
 
-    def exclude_subset(self, subset: Subset) raises -> Self:
-        """The operator with the output rows of `subset` emptied.
+    def exclude_subset(
+        self, subset: TypedSubset[Self.n, Self.out_k, Self.out_primal]
+    ) raises -> Self:
+        """The operator with the output rows (entries, for a diagonal) of
+        `subset` emptied.
 
         Args:
             subset: Cells of the output kind.
@@ -774,14 +1063,17 @@ struct MatrixOp[
             A copy with the rows of `subset` emptied.
 
         Raises:
-            If `subset` is not of `out_k`-cells of the output primality, one
-            per row.
+            If `subset` belongs to another complex, or (for an operator
+            wrapped from a bare matrix) has another number of cells.
         """
-        _check_subset[Self.out_k, Self.out_primal](subset, self.mat.nrows)
-        return Self(self.mat.exclude_subset(subset), self.complex)
+        var complex = _join(self.complex, subset.complex)
+        return Self(self.mat.exclude_subset(subset.cells), complex)
 
-    def restrict_to_subset(self, subset: Subset) raises -> Self:
-        """The operator with only the output rows of `subset` kept.
+    def restrict_to_subset(
+        self, subset: TypedSubset[Self.n, Self.out_k, Self.out_primal]
+    ) raises -> Self:
+        """The operator with only the output rows (entries, for a diagonal)
+        of `subset` kept.
 
         Args:
             subset: Cells of the output kind.
@@ -790,11 +1082,11 @@ struct MatrixOp[
             A copy with the rows outside `subset` emptied.
 
         Raises:
-            If `subset` is not of `out_k`-cells of the output primality, one
-            per row.
+            If `subset` belongs to another complex, or (for an operator
+            wrapped from a bare matrix) has another number of cells.
         """
-        _check_subset[Self.out_k, Self.out_primal](subset, self.mat.nrows)
-        return Self(self.mat.restrict_to_subset(subset), self.complex)
+        var complex = _join(self.complex, subset.complex)
+        return Self(self.mat.restrict_to_subset(subset.cells), complex)
 
     def write_to(self, mut writer: Some[Writer]):
         """Write the kind, e.g. `MatrixOp[2]: primal 0 -> primal 1`, then the
@@ -1055,37 +1347,43 @@ struct DiagonalOp[
         """
         return self * -1.0
 
-    def exclude_subset(self, subset: Subset) raises -> Self:
-        """The operator with the entries of `subset` zeroed.
+    def exclude_subset(
+        self, subset: TypedSubset[Self.n, Self.out_k, Self.out_primal]
+    ) raises -> Self:
+        """The operator with the output rows (entries, for a diagonal) of
+        `subset` emptied.
 
         Args:
             subset: Cells of the output kind.
 
         Returns:
-            A copy with the entries of `subset` set to zero.
+            A copy with the rows of `subset` emptied.
 
         Raises:
-            If `subset` is not of `out_k`-cells of the output primality, one
-            per entry.
+            If `subset` belongs to another complex, or (for an operator
+            wrapped from a bare diagonal) has another number of cells.
         """
-        _check_subset[Self.out_k, Self.out_primal](subset, len(self.diag))
-        return Self(self.diag.exclude_subset(subset), self.complex)
+        var complex = _join(self.complex, subset.complex)
+        return Self(self.diag.exclude_subset(subset.cells), complex)
 
-    def restrict_to_subset(self, subset: Subset) raises -> Self:
-        """The operator with the entries outside `subset` zeroed.
+    def restrict_to_subset(
+        self, subset: TypedSubset[Self.n, Self.out_k, Self.out_primal]
+    ) raises -> Self:
+        """The operator with only the output rows (entries, for a diagonal)
+        of `subset` kept.
 
         Args:
             subset: Cells of the output kind.
 
         Returns:
-            A copy with the entries outside `subset` set to zero.
+            A copy with the rows outside `subset` emptied.
 
         Raises:
-            If `subset` is not of `out_k`-cells of the output primality, one
-            per entry.
+            If `subset` belongs to another complex, or (for an operator
+            wrapped from a bare diagonal) has another number of cells.
         """
-        _check_subset[Self.out_k, Self.out_primal](subset, len(self.diag))
-        return Self(self.diag.restrict_to_subset(subset), self.complex)
+        var complex = _join(self.complex, subset.complex)
+        return Self(self.diag.restrict_to_subset(subset.cells), complex)
 
     def write_to(self, mut writer: Some[Writer]):
         """Write the kind, e.g. `DiagonalOp[2]: primal 1 -> dual 1`, then the

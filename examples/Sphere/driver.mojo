@@ -54,8 +54,7 @@ def main() raises:
         if args[i] == "--subdivisions":
             subdivisions = atol(args[i + 1])
 
-    var vt = icosphere(subdivisions)
-    var sc = SimplicialComplex(vt[0], vt[1])
+    var sc = SimplicialComplex(icosphere(subdivisions))
     print(sc)
 
     # topology, mesh quality, and curvature
@@ -91,12 +90,12 @@ def main() raises:
         print("\nfirst", NUM, "eigenvalues of the Hodge Laplacian:")
         print("   k=0 (expected)        k=1 (expected)        k=2 (expected)")
         for k in range(3):
-            var star = sc[k].star.copy()
+            ref star = sc[k].star
             var L = laplace_derham(sc.get_cochain_basis(k)).v.copy()
-            var wv = eigh_generalized((star @ L).todense(), star.todense())
+            var eig = eigh_generalized((star @ L).todense(), star)
             var values = List[Float64]()
             for i in range(NUM):
-                values.append(wv[0].unsafe_get(i))
+                values.append(eig.values.unsafe_get(i))
             var exact = _harmonic_spectrum(NUM, skip_zero=(k == 1))
             for i in range(NUM):
                 f.write(k, " ", i, " ", values[i], " ", exact[i], "\n")
@@ -104,10 +103,10 @@ def main() raises:
                 # an l = 1 spherical harmonic: a linear function of position
                 first_mode = real_vector(sc[0].num_simplices)
                 for v in range(first_mode.size):
-                    first_mode.unsafe_set(v, fget(wv[1], v, 1))
+                    first_mode.unsafe_set(v, fget(eig.vectors, v, 1))
             computed.append(values^)
             expected.append(exact^)
-            full.append(wv[0].copy())
+            full.append(eig.values.copy())
         for i in range(NUM):
             var line = String("   ")
             for k in range(3):
@@ -174,7 +173,7 @@ def main() raises:
             VTKField("mean_curvature_normal", mean_curvature_normal(sc)),
             VTKField("eigenfunction_l1", first_mode),
         ],
-        format="appended",
+        format=.APPENDED,
     )
     print("wrote sphere.vtu")
     if show:

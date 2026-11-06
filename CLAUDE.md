@@ -5,9 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 MojoDEC is a port of PyDEC (Discrete Exterior Calculus) to Mojo 1.3, using
-NuMojo arrays in place of NumPy and its own `CSRMatrix` in place of
-`scipy.sparse`. README.md has the full MojoDEC ↔ PyDEC file mapping, the list
-of deliberate differences from PyDEC, and the features added beyond PyDEC.
+NuMojo arrays in place of PyDEC's NumPy arrays and its own `CSRMatrix` in
+place of PyDEC's `scipy.sparse` matrices. README.md has the full MojoDEC ↔
+PyDEC file mapping, the list of deliberate differences from PyDEC, and the
+features added beyond PyDEC.
 
 ## Commands
 
@@ -50,6 +51,10 @@ mesh fixtures live in `tests/meshes/`. Examples run from their own directory
   DEC systems; use MojoDEC's own `routines/dense.mojo` (pivoted LU,
   Householder/QL `eigh`) and `routines/linalg.mojo` (`cg`, `lsqr`, dense
   `spsolve`, `eigh_generalized`).
+- Write `sqrt(x)` (`std.math`), never `x ** 0.5`: Mojo's `**` with a
+  fractional exponent is off by up to ~5e-12 relative, which Cholesky and
+  Gram-matrix solves amplify (it cost DarcyFlow two digits and Sphere's
+  spectrum check three).
 
 ## Architecture
 
@@ -74,23 +79,44 @@ Key design points that span several files:
   implementing the `CochainLike` trait. `d`, `star`, `delta`,
   `laplace_derham`, `laplace_beltrami` are generic over `CochainLike`.
 - **Operators**: on `CSRMatrix`, `A @ B` / `A @ x` are matrix products
-  (SciPy's `A * B`); `A * s` scales. Hodge stars (`sc[k].star`,
-  `star_inv`) are `DiagonalOperator` (`core/diagonal.mojo`): `D @ A` scales
-  rows, `A @ D` (via `__rmatmul__`) scales columns; `to_csr()` when a
-  `CSRMatrix` is required. `CochainLike.mapped` is overloaded for both.
+  (PyDEC's `A * B` on SciPy matrices); `A * s` scales. Hodge stars
+  (`sc[k].star`, `star_inv`) are `DiagonalOperator` (`core/diagonal.mojo`):
+  `D @ A` scales rows, `A @ D` (via `__rmatmul__`) scales columns;
+  `to_csr()` when a `CSRMatrix` is required. `CochainLike.mapped` is overloaded for both.
+- **`Primality`** (`core/primality.mojo`): `.PRIMAL`/`.DUAL` in place of
+  PyDEC's `is_primal` Bool, on cochains, `get_cochain(_basis)`, and
+  `Subset` (read with `.primality()`; `p.level(n, k)` gives the level).
+  The typed layer keeps `primal: Bool` parameters with `PRIMAL`/`DUAL`
+  Bool aliases, because Mojo 1.3 does not fold `p.dual()` in a parameter
+  (`star`'s result type would not match `DUAL`); convert with
+  `Primality(primal)` at the untyped boundary.
 - **`Subset`** (`core/subset.mojo`): bitset of primal k-simplices or dual
   k-cells (indexed by primal level k or n-k). Boundary/coboundary walk the
   rows of `sc[m-1].d` / `sc[m+1].boundary`, swapped for dual cells.
   `CSRMatrix`/`DiagonalOperator` have `exclude_subset`/`restrict_to_subset`,
-  `Cochain.overwrite`, `sc.boundary_subset(k)`. `subset.mojo` and
+  `Cochain.overwrite`, `sc.boundary_cells()[k]`. `subset.mojo` and
   `sparse.mojo` import each other, as do `cochain` and `simplicial_complex`.
+- **`CellSet`** (`core/cell_set.mojo`): one primal `Subset` per dimension
+  `0..n`; the neighborhood queries take and return it. They are generic
+  over the `CellComplex` trait (`num_cells`, `faces_of`, `cofaces_of`,
+  `boundary_faces_of`), which the four complex types and `ChainComplex`
+  implement by walking incidence rows (`cells_in_rows`), so nothing is
+  copied per query. A trait cannot return a reference to a field in Mojo
+  1.3, hence these value-returning primitives.
+- **`ChainComplex`** (`core/chain_complex.mojo`): `boundary(k)` = `B_k`
+  (k = 1..n) and `coboundary(k)` = `d_k` (k = 0..n-1), no PyDEC padding.
+  Abstract and Rips complexes store one and return it by reference from
+  `chain_complex()`; `SimplicialComplex` and `RegularCubeComplex` keep
+  `sc[k].boundary`/`sc[k].d` per level and build a copy.
 - **Typed layer** (`core/typed.mojo`): `TypedComplex[n]` wraps a
   `SimplicialComplex` (`.sc`); `TypedCochain[n, k, primal]`,
   `MatrixOp`/`DiagonalOp[n, in_k, in_primal, out_k, out_primal]` wrap
   `RealArray`/`CSRMatrix`/`DiagonalOperator`. Composition is checked by
   `__matmul__` signatures; degree ranges by `comptime assert`. Ops built
   by `TypedComplex` record its complex (`Optional`, `None` when wrapped
-  from a bare matrix) and refuse cochains and ops from another one. Mojo
+  from a bare matrix) and refuse cochains and ops from another one.
+  `TypedSubset[n, k, primal]` types subsets the same way; typed `wedge`
+  and `flat` overloads live next to the untyped ones. Mojo
   simplifies parameter expressions (`n - (n - k + 1)` = `k - 1`), but
   `comptime if k == 0` does not refine `k` inside the branch, so write
   branches in terms of `k`. Keep it a thin layer: operators are built
@@ -104,14 +130,23 @@ Key design points that span several files:
   Python. `pyplot(interactive=show_requested())` uses Agg unless `--show`
   is passed. `simplex_quivers`/`cube_quivers` are pure Mojo.
 - I/O (`routines/io/`): PyDEC array/mesh formats, VTK `.vtu`
-  (`ascii`/`binary`/`appended`, pure Mojo), PLY, and Gmsh `.msh` input
+  (`VTKFormat.ASCII`/`.BINARY`/`.APPENDED`, pure Mojo), PLY, and Gmsh `.msh` input
   (4.1 and 2.2, ASCII and binary; physical groups -> `GmshMesh.subset`).
+  Formats are small structs with `comptime` members (`ArrayFormat`,
+  `SparseFormat`, `PlyFormat`, `VTKFormat`), passed as `format=.BINARY`.
+  Readers go through `io/scan.mojo`'s `ByteReader` (in-place number
+  parsing, block copies of binary data); check a count read from a file
+  against the bytes left (`require`) before allocating for it.
   The Gmsh fixtures in `tests/meshes/gmsh/` are generated from the `.geo`
   files there: `pixi exec --spec gmsh gmsh -2 square.geo -format msh41
   [-bin] -o square_v41[_bin].msh` (and `msh22`; `-3` for the cube).
 
 ## Conventions
 
+- Return a small struct with named fields (`SimplicialMesh`,
+  `EighResult`, `SolveResult`, `Quivers`, ...) rather than a tuple, and an
+  enum-like struct with `comptime` members (`Primality`, `StopReason`, the
+  I/O formats) rather than a Bool or String flag.
 - Public symbols get Google-style doc strings (`Args:`, `Parameters:`,
   `Returns:`, `Raises:`; see `docs/writing-docs.md`). `pixi run doc-check`
   must not get worse; after documenting a file, `pixi run doc-check
@@ -121,5 +156,5 @@ Key design points that span several files:
   that way.
 - The examples double as regression checks against PyDEC; README.md's
   Examples table lists the expected results (e.g. DarcyFlow pressures to
-  1.5e-12, ResonantCavity eigenvalues m²+n², MakeMesh matches
+  1e-14, ResonantCavity eigenvalues m²+n², MakeMesh matches
   `examples/MakeMesh/ExpectedOutput/`).

@@ -10,6 +10,7 @@ from numojo.prelude import *
 
 from mojodec.core.cochain import Cochain, d
 from mojodec.core.simplicial_complex import SimplicialComplex
+from mojodec.core.typed import PRIMAL, TypedCochain, TypedComplex
 from mojodec.core.utils import fget, iget, rows_of
 from mojodec.routines.io.meshio import read_mesh
 from mojodec.routines.mesh_generation import simplicial_grid_2d
@@ -19,10 +20,10 @@ from mojodec.routines.wedge import wedge
 def grid() raises -> SimplicialComplex:
     """A 3x3 grid with one vertex moved, so the triangles are not all alike."""
     var vt = simplicial_grid_2d(3)
-    var V = vt[0].copy()
+    var V = vt.vertices.copy()
     V.unsafe_set(5 * 2, 0.45)
     V.unsafe_set(5 * 2 + 1, 0.2)
-    return SimplicialComplex(V, vt[1])
+    return SimplicialComplex(V, vt.elements)
 
 
 def tets() raises -> SimplicialComplex:
@@ -60,6 +61,25 @@ def test_dx_wedge_dy_is_signed_area() raises:
     assert_equal(w.k, 2)
     for t in range(sc[2].num_simplices):
         assert_almost_equal(w[t], sc[2].primal_volume.unsafe_get(t), atol=1e-14)
+
+
+def test_typed_wedge() raises:
+    var sc = grid()
+    var tc = TypedComplex[2](sc)
+    var dx = TypedCochain[2, 1, PRIMAL](coordinate_form(sc, 0))
+    var dy = TypedCochain[2, 1, PRIMAL](coordinate_form(sc, 1))
+    var area: TypedCochain[2, 2, PRIMAL] = wedge(dx, dy)
+    for t in range(len(area)):
+        assert_almost_equal(
+            area[t], sc[2].primal_volume.unsafe_get(t), atol=1e-14
+        )
+    # a 0-form times a 1-form is a 1-form; wedge(area, dx) does not compile
+    var f = tc.cochain[0, PRIMAL]()
+    for i in range(len(f)):
+        f[i] = 2.0
+    var two_dx: TypedCochain[2, 1, PRIMAL] = wedge(f, dx)
+    for e in range(len(two_dx)):
+        assert_almost_equal(two_dx[e], 2.0 * dx[e], atol=1e-14)
 
 
 def test_functions() raises:
@@ -115,7 +135,7 @@ def test_errors() raises:
     with assert_raises(contains="exceed"):
         _ = wedge(a, b)
     with assert_raises(contains="primal"):
-        _ = wedge(sc.get_cochain(1, is_primal=False), b)
+        _ = wedge(sc.get_cochain(1, .DUAL), b)
     with assert_raises(contains="different complexes"):
         _ = wedge(b, random_cochain(grid(), 0, 3))
 

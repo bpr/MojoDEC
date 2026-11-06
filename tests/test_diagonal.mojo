@@ -6,6 +6,7 @@ from std.testing import (
     assert_true,
 )
 
+from std.math import sqrt
 import numojo as nm
 
 from mojodec import (
@@ -51,7 +52,7 @@ def test_inverse_inner_product_norm() raises:
     var x = real_vector_from_list([1.0, 2.0])
     var z = real_vector_from_list([3.0, -1.0])
     assert_equal(D.inner_product(x, z), 4.0 * 3.0 + 0.5 * -2.0)
-    assert_equal(D.norm(x), (4.0 + 0.5 * 4.0) ** 0.5)
+    assert_equal(D.norm(x), sqrt(4.0 + 0.5 * 4.0))
     with assert_raises():
         _ = DiagonalOperator([1.0, 0.0]).inverse()
 

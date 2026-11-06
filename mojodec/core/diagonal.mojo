@@ -18,6 +18,7 @@ var energy = sc[1].star.inner_product(omega.v, omega.v)       # omega^T S omega
 ```
 """
 
+from std.math import sqrt
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.subset import Subset
 from mojodec.core.utils import RealArray, real_array, real_vector
@@ -297,7 +298,7 @@ struct DiagonalOperator(Copyable, Movable, Sized, Writable):
         Raises:
             If `x` does not have length n.
         """
-        return self.inner_product(x, x) ** 0.5
+        return sqrt(self.inner_product(x, x))
 
     def inverse(self) raises -> Self:
         """The inverse: the reciprocals of the entries.

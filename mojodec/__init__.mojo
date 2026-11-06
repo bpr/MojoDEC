@@ -35,9 +35,12 @@ Layout
 comptime __version__: String = "0.1.0"
 """The MojoDEC version."""
 
-from mojodec.core.sparse import CSRMatrix
+from mojodec.core.sparse import COOEntries, CSRMatrix
 from mojodec.core.diagonal import DiagonalOperator
+from mojodec.core.primality import Primality
 from mojodec.core.subset import Subset
+from mojodec.core.cell_set import CellComplex, CellSet
+from mojodec.core.chain_complex import ChainComplex
 from mojodec.core.simplex import Simplex
 from mojodec.core.mesh import SimplicialMesh, RegularCubeMesh
 from mojodec.core.ncube import NCube
@@ -62,6 +65,7 @@ from mojodec.core.cochain import (
 from mojodec.core.typed import (
     TypedComplex,
     TypedCochain,
+    TypedSubset,
     MatrixOp,
     DiagonalOp,
     PRIMAL,
@@ -71,6 +75,7 @@ from mojodec.core.kd_tree import KDTree
 from mojodec.core.utils import IntArray, RealArray
 
 from mojodec.routines.simplex_array import (
+    FacesAndBoundary,
     simplex_array_searchsorted,
     simplex_array_parity,
     simplex_array_boundary,
@@ -83,6 +88,7 @@ from mojodec.routines.combinatorial import (
     relative_parity,
 )
 from mojodec.routines.geometry import (
+    Circumsphere,
     unsigned_volume,
     signed_volume,
     circumcenter,
@@ -91,6 +97,7 @@ from mojodec.routines.geometry import (
     barycentric_gradients,
 )
 from mojodec.routines.innerproduct import (
+    COOPattern,
     whitney_innerproduct,
     regular_cube_innerproduct,
     massmatrix_rowcols,
@@ -101,8 +108,13 @@ from mojodec.routines.linalg import (
     spsolve,
     eigh_generalized,
     SolveResult,
+    StopReason,
+)
+from mojodec.routines.dense import (
+    EighResult,
 )
 from mojodec.routines.mesh_generation import (
+    CubeGrid,
     simplicial_grid_2d,
     cube_grid,
     triangulate_ncube,
@@ -111,7 +123,7 @@ from mojodec.routines.mesh_generation import (
     icosphere,
 )
 from mojodec.routines.wedge import wedge
-from mojodec.routines.musical import flat, dual_edge_pieces
+from mojodec.routines.musical import DualEdgePieces, flat, dual_edge_pieces
 from mojodec.routines.curvature import (
     angle_defect,
     gaussian_curvature,
@@ -131,6 +143,8 @@ from mojodec.routines.quality import (
     shape_regularity,
 )
 from mojodec.routines.io.arrayio import (
+    ArrayFormat,
+    SparseFormat,
     read_array,
     read_sparse,
     read_header,
@@ -139,6 +153,11 @@ from mojodec.routines.io.arrayio import (
 )
 from mojodec.routines.io.meshio import read_mesh, write_mesh
 from mojodec.routines.io.text import loadtxt
-from mojodec.routines.io.vtk import VTKField, write_vtu, write_vtu_cubes
-from mojodec.routines.io.ply import read_ply, write_ply
+from mojodec.routines.io.vtk import (
+    VTKField,
+    VTKFormat,
+    write_vtu,
+    write_vtu_cubes,
+)
+from mojodec.routines.io.ply import PlyFormat, read_ply, write_ply
 from mojodec.routines.io.gmsh import read_gmsh, GmshMesh, GmshGroup

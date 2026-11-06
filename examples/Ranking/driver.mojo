@@ -28,10 +28,10 @@ def main() raises:
 
     # abstract simplicial complex from the edges
     var asc = AbstractSimplicialComplex([edges^])
-    var B1 = asc.chain_complex()[1].copy()  # boundary matrix
+    ref B1 = asc.chain_complex().boundary(1)  # boundary matrix
 
     # least squares problem B1^T alpha ~= omega
-    var alpha = lsqr(B1.T(), omega).x.copy()
+    var alpha = lsqr(B1.T(), omega).take_x()
 
     # set the minimum to 0
     var lo = alpha.unsafe_get(0)

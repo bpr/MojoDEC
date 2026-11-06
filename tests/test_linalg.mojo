@@ -2,15 +2,23 @@ from std.testing import (
     TestSuite,
     assert_equal,
     assert_almost_equal,
+    assert_raises,
     assert_true,
 )
 
 import numojo as nm
 from numojo.prelude import *
 
+from mojodec.core.diagonal import DiagonalOperator
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.utils import fget, real_vector, norm2
-from mojodec.routines.linalg import cg, lsqr, spsolve, eigh_generalized
+from mojodec.routines.linalg import (
+    StopReason,
+    cg,
+    eigh_generalized,
+    lsqr,
+    spsolve,
+)
 from mojodec.routines import dense
 
 
@@ -38,13 +46,23 @@ def test_cg() raises:
     nm.random.seed(1)
     var b = nm.random.rand[f64](Shape(50))
     var res = cg(A, b, rtol=1e-12)
-    assert_equal(res.info, 0)
+    assert_true(res.converged())
+    assert_true(res.normal_residual_norm is None)
     var r = A @ res.x
     for i in range(50):
         assert_almost_equal(r.unsafe_get(i), b.unsafe_get(i), atol=1e-9)
     var x = spsolve(A, b)
     for i in range(50):
         assert_almost_equal(x.unsafe_get(i), res.x.unsafe_get(i), atol=1e-8)
+    # the iteration limit, and an indefinite matrix
+    var short = cg(A, b, rtol=1e-12, maxiter=3)
+    assert_true(short.stop == StopReason.MAX_ITER)
+    assert_equal(short.iterations, 3)
+    var neg = cg(A * -1.0, b)
+    assert_true(neg.stop == StopReason.BREAKDOWN)
+    assert_equal(String(neg.stop), "breakdown")
+    var x0 = neg^.take_x()
+    assert_equal(x0.size, 50)
 
 
 def test_lsqr() raises:
@@ -59,6 +77,14 @@ def test_lsqr() raises:
     var x = spsolve(AtA, Atb)
     for i in range(2):
         assert_almost_equal(res.x.unsafe_get(i), x.unsafe_get(i), atol=1e-8)
+    assert_true(res.converged())
+    # the reported norms are those of r = b - A x and A^T r
+    var r = b.copy()
+    var Ax = A @ res.x
+    for i in range(4):
+        r.unsafe_set(i, r.unsafe_get(i) - Ax.unsafe_get(i))
+    assert_almost_equal(res.residual_norm, norm2(r), atol=1e-8)
+    assert_almost_equal(res.normal_residual_norm.value(), 0.0, atol=1e-6)
 
 
 def test_dense_pivoting() raises:
@@ -76,15 +102,52 @@ def test_eigh_generalized() raises:
     var M = nm.fromstring[f64]("[[2, 0, 0], [0, 1, 0], [0, 0, 3]]")
     var wv = eigh_generalized(K, M)
     for j in range(3):
-        var lam = wv[0].unsafe_get(j)
+        var lam = wv.values.unsafe_get(j)
         for i in range(3):
             var kx: Float64 = 0
             var mx: Float64 = 0
             for k in range(3):
-                kx += fget(K, i, k) * fget(wv[1], k, j)
-                mx += fget(M, i, k) * fget(wv[1], k, j)
+                kx += fget(K, i, k) * fget(wv.vectors, k, j)
+                mx += fget(M, i, k) * fget(wv.vectors, k, j)
             assert_almost_equal(kx, lam * mx, atol=1e-9)
-    assert_true(wv[0].unsafe_get(0) <= wv[0].unsafe_get(1))
+    assert_true(wv.values.unsafe_get(0) <= wv.values.unsafe_get(1))
+
+
+def test_eigh_generalized_diagonal() raises:
+    nm.random.seed(7)
+    var n = 12
+    var B = nm.random.rand[f64](Shape(n, n))
+    var K = nm.zeros[f64](Shape(n, n))
+    var M = nm.zeros[f64](Shape(n, n))
+    var m = List[Float64]()
+    for i in range(n):
+        for j in range(n):
+            K.unsafe_set(i * n + j, fget(B, i, j) + fget(B, j, i))
+        m.append(0.25 + Float64(i))
+        M.unsafe_set(i * n + i, m[i])
+    var dense_wv = eigh_generalized(K, M)
+    var wv = eigh_generalized(K, DiagonalOperator(m.copy()))
+    for j in range(n):
+        var lam = wv.values.unsafe_get(j)
+        assert_almost_equal(lam, dense_wv.values.unsafe_get(j), atol=1e-12)
+        for i in range(n):
+            var kx: Float64 = 0
+            for k in range(n):
+                kx += fget(K, i, k) * fget(wv.vectors, k, j)
+            assert_almost_equal(
+                kx, lam * m[i] * fget(wv.vectors, i, j), atol=1e-11
+            )
+        # M-orthonormal columns
+        for l in range(n):
+            var mxx: Float64 = 0
+            for i in range(n):
+                mxx += m[i] * fget(wv.vectors, i, j) * fget(wv.vectors, i, l)
+            assert_almost_equal(mxx, 1.0 if j == l else 0.0, atol=1e-12)
+    m[3] = 0
+    with assert_raises(contains="not positive definite"):
+        _ = eigh_generalized(K, DiagonalOperator(m.copy()))
+    with assert_raises(contains="differ in shape"):
+        _ = eigh_generalized(K, DiagonalOperator.identity(n - 1))
 
 
 def test_dense_eigh() raises:
@@ -98,13 +161,13 @@ def test_dense_eigh() raises:
     var wv = dense.eigh(A)
     for j in range(n):
         if j > 0:
-            assert_true(wv[0].unsafe_get(j - 1) <= wv[0].unsafe_get(j))
+            assert_true(wv.values.unsafe_get(j - 1) <= wv.values.unsafe_get(j))
         for i in range(n):
             var s: Float64 = 0
             for k in range(n):
-                s += fget(A, i, k) * fget(wv[1], k, j)
+                s += fget(A, i, k) * fget(wv.vectors, k, j)
             assert_almost_equal(
-                s, wv[0].unsafe_get(j) * fget(wv[1], i, j), atol=1e-10
+                s, wv.values.unsafe_get(j) * fget(wv.vectors, i, j), atol=1e-10
             )
 
 

@@ -48,36 +48,38 @@ def test_search() raises:
 
 def test_boundary_1d() raises:
     var fb = cube_array_boundary(I("[[0,0],[1,0],[2,0]]"), 1)
-    assert_int_array(fb[0], "[[0],[1],[2],[3]]")
-    assert_dense(fb[1], "[[-1,0,0],[1,-1,0],[0,1,-1],[0,0,1]]")
+    assert_int_array(fb.faces, "[[0],[1],[2],[3]]")
+    assert_dense(fb.boundary, "[[-1,0,0],[1,-1,0],[0,1,-1],[0,0,1]]")
     fb = cube_array_boundary(I("[[0,0],[3,0],[5,0]]"), 1)
-    assert_int_array(fb[0], "[[0],[1],[3],[4],[5],[6]]")
+    assert_int_array(fb.faces, "[[0],[1],[3],[4],[5],[6]]")
 
 
 def test_boundary_2d() raises:
     var fb = cube_array_boundary(I("[[0,0,0],[0,0,1],[0,1,0],[1,0,1]]"), 1)
-    assert_int_array(fb[0], "[[0,0],[0,1],[1,0],[1,1]]")
-    assert_dense(fb[1], "[[-1,-1,0,0],[0,1,-1,0],[1,0,0,-1],[0,0,1,1]]")
+    assert_int_array(fb.faces, "[[0,0],[0,1],[1,0],[1,1]]")
+    assert_dense(fb.boundary, "[[-1,-1,0,0],[0,1,-1,0],[1,0,0,-1],[0,0,1,1]]")
     fb = cube_array_boundary(I("[[0,0,0,1],[0,1,0,1],[1,0,0,1],[1,1,0,1]]"), 2)
     assert_int_array(
-        fb[0],
+        fb.faces,
         "[[0,0,0],[0,0,1],[0,1,0],[0,1,1],[0,2,0],[1,0,0],[1,0,1],[1,1,0],[1,1,1],[1,2,0],[2,0,1],[2,1,1]]",
     )
     assert_dense(
-        fb[1],
+        fb.boundary,
         "[[1,0,0,0],[-1,0,0,0],[-1,1,0,0],[0,-1,0,0],[0,-1,0,0],[0,0,1,0],[1,0,-1,0],[0,0,-1,1],[0,1,0,-1],[0,0,0,-1],[0,0,1,0],[0,0,0,1]]",
     )
     fb = cube_array_boundary(I("[[0,0,0,1],[2,0,0,1]]"), 2)
-    assert_dense(fb[1], "[[1,0],[-1,0],[-1,0],[1,0],[0,1],[0,-1],[0,-1],[0,1]]")
+    assert_dense(
+        fb.boundary, "[[1,0],[-1,0],[-1,0],[1,0],[0,1],[0,-1],[0,-1],[0,1]]"
+    )
 
 
 def test_boundary_3d() raises:
     var fb = cube_array_boundary(I("[[0,0,0,0,1,2]]"), 3)
     assert_int_array(
-        fb[0],
+        fb.faces,
         "[[0,0,0,0,1],[0,0,0,0,2],[0,0,0,1,2],[0,0,1,0,1],[0,1,0,0,2],[1,0,0,1,2]]",
     )
-    assert_dense(fb[1], "[[-1],[1],[-1],[1],[-1],[1]]")
+    assert_dense(fb.boundary, "[[-1],[1],[-1],[1],[-1],[1]]")
 
 
 def test_complex_exactness() raises:
@@ -85,8 +87,8 @@ def test_complex_exactness() raises:
     bitmap[Item(1, 1, 0)] = 0
     var rcc = RegularCubeComplex(RegularCubeMesh(bitmap))
     var b = rcc.chain_complex()
-    for k in range(len(b) - 1):
-        assert_equal((b[k] @ b[k + 1]).max_abs(), 0.0)
+    for k in range(1, b.complex_dimension()):
+        assert_equal((b.boundary(k) @ b.boundary(k + 1)).max_abs(), 0.0)
     assert_equal(rows_of(rcc[3].cube_array), 17)
 
 

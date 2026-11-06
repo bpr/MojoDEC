@@ -24,15 +24,19 @@ field is flattened exactly: `flat(X)[e] = X . (e_1 - e_0)`.
 from std.math import abs
 
 from mojodec.core.cochain import Cochain
+from mojodec.core.primality import Primality
+from mojodec.core.typed import PRIMAL, TypedCochain, TypedComplex
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import (
     SimplicialComplex,
     _is_negative_zero,
 )
 from mojodec.core.utils import (
+    IntArray,
     RealArray,
     cols_of,
     fget,
+    int_array,
     real_array,
     real_vector,
     row_list,
@@ -40,6 +44,31 @@ from mojodec.core.utils import (
 )
 from mojodec.routines.combinatorial import combinations, permutations
 from mojodec.routines.geometry import unsigned_volume
+
+
+def flat[
+    n: Int
+](tc: TypedComplex[n], X: RealArray) raises -> TypedCochain[n, 1, PRIMAL]:
+    """The DPP flat of a vector field, as a typed primal 1-cochain.
+
+    See the untyped overload.
+
+    Parameters:
+        n: The complex dimension, at least 1.
+
+    Args:
+        tc: The complex, with geometry.
+        X: `num_top_simplices x embedding_dimension` vectors.
+
+    Returns:
+        The primal 1-cochain `flat(X)`.
+
+    Raises:
+        If the complex was built without geometry, or `X` has the wrong
+            shape.
+    """
+    comptime assert n >= 1, "flat: the complex has no edges"
+    return TypedCochain[n, 1, PRIMAL](flat(tc.sc, X))
 
 
 def flat(sc: SimplicialComplex, X: RealArray) raises -> Cochain:
@@ -109,22 +138,74 @@ def flat(sc: SimplicialComplex, X: RealArray) raises -> Cochain:
             out.unsafe_set(e, weighted.unsafe_get(e) / dual)
         else:
             out.unsafe_set(e, plain.unsafe_get(e) / Float64(count[e]))
-    return Cochain(sc, 1, True, out^)
+    return Cochain(sc, 1, Primality.PRIMAL, out^)
 
 
-def dual_edge_pieces(sc: SimplicialComplex) raises -> RealArray:
+struct DualEdgePieces(Copyable, Movable):
+    """The signed sizes `|*e ^ t|` of each edge's dual cell inside each top
+    simplex, as `dual_edge_pieces` computes them."""
+
+    var values: RealArray
+    """`num_top_simplices x C(n+1, 2)`: entry `(t, j)` is the piece of the
+    `j`-th edge of top simplex `t` (vertex pairs of its sorted vertices, in
+    `combinations` order)."""
+    var edges: IntArray
+    """The same shape as `values`: entry `(t, j)` is that edge's index in
+    `sc[1]`."""
+
+    def __init__(out self, var values: RealArray, var edges: IntArray):
+        """Pieces from their values and edge indices.
+
+        Args:
+            values: The pieces.
+            edges: The edge of each piece.
+        """
+        self.values = values^
+        self.edges = edges^
+
+    def edge(self, t: Int, j: Int) -> Int:
+        """The index in `sc[1]` of the `j`-th edge of top simplex `t`.
+
+        Args:
+            t: A top simplex.
+            j: A local edge, `0 <= j < C(n+1, 2)`.
+
+        Returns:
+            The edge's index.
+        """
+        return Int(self.edges.unsafe_get(t * cols_of(self.edges) + j))
+
+    def piece(self, t: Int, j: Int) -> Float64:
+        """The piece of the `j`-th edge's dual cell inside top simplex `t`.
+
+        Args:
+            t: A top simplex.
+            j: A local edge, `0 <= j < C(n+1, 2)`.
+
+        Returns:
+            `|*e ^ t|`, signed as the dual volumes are.
+        """
+        return self.values.unsafe_get(t * cols_of(self.values) + j)
+
+
+def dual_edge_pieces(sc: SimplicialComplex) raises -> DualEdgePieces:
     """The signed sizes `|*e ^ t|` of each edge's dual cell inside each top simplex.
 
-    Returns a `num_top_simplices x C(n+1, 2)` array; column `j` belongs to
-    the `j`-th vertex pair of the top simplex's sorted vertices, in
-    `combinations` order. Summing an edge's pieces over its top simplices
-    gives its dual volume, `sc[1].dual_volume`.
+    Summing an edge's pieces over its top simplices gives its dual volume,
+    `sc[1].dual_volume`:
+
+    ```mojo
+    var P = dual_edge_pieces(sc)
+    for t in range(sc[n].num_simplices):
+        for j in range((n + 1) * n // 2):
+            total[P.edge(t, j)] += P.piece(t, j)
+    ```
 
     Args:
         sc: A complex of dimension `n >= 1`, with geometry.
 
     Returns:
-        The `num_top_simplices x C(n+1, 2)` array of pieces.
+        The pieces, with the edge each one belongs to.
 
     Raises:
         If `sc` has no edges or was built without geometry.
@@ -136,14 +217,19 @@ def dual_edge_pieces(sc: SimplicialComplex) raises -> RealArray:
         raise Error("dual_edge_pieces: the complex was built without geometry")
     ref top = sc[n]
     var pairs = (n + 1) * n // 2
-    var out = real_array(top.num_simplices, pairs)
+    var values = real_array(top.num_simplices, pairs)
+    var edges = int_array(top.num_simplices, pairs)
     for t in range(top.num_simplices):
         var verts = row_list(top.simplices, t)
         var j = 0
         for pair in combinations(verts, 2):
-            out.unsafe_set(t * pairs + j, _dual_piece(sc, verts, pair))
+            values.unsafe_set(t * pairs + j, _dual_piece(sc, verts, pair))
+            edges.unsafe_set(
+                t * pairs + j,
+                Scalar[DType.int](sc[1].simplex_to_index(Simplex(pair))),
+            )
             j += 1
-    return out^
+    return DualEdgePieces(values^, edges^)
 
 
 def _dual_piece(

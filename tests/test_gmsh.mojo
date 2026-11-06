@@ -43,7 +43,12 @@ def test_formats_agree() raises:
                 assert_equal(m.groups[g].name, ref_.groups[g].name)
                 assert_equal(m.groups[g].dim, ref_.groups[g].dim)
                 assert_equal(m.groups[g].tag, ref_.groups[g].tag)
-                assert_equal(m.groups[g].cells, ref_.groups[g].cells)
+                ref a = m.groups[g].cells
+                ref b = ref_.groups[g].cells
+                assert_equal(a.size, b.size)
+                assert_equal(cols_of(a), m.groups[g].dim + 1)
+                for i in range(a.size):
+                    assert_equal(a.unsafe_get(i), b.unsafe_get(i))
 
 
 def _all_vertices(
@@ -77,9 +82,9 @@ def test_square_groups() raises:
     assert_true(_all_vertices(sc, outlet, 0, 1.0))
     assert_equal(len(msh.subset(sc, "inlet", 0)), 5)
     # together they make up the whole boundary; the interface is inside
-    assert_true((inlet | outlet | walls) == sc.boundary_subset(1))
+    assert_true((inlet | outlet | walls) == sc.boundary_cells()[1])
     var interface = msh.subset(sc, "interface", 1)
-    assert_true((interface & sc.boundary_subset(1)).is_empty())
+    assert_true((interface & sc.boundary_cells()[1]).is_empty())
     assert_true(_all_vertices(sc, interface, 0, 0.5))
     # the two regions split the triangles, and meet at the interface
     var left = msh.subset(sc, "left", 2)
@@ -99,7 +104,7 @@ def test_square_groups() raises:
     var c = corner.indices()[0]
     assert_equal(fget(sc.vertices(), c, 0), 0.0)
     assert_equal(fget(sc.vertices(), c, 1), 0.0)
-    var g42 = msh.subset(sc, 1, 42, 1)
+    var g42 = msh.subset(sc, group_dim=1, tag=42, dim=1)
     assert_equal(len(g42), 2)
     assert_true((g42 - walls).is_empty())
     assert_true(_all_vertices(sc, g42, 1, 0.0))
@@ -114,7 +119,7 @@ def test_square_errors() raises:
     with assert_raises(contains="no cells of dimension >= 2"):
         _ = msh.subset(sc, "inlet", 2)
     with assert_raises():
-        _ = msh.subset(sc, 1, 43, 1)
+        _ = msh.subset(sc, group_dim=1, tag=43, dim=1)
     with assert_raises():
         _ = msh.group("nope")
     # tagging only boundary curves leaves out the triangles
@@ -135,7 +140,7 @@ def test_cube() raises:
     for pair in [("bottom", 0.0), ("top", 1.0)]:
         var faces = msh.subset(sc, pair[0], 2)
         assert_true(_all_vertices(sc, faces, 2, pair[1]))
-        assert_true((faces - sc.boundary_subset(2)).is_empty())
+        assert_true((faces - sc.boundary_cells()[2]).is_empty())
         var area: Float64 = 0
         for f in faces.indices():
             area += sc[2].primal_volume.unsafe_get(f)

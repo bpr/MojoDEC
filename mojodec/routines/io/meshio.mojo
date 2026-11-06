@@ -19,7 +19,7 @@ The array files sit next to the XML file and use `mojodec.routines.io.arrayio`.
 """
 
 from mojodec.core.mesh import SimplicialMesh
-from mojodec.routines.io.arrayio import read_array, write_array
+from mojodec.routines.io.arrayio import ArrayFormat, read_array, write_array
 
 
 def read_mesh(path: String) raises -> SimplicialMesh:
@@ -60,21 +60,20 @@ def read_mesh(path: String) raises -> SimplicialMesh:
 
 
 def write_mesh(
-    path: String, mesh: SimplicialMesh, format: String = "binary"
+    path: String, mesh: SimplicialMesh, format: ArrayFormat = .BINARY
 ) raises:
     """Write a simplicial mesh as an XML file plus one array file per field.
 
     The array files are named `<basename>.vertices` and `<basename>.elements`
-    and written in `format` (`basic`, `ascii`, or `binary`), next to the
-    XML file. `<basename>` is the file name up to its first `.`.
+    and written in `format`, next to the XML file. `<basename>` is the file name up to its first `.`.
 
     Args:
         path: The XML file to write; existing files are replaced.
         mesh: The mesh to write.
-        format: The array file format: `basic`, `ascii`, or `binary`.
+        format: The array file format: `BASIC`, `ASCII`, or `BINARY`.
 
     Raises:
-        If `format` is unknown, or a file cannot be written.
+        If a file cannot be written.
     """
     var dir = _dirname(path)
     var filename = _basename(path)

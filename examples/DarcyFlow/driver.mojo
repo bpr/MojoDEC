@@ -163,9 +163,9 @@ def main() raises:
     ax.triplot(V.T[0], V.T[1], triangles.to_numpy())
     # Whitney interpolate the flux and sample it at the barycenters, then
     # rotate 90 degrees opposite to the triangles' orientation
-    var bd = simplex_quivers(sc, all_fluxes)
-    var bases = bd[0].to_numpy()
-    var arrows = bd[1].to_numpy()
+    var q = simplex_quivers(sc, all_fluxes)
+    var bases = q.bases.to_numpy()
+    var arrows = q.vectors.to_numpy()
     ax.quiver(
         bases.T[0],
         bases.T[1],
@@ -185,8 +185,8 @@ def main() raises:
 
     var barycenter_velocity = real_array(N2, 2)
     for i in range(N2):
-        fset(barycenter_velocity, i, 0, s * fget(bd[1], i, 1))
-        fset(barycenter_velocity, i, 1, -s * fget(bd[1], i, 0))
+        fset(barycenter_velocity, i, 0, s * fget(q.vectors, i, 1))
+        fset(barycenter_velocity, i, 1, -s * fget(q.vectors, i, 0))
     write_vtu(
         "darcy.vtu",
         vertices,

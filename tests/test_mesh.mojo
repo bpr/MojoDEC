@@ -1,4 +1,4 @@
-from std.testing import TestSuite, assert_equal, assert_true
+from std.testing import TestSuite, assert_equal, assert_raises, assert_true
 
 import numojo as nm
 from numojo.prelude import *
@@ -49,6 +49,22 @@ def test_searchsorted() raises:
     assert_equal(Int(r.unsafe_get(0)), 2)
     assert_equal(Int(r.unsafe_get(1)), 1)
     assert_equal(Int(r.unsafe_get(2)), 5)
+    # labels far beyond the row count, and negative labels
+    r = simplex_array_searchsorted(
+        I("[[-3,5],[2,1000000000],[1000000000,1000000001]]"),
+        I("[[1000000000,1000000001],[-3,5]]"),
+    )
+    assert_equal(Int(r.unsafe_get(0)), 2)
+    assert_equal(Int(r.unsafe_get(1)), 0)
+    for ref missing in ["[[0,3]]", "[[2,2]]", "[[5,0]]", "[[-1,0]]"]:
+        with assert_raises(contains="not found"):
+            _ = simplex_array_searchsorted(
+                I("[[0,1],[0,2],[2,4],[3,4]]"), I(missing)
+            )
+    with assert_raises(contains="not found"):
+        _ = simplex_array_searchsorted(
+            nm.zeros[DType.int](Shape(0, 2)), I("[[0,1]]")
+        )
 
 
 def test_parity() raises:
@@ -80,15 +96,15 @@ def test_parity() raises:
 
 def test_boundary() raises:
     var fb = simplex_array_boundary(I("[[0,1,2]]"), I("[1]"))
-    assert_equal(rows_of(fb[0]), 3)
-    assert_equal(iget(fb[0], 1, 0), 0)
-    assert_equal(iget(fb[0], 1, 1), 2)
-    assert_equal(fb[1][0, 0], -1.0)
-    assert_equal(fb[1][1, 0], 1.0)
-    assert_equal(fb[1][2, 0], -1.0)
+    assert_equal(rows_of(fb.faces), 3)
+    assert_equal(iget(fb.faces, 1, 0), 0)
+    assert_equal(iget(fb.faces, 1, 1), 2)
+    assert_equal(fb.boundary[0, 0], -1.0)
+    assert_equal(fb.boundary[1, 0], 1.0)
+    assert_equal(fb.boundary[2, 0], -1.0)
     fb = simplex_array_boundary(I("[[2,9]]"), I("[0]"))
-    assert_equal(fb[1][0, 0], -1.0)
-    assert_equal(fb[1][1, 0], 1.0)
+    assert_equal(fb.boundary[0, 0], -1.0)
+    assert_equal(fb.boundary[1, 0], 1.0)
 
 
 def test_simplex() raises:

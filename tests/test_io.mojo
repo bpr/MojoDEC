@@ -14,6 +14,8 @@ from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.utils import iget, row_list, rows_of, cols_of
 from mojodec.routines.io.arrayio import (
+    ArrayFormat,
+    SparseFormat,
     read_array,
     read_sparse,
     write_array,
@@ -75,8 +77,10 @@ def test_exactness_faces_boundary() raises:
     for ref path in meshes():
         var sc = SimplicialComplex(read_mesh(path), compute_geometry=False)
         var cmplx = sc.chain_complex()
-        for k in range(len(cmplx) - 1):
-            assert_equal((cmplx[k] @ cmplx[k + 1]).max_abs(), 0.0)
+        for k in range(1, cmplx.complex_dimension()):
+            assert_equal(
+                (cmplx.boundary(k) @ cmplx.boundary(k + 1)).max_abs(), 0.0
+            )
         assert_equal(sc[0].boundary.nrows, 1)
         assert_equal(sc[0].boundary.nnz(), 0)
         for k in range(len(sc) - 1):
@@ -127,14 +131,14 @@ def test_dense_roundtrip() raises:
         [2, 2, 2],
         [4, 3, 2],
     ]
-    var formats: List[String] = ["binary", "ascii", "basic"]
+    var formats: List[ArrayFormat] = [.BINARY, .ASCII, .BASIC]
     for ref sh in shapes:
         var A = nm.random.rand[f64](NDArrayShape(sh))
         var Ai = nm.zeros[DType.int32](NDArrayShape(sh))
         for j in range(Ai.size):
             Ai.unsafe_set(j, Int32(j * 7 - 3))
         for ref fmt in formats:
-            if fmt == "basic" and len(sh) > 2:
+            if fmt == ArrayFormat.BASIC and len(sh) > 2:
                 continue
             write_array(TMP, A, fmt)
             var B = read_array(TMP)
@@ -148,10 +152,65 @@ def test_dense_roundtrip() raises:
                 assert_equal(Ai.unsafe_get(j), Bi.unsafe_get(j))
 
 
+def test_int64_precision() raises:
+    # integers above 2^53 do not survive a trip through Float64
+    var A = nm.zeros[DType.int64](Shape(3))
+    A.unsafe_set(0, Int64(1) << 62)
+    A.unsafe_set(1, (Int64(1) << 53) + 1)
+    A.unsafe_set(2, -((Int64(1) << 60) + 7))
+    var formats: List[ArrayFormat] = [.BINARY, .ASCII, .BASIC]
+    for fmt in formats:
+        write_array(TMP, A, fmt)
+        var B = read_array[DType.int64](TMP)
+        var C = read_array[DType.int](TMP)
+        for j in range(3):
+            assert_equal(B.unsafe_get(j), A.unsafe_get(j))
+            assert_equal(Int64(C.unsafe_get(j)), A.unsafe_get(j))
+
+
+def test_binary_conversions() raises:
+    # stored float32 and int32 read as float64 and int; float64 as int32
+    var F = nm.zeros[DType.float32](Shape(2, 2))
+    var I = nm.zeros[DType.int32](Shape(4))
+    for j in range(4):
+        F.unsafe_set(j, Float32(j) + 0.5)
+        I.unsafe_set(j, Int32(-j * 1000))
+    write_array(TMP, F)
+    var Fd = read_array(TMP)
+    assert_equal(Fd.unsafe_get(3), 3.5)
+    write_array(TMP, I)
+    var Ii = read_array[DType.int](TMP)
+    assert_equal(Int(Ii.unsafe_get(3)), -3000)
+    var Ifl = read_array(TMP)
+    assert_equal(Ifl.unsafe_get(2), -2000.0)
+
+
+def test_truncated_files() raises:
+    var A = nm.zeros[DType.float64](Shape(4, 3))
+    var formats: List[ArrayFormat] = [.BINARY, .ASCII, .BASIC]
+    for fmt in formats:
+        write_array(TMP, A, fmt)
+        var bytes: List[Byte]
+        with open(TMP, "r") as f:
+            bytes = f.read_bytes()
+        with open(TMP, "w") as f:
+            f.write_bytes(Span(bytes)[: len(bytes) - 8])
+        with assert_raises():
+            _ = read_array(TMP)
+    # a header claiming far more data than the file holds
+    with open(TMP, "w") as f:
+        f.write(
+            "5\ntype=ndarray\nformat=binary\ndtype=float64\nrank=2\n",
+            "dims=100000000,100000000\n",
+        )
+    with assert_raises(contains="too little data"):
+        _ = read_array(TMP)
+
+
 def test_sparse_roundtrip() raises:
     var A = CSRMatrix.from_coo(3, 4, [0, 2, 2], [1, 0, 3], [1.5, -2.0, 3.25])
-    var formats: List[String] = ["binary", "ascii"]
-    for ref fmt in formats:
+    var formats: List[SparseFormat] = [.BINARY, .ASCII]
+    for fmt in formats:
         write_sparse(TMP, A, fmt)
         var B = read_sparse(TMP)
         assert_equal(B.nrows, 3)
@@ -161,7 +220,7 @@ def test_sparse_roundtrip() raises:
 
 def test_mesh_roundtrip() raises:
     var mesh = read_mesh("tests/meshes/sphere3.xml")
-    write_mesh("/tmp/mojodec_mesh_test.xml", mesh, "basic")
+    write_mesh("/tmp/mojodec_mesh_test.xml", mesh, .BASIC)
     var back = read_mesh("/tmp/mojodec_mesh_test.xml")
     for j in range(mesh.elements.size):
         assert_equal(mesh.elements.unsafe_get(j), back.elements.unsafe_get(j))

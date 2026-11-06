@@ -20,9 +20,9 @@ from mojodec.vis.draw import pyplot, show_requested, triplot, simplex_quivers
 
 var plt = pyplot(interactive=show_requested())
 _ = triplot(sc.vertices(), sc.simplices())
-var bd = simplex_quivers(sc, form)
-var b = bd[0].to_numpy()
-var v = bd[1].to_numpy()
+var q = simplex_quivers(sc, form)
+var b = q.bases.to_numpy()
+var v = q.vectors.to_numpy()
 plt.gca().quiver(b.T[0], b.T[1], v.T[0], v.T[1])
 plt.savefig("form.png")
 if show_requested():
@@ -206,9 +206,26 @@ def lineplot2(
     return _draw_lines(lines, labels, PythonObject(linewidths))
 
 
-def simplex_quivers(
-    sc: SimplicialComplex, form: RealArray
-) raises -> Tuple[RealArray, RealArray]:
+struct Quivers(Copyable, Movable):
+    """Arrows for `quiver`: base points and the vectors drawn from them."""
+
+    var bases: RealArray
+    """The base points, one row each."""
+    var vectors: RealArray
+    """The vectors, one row each, matching `bases`."""
+
+    def __init__(out self, var bases: RealArray, var vectors: RealArray):
+        """Arrows from their bases and vectors.
+
+        Args:
+            bases: The base points.
+            vectors: The vectors.
+        """
+        self.bases = bases^
+        self.vectors = vectors^
+
+
+def simplex_quivers(sc: SimplicialComplex, form: RealArray) raises -> Quivers:
     """Sample the Whitney interpolant of a 1-cochain at top-simplex barycenters.
 
     Args:
@@ -216,8 +233,8 @@ def simplex_quivers(
         form: The 1-cochain, one value per edge of `sc`.
 
     Returns:
-        `(bases, dirs)`, both `num_top_simplices x embedding_dimension`:
-        the barycenters and the interpolated vectors there.
+        The barycenters and the interpolated vectors there, both
+        `num_top_simplices x embedding_dimension`.
 
     Raises:
         If `form` does not have one value per edge.
@@ -250,12 +267,10 @@ def simplex_quivers(
                     fset(dirs, n, e, fget(dirs, n, e) + v * g)
     for k in range(dirs.size):
         dirs.unsafe_set(k, dirs.unsafe_get(k) / Float64(N + 1))
-    return (bases^, dirs^)
+    return Quivers(bases^, dirs^)
 
 
-def cube_quivers(
-    cmplx: RegularCubeComplex, vals: RealArray
-) raises -> Tuple[RealArray, RealArray]:
+def cube_quivers(cmplx: RegularCubeComplex, vals: RealArray) raises -> Quivers:
     """Sample a 1-cochain on a regular cube complex at the 2-cube centers.
 
     Each 2-cube's vector has, along axis `i`, the mean of the values on its
@@ -266,8 +281,8 @@ def cube_quivers(
         vals: The 1-cochain, one value per edge (1-cube).
 
     Returns:
-        `(bases, dirs)`, both `num_2_cubes x complex_dimension`: the
-        2-cube centers and the vectors there.
+        The 2-cube centers and the vectors there, both
+        `num_2_cubes x complex_dimension`.
 
     Raises:
         If the complex has dimension below 2, or `vals` does not have one
@@ -289,13 +304,13 @@ def cube_quivers(
     var dirs = real_array(num_faces, N)
     # boundary of the 2-cubes: rows are edges, columns are faces
     var coo = cmplx[2].boundary.to_coo()
-    for k in range(len(coo[0])):
-        var edge = coo[0][k]
-        var face = coo[1][k]
+    for k in range(len(coo.rows)):
+        var edge = coo.rows[k]
+        var face = coo.cols[k]
         var axis = iget(edges, edge, axis_col)
-        var w = 0.5 * abs(coo[2][k]) * vals.unsafe_get(edge)
+        var w = 0.5 * abs(coo.values[k]) * vals.unsafe_get(edge)
         fset(dirs, face, axis, fget(dirs, face, axis) + w)
-    return (bases^, dirs^)
+    return Quivers(bases^, dirs^)
 
 
 def _check_planar(points: RealArray, caller: String) raises:

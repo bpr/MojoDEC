@@ -10,6 +10,7 @@ answering nearest-neighbour and fixed-radius queries. Each point carries an
 integer value, by default its row index.
 """
 
+from std.math import sqrt
 from mojodec.core.utils import RealArray, rows_of, cols_of
 
 
@@ -190,7 +191,7 @@ struct KDTree(Copyable, Movable, Writable):
         for j in range(self.k):
             var t = point[j] - self._points[p][j]
             pt_dist += t * t
-        pt_dist = pt_dist**0.5
+        pt_dist = sqrt(pt_dist)
         var sep_dist = point[axis] - self._points[p][axis]
 
         if pt_dist < max_dist:

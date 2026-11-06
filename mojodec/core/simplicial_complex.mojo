@@ -19,13 +19,22 @@ The complex's data lives behind a shared `ArcPointer`: copying a
 it, refers to the same data, mirroring Python's reference semantics.
 """
 
+from std.math import sqrt
 from std.memory import ArcPointer
 
 import numojo as nm
 from numojo.prelude import *
 
+from mojodec.core.cell_set import (
+    CellComplex,
+    CellSet,
+    cells_in_rows,
+    cells_once_in_rows,
+)
+from mojodec.core.chain_complex import ChainComplex
 from mojodec.core.cochain import Cochain, CochainBasis
 from mojodec.core.diagonal import DiagonalOperator
+from mojodec.core.primality import Primality
 from mojodec.core.mesh import SimplicialMesh
 from mojodec.core.simplex import Simplex
 from mojodec.core.sparse import CSRMatrix
@@ -227,7 +236,9 @@ struct ComplexData(Movable):
         self.has_geometry = False
 
 
-struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
+struct SimplicialComplex(
+    CellComplex, ImplicitlyCopyable, Movable, Sized, Writable
+):
     """A simplicial complex with its chain and cochain operators.
 
     ```mojo
@@ -352,223 +363,243 @@ struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
         """
         return cols_of(self._data[].mesh.vertices)
 
-    def star(self, cells: List[List[Int]]) raises -> List[List[Int]]:
+    def star(self, cells: CellSet) raises -> CellSet:
         """Every cell that has a cell of `cells` as a face, `cells` included.
 
         See `mojodec.routines.topology` for the definitions.
 
         Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-simplices,
-                and may stop short of the top dimension.
+            cells: Simplices of this complex.
 
         Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
+            The star.
 
         Raises:
-            If `cells` has more dimensions than the complex, or an index is
-            out of range.
+            If `cells` does not belong to this complex.
         """
-        return star_of(self.chain_complex(), cells)
+        return star_of(self, cells)
 
-    def closure(self, cells: List[List[Int]]) raises -> List[List[Int]]:
+    def closure(self, cells: CellSet) raises -> CellSet:
         """Every face of every cell of `cells`: the subcomplex they generate.
 
         Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-simplices,
-                and may stop short of the top dimension.
+            cells: Simplices of this complex.
 
         Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
+            The closure.
 
         Raises:
-            If `cells` has more dimensions than the complex, or an index is
-            out of range.
+            If `cells` does not belong to this complex.
         """
-        return closure_of(self.chain_complex(), cells)
+        return closure_of(self, cells)
 
-    def link(self, cells: List[List[Int]]) raises -> List[List[Int]]:
+    def link(self, cells: CellSet) raises -> CellSet:
         """The closure of the star minus the star of the closure of `cells`.
 
         Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-simplices,
-                and may stop short of the top dimension.
+            cells: Simplices of this complex.
 
         Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
+            The link.
 
         Raises:
-            If `cells` has more dimensions than the complex, or an index is
-            out of range.
+            If `cells` does not belong to this complex.
         """
-        return link_of(self.chain_complex(), cells)
+        return link_of(self, cells)
 
-    def boundary(self, cells: List[List[Int]]) raises -> List[List[Int]]:
+    def boundary(self, cells: CellSet) raises -> CellSet:
         """The closure of the faces bounding exactly one top cell of `cells`.
 
         Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-simplices,
-                and may stop short of the top dimension.
+            cells: Simplices of this complex.
 
         Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
+            The boundary, a closed set.
 
         Raises:
-            If `cells` has more dimensions than the complex, an index is out
-            of range, or `cells` is not pure (a lower cell is not a face of
-            a top cell).
+            If `cells` does not belong to this complex or is not pure (a
+            lower cell is not a face of a top cell).
         """
-        return boundary_of(self.chain_complex(), cells)
+        return boundary_of(self, cells)
 
-    def interior(self, cells: List[List[Int]]) raises -> List[List[Int]]:
+    def interior(self, cells: CellSet) raises -> CellSet:
         """The closure of `cells` minus its boundary.
 
         Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-simplices,
-                and may stop short of the top dimension.
+            cells: Simplices of this complex.
 
         Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
+            The interior.
 
         Raises:
-            If `cells` has more dimensions than the complex, an index is out
-            of range, or `cells` is not pure (a lower cell is not a face of
-            a top cell).
+            If `cells` does not belong to this complex or is not pure.
         """
-        return interior_of(self.chain_complex(), cells)
+        return interior_of(self, cells)
 
-    def boundary_cells(self) raises -> List[List[Int]]:
-        """The boundary of the whole complex: the (n-1)-faces bounding
-        exactly one n-simplex, and their faces.
+    def boundary_cells(self) raises -> CellSet:
+        """The boundary of the whole complex: the faces bounding exactly one
+        top cell, and their faces.
 
-        `boundary_subset(k)` gives one dimension of it as a `Subset`.
+        `boundary_cells()[k]` is the `Subset` of boundary k-cells.
 
         Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
+            The boundary cells.
 
         Raises:
             If the complex's operators are inconsistent.
         """
-        return boundary_of(self.chain_complex())
+        return boundary_of(self)
 
-    def interior_cells(self) raises -> List[List[Int]]:
+    def interior_cells(self) raises -> CellSet:
         """The cells not on the boundary of the whole complex.
 
         Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
+            The interior cells.
 
         Raises:
             If the complex's operators are inconsistent.
         """
-        return interior_of(self.chain_complex())
+        return interior_of(self)
 
-    def star(self, s: Simplex) raises -> List[List[Int]]:
+    def star(self, s: Simplex) raises -> CellSet:
         """The star of one simplex: every simplex that has it as a face.
 
         Args:
             s: A simplex of the complex, in either orientation.
 
         Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
+            The cells, by dimension.
 
         Raises:
             If `s` is not in the complex.
         """
-        return star_of(self.chain_complex(), self._cells(s))
+        return star_of(self, CellSet.from_simplex(self, s))
 
-    def closure(self, s: Simplex) raises -> List[List[Int]]:
+    def closure(self, s: Simplex) raises -> CellSet:
         """The faces of one simplex, itself included.
 
         Args:
             s: A simplex of the complex, in either orientation.
 
         Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
+            The cells, by dimension.
 
         Raises:
             If `s` is not in the complex.
         """
-        return closure_of(self.chain_complex(), self._cells(s))
+        return closure_of(self, CellSet.from_simplex(self, s))
 
-    def link(self, s: Simplex) raises -> List[List[Int]]:
+    def link(self, s: Simplex) raises -> CellSet:
         """The link of one simplex: the faces of its star that do not meet it.
 
         ```mojo
         var ring = sc.link(Simplex([v]))   # the ring around vertex v
-        print(sc.simplices_in(ring))
+        print(ring.simplices(sc))
         ```
 
         Args:
             s: A simplex of the complex, in either orientation.
 
         Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
+            The cells, by dimension.
 
         Raises:
             If `s` is not in the complex.
         """
-        return link_of(self.chain_complex(), self._cells(s))
+        return link_of(self, CellSet.from_simplex(self, s))
 
-    def boundary(self, s: Simplex) raises -> List[List[Int]]:
+    def boundary(self, s: Simplex) raises -> CellSet:
         """The proper faces of one simplex.
 
         Args:
             s: A simplex of the complex, in either orientation.
 
         Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
+            The cells, by dimension.
 
         Raises:
             If `s` is not in the complex.
         """
-        return boundary_of(self.chain_complex(), self._cells(s))
+        return boundary_of(self, CellSet.from_simplex(self, s))
 
-    def interior(self, s: Simplex) raises -> List[List[Int]]:
+    def interior(self, s: Simplex) raises -> CellSet:
         """One simplex alone: its relative interior.
 
         Args:
             s: A simplex of the complex, in either orientation.
 
         Returns:
-            Indices per dimension: entry k lists k-simplices, sorted.
+            The cells, by dimension.
 
         Raises:
             If `s` is not in the complex.
         """
-        return interior_of(self.chain_complex(), self._cells(s))
+        return interior_of(self, CellSet.from_simplex(self, s))
 
-    def simplices_in(self, cells: List[List[Int]]) raises -> List[Simplex]:
-        """The simplices at the given indices, lowest dimension first.
+    def num_cells(self, k: Int) raises -> Int:
+        """The number of k-cells.
 
         Args:
-            cells: Indices of cells by dimension, as the neighborhood
-                methods return them.
+            k: A dimension in `0..n`.
 
         Returns:
-            The simplices, sorted and with parity 0.
+            The cell count.
 
         Raises:
-            If `cells` has more dimensions than the complex, or an index is
-            out of range.
+            If `k` is outside `0..n`.
         """
-        var out = List[Simplex]()
-        for k in range(len(cells)):
-            if k >= len(self):
-                raise Error("simplices_in: more dimensions than the complex")
-            ref level = self._data[].levels[k]
-            for i in cells[k]:
-                if i < 0 or i >= level.num_simplices:
-                    raise Error(String("simplices_in: no ", k, "-simplex ", i))
-                out.append(level.index_to_simplex(i))
-        return out^
+        return self[k].num_simplices
 
-    def _cells(self, s: Simplex) raises -> List[List[Int]]:
-        """`s` as a cell set: its index in its own dimension."""
-        var k = len(s) - 1
-        if k < 0 or k >= len(self):
-            raise Error("simplex has the wrong dimension for this complex")
-        var cells = List[List[Int]](length=k + 1, fill=List[Int]())
-        cells[k].append(self._data[].levels[k].simplex_to_index(s))
-        return cells^
+    def faces_of(self, cells: Subset) raises -> Subset:
+        """The (k-1)-cells that are faces of some k-cell of `cells`.
+
+        Args:
+            cells: Primal k-cells, k > 0.
+
+        Returns:
+            Primal (k-1)-cells.
+
+        Raises:
+            If k = 0 or `cells` does not fit the complex.
+        """
+        var k = cells.dim
+        if k < 1:
+            raise Error("faces_of: 0-cells have no faces")
+        return cells_in_rows(self[k - 1].d, cells, k - 1)
+
+    def cofaces_of(self, cells: Subset) raises -> Subset:
+        """The (k+1)-cells that have some k-cell of `cells` as a face.
+
+        Args:
+            cells: Primal k-cells, k < n.
+
+        Returns:
+            Primal (k+1)-cells.
+
+        Raises:
+            If k = n or `cells` does not fit the complex.
+        """
+        var k = cells.dim
+        if k >= self.complex_dimension():
+            raise Error("cofaces_of: n-cells have no cofaces")
+        return cells_in_rows(self[k + 1].boundary, cells, k + 1)
+
+    def boundary_faces_of(self, cells: Subset) raises -> Subset:
+        """The (k-1)-cells that are faces of exactly one k-cell of `cells`.
+
+        Args:
+            cells: Primal k-cells, k > 0.
+
+        Returns:
+            Primal (k-1)-cells.
+
+        Raises:
+            If k = 0 or `cells` does not fit the complex.
+        """
+        var k = cells.dim
+        if k < 1:
+            raise Error("boundary_faces_of: 0-cells have no faces")
+        return cells_once_in_rows(self[k - 1].d, cells, k - 1)
 
     def euler_characteristic(self) -> Int:
         """The alternating sum of the numbers of k-simplices.
@@ -603,27 +634,25 @@ struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
         """
         return self._data.ptr() == other._data.ptr()
 
-    def chain_complex(self) -> List[CSRMatrix]:
-        """The boundary operators of every level.
+    def chain_complex(self) raises -> ChainComplex:
+        """The boundary and coboundary operators of every level, copied.
+
+        `self[k].boundary` and `self[k].d` give them without copying.
 
         Returns:
-            Copies of `self[k].boundary` for k = 0 to n.
-        """
-        var out = List[CSRMatrix]()
-        for ref lvl in self._data[].levels:
-            out.append(lvl.boundary.copy())
-        return out^
+            A `ChainComplex` with `boundary(k)` = `self[k].boundary` and
+            `coboundary(k)` = `self[k].d`.
 
-    def cochain_complex(self) -> List[CSRMatrix]:
-        """The exterior derivatives of every level.
-
-        Returns:
-            Copies of `self[k].d` for k = 0 to n.
+        Raises:
+            Never in practice; the levels' operators chain.
         """
-        var out = List[CSRMatrix]()
-        for ref lvl in self._data[].levels:
-            out.append(lvl.d.copy())
-        return out^
+        var n = self.complex_dimension()
+        var bs = List[CSRMatrix](capacity=n)
+        var ds = List[CSRMatrix](capacity=n)
+        for k in range(n):
+            bs.append(self[k + 1].boundary.copy())
+            ds.append(self[k].d.copy())
+        return ChainComplex(self[0].num_simplices, bs^, ds^)
 
     def complex(self) -> List[IntArray]:
         """The simplex arrays of every level.
@@ -637,14 +666,14 @@ struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
         return out^
 
     def get_cochain(
-        self, dimension: Int, is_primal: Bool = True
+        self, dimension: Int, primality: Primality = .PRIMAL
     ) raises -> Cochain:
         """A zero cochain of the given dimension.
 
         Args:
             dimension: The degree k.
-            is_primal: A primal k-cochain (values on k-simplices), or a dual
-                one (values on dual k-cells, the (n-k)-simplices).
+            primality: `PRIMAL` for a k-cochain on k-simplices, `DUAL` for
+                one on dual k-cells (the duals of the (n-k)-simplices).
 
         Returns:
             The cochain, with one zero per cell.
@@ -655,13 +684,13 @@ struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
         var N = self.complex_dimension()
         if dimension < 0 or dimension > N:
             raise Error(String("invalid dimension (", dimension, ")"))
-        var level = dimension if is_primal else N - dimension
+        var level = primality.level(N, dimension)
         return Cochain(
-            self, dimension, is_primal, real_vector(self[level].num_simplices)
+            self, dimension, primality, real_vector(self[level].num_simplices)
         )
 
     def get_cochain_basis(
-        self, dimension: Int, is_primal: Bool = True
+        self, dimension: Int, primality: Primality = .PRIMAL
     ) raises -> CochainBasis:
         """The basis of all cochains of a dimension: values form the identity.
 
@@ -669,7 +698,7 @@ struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
 
         Args:
             dimension: The degree k.
-            is_primal: Primal or dual k-cochains.
+            primality: Primal or dual k-cochains.
 
         Returns:
             The basis, whose values are a sparse identity matrix.
@@ -680,11 +709,11 @@ struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
         var N = self.complex_dimension()
         if dimension < 0 or dimension > N:
             raise Error(String("invalid dimension (", dimension, ")"))
-        var level = dimension if is_primal else N - dimension
+        var level = primality.level(N, dimension)
         return CochainBasis(
             self,
             dimension,
-            is_primal,
+            primality,
             CSRMatrix.identity(self[level].num_simplices),
         )
 
@@ -693,7 +722,8 @@ struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
 
         As in PyDEC, the faces are returned in their canonical (sorted, even
         parity) form, in the order of `self[n-1].simplices`. `boundary_cells`
-        gives the boundary subcomplex, faces of faces included, as indices.
+        gives the boundary subcomplex, faces of faces included, as a
+        `CellSet`.
 
         Returns:
             The boundary faces.
@@ -713,38 +743,6 @@ struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
         for i in range(faces.num_simplices):
             if cob.indptr[i + 1] - cob.indptr[i] == 1:
                 out.append(faces.index_to_simplex(i))
-        return out^
-
-    def boundary_subset(self, dim: Int) raises -> Subset:
-        """The primal `dim`-simplices on the boundary of the complex: the
-        (n-1)-faces bounding exactly one n-simplex, and their faces. Empty
-        for `dim = n`.
-
-        ```mojo
-        var fixed = sc.boundary_subset(0)          # Dirichlet vertices
-        var L = sc[0].d.T() @ sc[1].star @ sc[0].d
-        var A = L.exclude_subset(fixed)            # boundary rows emptied
-        ```
-
-        Args:
-            dim: The dimension of the simplices, `0..n`.
-
-        Returns:
-            A primal `Subset` of `self[dim]`.
-
-        Raises:
-            If `dim` is out of range.
-        """
-        var n = self.complex_dimension()
-        if dim < 0 or dim > n:
-            raise Error(
-                String("boundary_subset: invalid dimension (", dim, ")")
-            )
-        if n == 0 or dim == n:
-            return Subset.empty(self, dim)
-        var out = Subset.full(self, n).manifold_boundary(self)
-        for _ in range(n - 1 - dim):
-            out = out.boundary(self)
         return out^
 
     def write_to(self, mut writer: Some[Writer]):
@@ -808,28 +806,30 @@ struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
         var verts = List[Int](length=w, fill=0)
         for i in range(data.num_simplices):
             for r in range(w):
-                verts[r] = Int(data.simplices.unsafe_get(i * w + r))
+                verts.unsafe_set(r, Int(data.simplices.unsafe_get(i * w + r)))
             for r in range(w):
                 for c in range(w):
                     var s: Float64 = 0
                     for k in range(E):
-                        s += V.unsafe_get(verts[r] * E + k) * V.unsafe_get(
-                            verts[c] * E + k
-                        )
-                    A[r * m + c] = 2 * s
+                        s += V.unsafe_get(
+                            verts.unsafe_get(r) * E + k
+                        ) * V.unsafe_get(verts.unsafe_get(c) * E + k)
+                    A.unsafe_set(r * m + c, 2 * s)
                     if r == c:
-                        b[r] = s
-                A[r * m + w] = 1.0
-                A[w * m + r] = 1.0
-            A[w * m + w] = 0.0
-            b[w] = 1.0
+                        b.unsafe_set(r, s)
+                A.unsafe_set(r * m + w, 1.0)
+                A.unsafe_set(w * m + r, 1.0)
+            A.unsafe_set(w * m + w, 0.0)
+            b.unsafe_set(w, 1.0)
             _solve_in_place(A, b, m)
             for r in range(w):
-                bary.unsafe_set(i * w + r, b[r])
+                bary.unsafe_set(i * w + r, b.unsafe_get(r))
             for k in range(E):
                 var s: Float64 = 0
                 for r in range(w):
-                    s += b[r] * V.unsafe_get(verts[r] * E + k)
+                    s += b.unsafe_get(r) * V.unsafe_get(
+                        verts.unsafe_get(r) * E + k
+                    )
                 out.unsafe_set(i * E + k, s)
         data.circumcenter = out^
         data.bary_circumcenter = bary^
@@ -936,10 +936,10 @@ struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
         parities.append(parity.copy())
         while cols_of(s) > 1:
             var fb = simplex_array_boundary(s, parity)
-            s = fb[0].copy()
+            s = fb.faces.copy()
             parity = int_vector(rows_of(s))
             simplices.append(s.copy())
-            chain.append(fb[1].copy())
+            chain.append(fb.boundary.copy())
             parities.append(parity.copy())
         chain.append(CSRMatrix(1, rows_of(s)))
 
@@ -987,8 +987,8 @@ struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
         ref C = self[n].circumcenter
         # row i of d_{dim-1} lists the faces of the dim-simplex i
         ref d = faces.d
-        for p in range(d.indptr[i], d.indptr[i + 1]):
-            var f = d.indices[p]
+        for p in range(d.indptr.unsafe_get(i), d.indptr.unsafe_get(i + 1)):
+            var f = d.indices.unsafe_get(p)
             # sign from the parent's barycentric coordinate at the vertex
             # opposite the face
             var ov = 0
@@ -1008,22 +1008,28 @@ struct SimplicialComplex(ImplicitlyCopyable, Movable, Sized, Writable):
             )
             # new edge from the root circumcenter, orthogonalized against q
             for k in range(E):
-                q[m * E + k] = faces.circumcenter.unsafe_get(
-                    f * E + k
-                ) - C.unsafe_get(root * E + k)
+                q.unsafe_set(
+                    m * E + k,
+                    faces.circumcenter.unsafe_get(f * E + k)
+                    - C.unsafe_get(root * E + k),
+                )
             for j in range(m):
                 var proj: Float64 = 0
                 for k in range(E):
-                    proj += q[j * E + k] * q[m * E + k]
+                    proj += q.unsafe_get(j * E + k) * q.unsafe_get(m * E + k)
                 for k in range(E):
-                    q[m * E + k] -= proj * q[j * E + k]
+                    q.unsafe_set(
+                        m * E + k,
+                        q.unsafe_get(m * E + k)
+                        - (proj * q.unsafe_get(j * E + k)),
+                    )
             var h2: Float64 = 0
             for k in range(E):
-                h2 += q[m * E + k] * q[m * E + k]
-            var h = h2**0.5
+                h2 += q.unsafe_get(m * E + k) * q.unsafe_get(m * E + k)
+            var h = sqrt(h2)
             if h > 0:
                 for k in range(E):
-                    q[m * E + k] /= h
+                    q.unsafe_set(m * E + k, q.unsafe_get(m * E + k) / (h))
             var new_vol = vol * h
             faces.dual_volume.unsafe_set(
                 f,
@@ -1046,9 +1052,9 @@ def _solve_in_place(mut A: List[Float64], mut b: List[Float64], n: Int) raises:
     """
     for k in range(n):
         var p = k
-        var best = abs(A[k * n + k])
+        var best = abs(A.unsafe_get(k * n + k))
         for r in range(k + 1, n):
-            var v = abs(A[r * n + k])
+            var v = abs(A.unsafe_get(r * n + k))
             if v > best:
                 best = v
                 p = r
@@ -1056,24 +1062,27 @@ def _solve_in_place(mut A: List[Float64], mut b: List[Float64], n: Int) raises:
             raise Error("circumcenter: degenerate simplex (singular system)")
         if p != k:
             for c in range(n):
-                var t = A[k * n + c]
-                A[k * n + c] = A[p * n + c]
-                A[p * n + c] = t
-            var t = b[k]
-            b[k] = b[p]
-            b[p] = t
-        var pivot = A[k * n + k]
+                var t = A.unsafe_get(k * n + c)
+                A.unsafe_set(k * n + c, A.unsafe_get(p * n + c))
+                A.unsafe_set(p * n + c, t)
+            var t = b.unsafe_get(k)
+            b.unsafe_set(k, b.unsafe_get(p))
+            b.unsafe_set(p, t)
+        var pivot = A.unsafe_get(k * n + k)
         for r in range(k + 1, n):
-            var f = A[r * n + k] / pivot
+            var f = A.unsafe_get(r * n + k) / pivot
             if f != 0:
                 for c in range(k + 1, n):
-                    A[r * n + c] -= f * A[k * n + c]
-                b[r] -= f * b[k]
+                    A.unsafe_set(
+                        r * n + c,
+                        A.unsafe_get(r * n + c) - (f * A.unsafe_get(k * n + c)),
+                    )
+                b.unsafe_set(r, b.unsafe_get(r) - (f * b.unsafe_get(k)))
     for k in range(n - 1, -1, -1):
-        var s = b[k]
+        var s = b.unsafe_get(k)
         for c in range(k + 1, n):
-            s -= A[k * n + c] * b[c]
-        b[k] = s / A[k * n + k]
+            s -= A.unsafe_get(k * n + c) * b.unsafe_get(c)
+        b.unsafe_set(k, s / A.unsafe_get(k * n + k))
 
 
 def _det_in_place(mut A: List[Float64], n: Int) -> Float64:
@@ -1082,15 +1091,17 @@ def _det_in_place(mut A: List[Float64], n: Int) -> Float64:
     The same arithmetic as `dense.det` (0 if singular), without allocating.
     """
     if n == 1:
-        return A[0]
+        return A.unsafe_get(0)
     if n == 2:
-        return A[0] * A[3] - A[1] * A[2]
+        return A.unsafe_get(0) * A.unsafe_get(3) - A.unsafe_get(
+            1
+        ) * A.unsafe_get(2)
     var sign: Float64 = 1
     for k in range(n):
         var p = k
-        var best = abs(A[k * n + k])
+        var best = abs(A.unsafe_get(k * n + k))
         for r in range(k + 1, n):
-            var v = abs(A[r * n + k])
+            var v = abs(A.unsafe_get(r * n + k))
             if v > best:
                 best = v
                 p = r
@@ -1098,19 +1109,22 @@ def _det_in_place(mut A: List[Float64], n: Int) -> Float64:
             return 0.0
         if p != k:
             for c in range(n):
-                var t = A[k * n + c]
-                A[k * n + c] = A[p * n + c]
-                A[p * n + c] = t
+                var t = A.unsafe_get(k * n + c)
+                A.unsafe_set(k * n + c, A.unsafe_get(p * n + c))
+                A.unsafe_set(p * n + c, t)
             sign = -sign
-        var pivot = A[k * n + k]
+        var pivot = A.unsafe_get(k * n + k)
         for r in range(k + 1, n):
-            var f = A[r * n + k] / pivot
+            var f = A.unsafe_get(r * n + k) / pivot
             if f != 0:
                 for c in range(k + 1, n):
-                    A[r * n + c] -= f * A[k * n + c]
+                    A.unsafe_set(
+                        r * n + c,
+                        A.unsafe_get(r * n + c) - (f * A.unsafe_get(k * n + c)),
+                    )
     var d = sign
     for k in range(n):
-        d *= A[k * n + k]
+        d *= A.unsafe_get(k * n + k)
     return d
 
 
@@ -1148,4 +1162,4 @@ def _simplex_volumes(
                     for k in range(E):
                         g += edges[r * E + k] * edges[c * E + k]
                     M[r * dim + c] = g
-            out.unsafe_set(i, abs(_det_in_place(M, dim)) ** 0.5 / scale)
+            out.unsafe_set(i, sqrt(abs(_det_in_place(M, dim))) / scale)

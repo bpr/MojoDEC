@@ -8,4 +8,5 @@ from mojodec.vis.draw import (
     lineplot2,
     simplex_quivers,
     cube_quivers,
+    Quivers,
 )

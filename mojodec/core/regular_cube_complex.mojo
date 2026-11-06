@@ -10,8 +10,16 @@ Port of `pydec.dec.regular_cube_complex`: the cubical complex of a
 dimension.
 """
 
+from mojodec.core.cell_set import (
+    CellComplex,
+    CellSet,
+    cells_in_rows,
+    cells_once_in_rows,
+)
+from mojodec.core.chain_complex import ChainComplex
 from mojodec.core.mesh import RegularCubeMesh
 from mojodec.core.sparse import CSRMatrix
+from mojodec.core.subset import Subset
 from mojodec.core.utils import (
     IntArray,
     RealArray,
@@ -37,20 +45,39 @@ struct CubeLevel(Copyable, Movable):
     """The k-cubes, one per row (corner then spanned axes)."""
     var boundary: CSRMatrix
     """Boundary operator from k-chains to (k-1)-chains."""
+    var d: CSRMatrix
+    """Coboundary operator from k-cochains to (k+1)-cochains, the transpose
+    of the next level's `boundary`."""
 
-    def __init__(out self, var cube_array: IntArray, var boundary: CSRMatrix):
-        """A level from its cubes and boundary operator.
+    def __init__(
+        out self,
+        var cube_array: IntArray,
+        var boundary: CSRMatrix,
+        var d: CSRMatrix,
+    ):
+        """A level from its cubes and operators.
 
         Args:
             cube_array: `N_k x (N + k)` cube rows (corner, then axes).
             boundary: The `N_{k-1} x N_k` boundary operator (`1 x N_0` zero
                 for k = 0).
+            d: The `N_{k+1} x N_k` coboundary operator (`1 x N_n` zero for
+                the top level).
         """
         self.cube_array = cube_array^
         self.boundary = boundary^
+        self.d = d^
+
+    def num_cubes(self) -> Int:
+        """The number of k-cubes.
+
+        Returns:
+            The rows of `cube_array`.
+        """
+        return rows_of(self.cube_array)
 
 
-struct RegularCubeComplex(Copyable, Movable, Sized, Writable):
+struct RegularCubeComplex(CellComplex, Copyable, Movable, Sized, Writable):
     """The complex of a regular cube mesh.
 
     ```mojo
@@ -85,12 +112,17 @@ struct RegularCubeComplex(Copyable, Movable, Sized, Writable):
         arrays[N] = mesh.cube_array()
         for i in range(N - 1, -1, -1):
             var fb = cube_array_boundary(arrays[i + 1], i + 1)
-            arrays[i] = fb[0].copy()
-            bounds[i + 1] = fb[1].copy()
+            arrays[i] = fb.faces.copy()
+            bounds[i + 1] = fb.boundary.copy()
         bounds[0] = CSRMatrix(1, rows_of(arrays[0]))
         self.levels = List[CubeLevel]()
         for i in range(N + 1):
-            self.levels.append(CubeLevel(arrays[i].copy(), bounds[i].copy()))
+            var d = bounds[i + 1].transpose() if i < N else CSRMatrix(
+                1, rows_of(arrays[i])
+            )
+            self.levels.append(
+                CubeLevel(arrays[i].copy(), bounds[i].copy(), d^)
+            )
         ref v = self.levels[0].cube_array
         self.vertices = real_array(rows_of(v), cols_of(v))
         for i in range(v.size):
@@ -136,107 +168,168 @@ struct RegularCubeComplex(Copyable, Movable, Sized, Writable):
         """
         return self.mesh.dimension()
 
-    def star(self, cells: List[List[Int]]) raises -> List[List[Int]]:
+    def star(self, cells: CellSet) raises -> CellSet:
         """Every cell that has a cell of `cells` as a face, `cells` included.
 
         See `mojodec.routines.topology` for the definitions.
 
         Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-cubes,
-                and may stop short of the top dimension.
+            cells: Cubes of this complex.
 
         Returns:
-            Indices per dimension: entry k lists k-cubes, sorted.
+            The star.
 
         Raises:
-            If `cells` has too many dimensions or an index is out of range.
+            If `cells` does not belong to this complex.
         """
-        return star_of(self.chain_complex(), cells)
+        return star_of(self, cells)
 
-    def closure(self, cells: List[List[Int]]) raises -> List[List[Int]]:
+    def closure(self, cells: CellSet) raises -> CellSet:
         """Every face of every cell of `cells`: the subcomplex they generate.
 
         Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-cubes,
-                and may stop short of the top dimension.
+            cells: Cubes of this complex.
 
         Returns:
-            Indices per dimension: entry k lists k-cubes, sorted.
+            The closure.
 
         Raises:
-            If `cells` has too many dimensions or an index is out of range.
+            If `cells` does not belong to this complex.
         """
-        return closure_of(self.chain_complex(), cells)
+        return closure_of(self, cells)
 
-    def link(self, cells: List[List[Int]]) raises -> List[List[Int]]:
+    def link(self, cells: CellSet) raises -> CellSet:
         """The closure of the star minus the star of the closure of `cells`.
 
         Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-cubes,
-                and may stop short of the top dimension.
+            cells: Cubes of this complex.
 
         Returns:
-            Indices per dimension: entry k lists k-cubes, sorted.
+            The link.
 
         Raises:
-            If `cells` has too many dimensions or an index is out of range.
+            If `cells` does not belong to this complex.
         """
-        return link_of(self.chain_complex(), cells)
+        return link_of(self, cells)
 
-    def boundary(self, cells: List[List[Int]]) raises -> List[List[Int]]:
+    def boundary(self, cells: CellSet) raises -> CellSet:
         """The closure of the faces bounding exactly one top cell of `cells`.
 
         Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-cubes,
-                and may stop short of the top dimension.
+            cells: Cubes of this complex.
 
         Returns:
-            Indices per dimension: entry k lists k-cubes, sorted.
+            The boundary, a closed set.
 
         Raises:
-            If `cells` has too many dimensions, an index is out of range, or
-            `cells` is not pure (a lower cell is not a face of a top cell).
+            If `cells` does not belong to this complex or is not pure (a
+            lower cell is not a face of a top cell).
         """
-        return boundary_of(self.chain_complex(), cells)
+        return boundary_of(self, cells)
 
-    def interior(self, cells: List[List[Int]]) raises -> List[List[Int]]:
+    def interior(self, cells: CellSet) raises -> CellSet:
         """The closure of `cells` minus its boundary.
 
         Args:
-            cells: Indices of cells by dimension: `cells[k]` lists k-cubes,
-                and may stop short of the top dimension.
+            cells: Cubes of this complex.
 
         Returns:
-            Indices per dimension: entry k lists k-cubes, sorted.
+            The interior.
 
         Raises:
-            If `cells` has too many dimensions, an index is out of range, or
-            `cells` is not pure.
+            If `cells` does not belong to this complex or is not pure.
         """
-        return interior_of(self.chain_complex(), cells)
+        return interior_of(self, cells)
 
-    def boundary_cells(self) raises -> List[List[Int]]:
+    def boundary_cells(self) raises -> CellSet:
         """The boundary of the whole complex: the faces bounding exactly one
         top cell, and their faces.
 
+        `boundary_cells()[k]` is the `Subset` of boundary k-cells.
+
         Returns:
-            Indices per dimension: entry k lists k-cubes, sorted.
+            The boundary cells.
 
         Raises:
             If the complex's operators are inconsistent.
         """
-        return boundary_of(self.chain_complex())
+        return boundary_of(self)
 
-    def interior_cells(self) raises -> List[List[Int]]:
+    def interior_cells(self) raises -> CellSet:
         """The cells not on the boundary of the whole complex.
 
         Returns:
-            Indices per dimension: entry k lists k-cubes, sorted.
+            The interior cells.
 
         Raises:
             If the complex's operators are inconsistent.
         """
-        return interior_of(self.chain_complex())
+        return interior_of(self)
+
+    def num_cells(self, k: Int) raises -> Int:
+        """The number of k-cells.
+
+        Args:
+            k: A dimension in `0..n`.
+
+        Returns:
+            The cell count.
+
+        Raises:
+            If `k` is outside `0..n`.
+        """
+        return self[k].num_cubes()
+
+    def faces_of(self, cells: Subset) raises -> Subset:
+        """The (k-1)-cells that are faces of some k-cell of `cells`.
+
+        Args:
+            cells: Primal k-cells, k > 0.
+
+        Returns:
+            Primal (k-1)-cells.
+
+        Raises:
+            If k = 0 or `cells` does not fit the complex.
+        """
+        var k = cells.dim
+        if k < 1:
+            raise Error("faces_of: 0-cells have no faces")
+        return cells_in_rows(self[k - 1].d, cells, k - 1)
+
+    def cofaces_of(self, cells: Subset) raises -> Subset:
+        """The (k+1)-cells that have some k-cell of `cells` as a face.
+
+        Args:
+            cells: Primal k-cells, k < n.
+
+        Returns:
+            Primal (k+1)-cells.
+
+        Raises:
+            If k = n or `cells` does not fit the complex.
+        """
+        var k = cells.dim
+        if k >= self.complex_dimension():
+            raise Error("cofaces_of: n-cells have no cofaces")
+        return cells_in_rows(self[k + 1].boundary, cells, k + 1)
+
+    def boundary_faces_of(self, cells: Subset) raises -> Subset:
+        """The (k-1)-cells that are faces of exactly one k-cell of `cells`.
+
+        Args:
+            cells: Primal k-cells, k > 0.
+
+        Returns:
+            Primal (k-1)-cells.
+
+        Raises:
+            If k = 0 or `cells` does not fit the complex.
+        """
+        var k = cells.dim
+        if k < 1:
+            raise Error("boundary_faces_of: 0-cells have no faces")
+        return cells_once_in_rows(self[k - 1].d, cells, k - 1)
 
     def euler_characteristic(self) -> Int:
         """The alternating sum of the numbers of k-cubes.
@@ -250,34 +343,25 @@ struct RegularCubeComplex(Copyable, Movable, Sized, Writable):
             chi += -n if k % 2 == 1 else n
         return chi
 
-    def chain_complex(self) -> List[CSRMatrix]:
-        """The boundary operators of every level.
+    def chain_complex(self) raises -> ChainComplex:
+        """The boundary and coboundary operators of every level, copied.
+
+        `self[k].boundary` and `self[k].d` give them without copying.
 
         Returns:
-            `B_0, ..., B_n`, with `B_k` the `N_{k-1} x N_k` matrix from
-            k-chains to (k-1)-chains and `B_0` the `1 x N_0` zero matrix.
-        """
-        var out = List[CSRMatrix]()
-        for ref lvl in self.levels:
-            out.append(lvl.boundary.copy())
-        return out^
-
-    def cochain_complex(self) raises -> List[CSRMatrix]:
-        """The coboundary operators `d_k = B_{k+1}^T`, then a `1 x N_top` zero.
-
-        Returns:
-            `d_0, ..., d_n`, with `d_n` the `1 x N_n` zero matrix.
+            A `ChainComplex` with `boundary(k)` = `self[k].boundary` and
+            `coboundary(k)` = `self[k].d`.
 
         Raises:
-            Never in practice; `transpose` does not fail on a valid matrix.
+            Never in practice; the levels' operators chain.
         """
-        var out = List[CSRMatrix]()
-        for k in range(1, len(self.levels)):
-            out.append(self.levels[k].boundary.transpose())
-        out.append(
-            CSRMatrix(1, rows_of(self.levels[len(self.levels) - 1].cube_array))
-        )
-        return out^
+        var n = self.complex_dimension()
+        var bs = List[CSRMatrix](capacity=n)
+        var ds = List[CSRMatrix](capacity=n)
+        for k in range(n):
+            bs.append(self.levels[k + 1].boundary.copy())
+            ds.append(self.levels[k].d.copy())
+        return ChainComplex(self.levels[0].num_cubes(), bs^, ds^)
 
     def write_to(self, mut writer: Some[Writer]):
         """Write the number of cubes of each dimension, highest first.

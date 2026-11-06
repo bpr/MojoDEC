@@ -8,7 +8,12 @@ from numojo.prelude import *
 from mojodec.core.mesh import RegularCubeMesh
 from mojodec.core.regular_cube_complex import RegularCubeComplex
 from mojodec.core.utils import real_vector
-from mojodec.routines.io.vtk import VTKField, write_vtu, write_vtu_cubes
+from mojodec.routines.io.vtk import (
+    VTKField,
+    VTKFormat,
+    write_vtu,
+    write_vtu_cubes,
+)
 
 comptime TMP = "/tmp/mojodec_vtk_test.vtu"
 
@@ -52,7 +57,7 @@ def test_triangles() raises:
     assert_true("<PointData>" in xml and "<CellData>" in xml)
 
 
-def triangle_mesh(format: String) raises:
+def triangle_mesh(format: VTKFormat) raises:
     var p = real_vector(2)
     p.unsafe_set(0, 0.5)
     p.unsafe_set(1, -2.0)
@@ -82,7 +87,7 @@ def check_block(
 
 
 def test_binary() raises:
-    triangle_mesh("binary")
+    triangle_mesh(.BINARY)
     var xml = read(TMP)
     assert_true('Name="p" NumberOfComponents="1" format="binary"' in xml)
     var p = b64decode(block(xml, "p"))
@@ -96,7 +101,7 @@ def test_binary() raises:
 
 
 def test_appended() raises:
-    triangle_mesh("appended")
+    triangle_mesh(.APPENDED)
     var bytes: List[Byte]
     with open(TMP, "r") as f:
         bytes = f.read_bytes()
@@ -181,8 +186,6 @@ def test_bad_inputs() raises:
     )
     with assert_raises(contains="0 <= k"):
         write_vtu_cubes(TMP, rcc, 3)
-    with assert_raises(contains="unknown format"):
-        write_vtu(TMP, V, S, format="base64")
 
 
 def main() raises:

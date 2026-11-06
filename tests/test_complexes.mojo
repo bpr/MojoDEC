@@ -16,6 +16,7 @@ from mojodec.core.rips_complex import (
     rips_simplices,
     rips_chain_complex,
 )
+from mojodec.core.chain_complex import ChainComplex
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.utils import (
     IntArray,
@@ -56,35 +57,38 @@ def test_asc_1d() raises:
     var asc = asc_of([I("[[0,1],[2,3]]")])
     assert_int_array(asc.simplices[0], "[[0],[1],[2],[3]]")
     assert_int_array(asc.simplices[1], "[[0,1],[2,3]]")
-    assert_dense(asc.chain_complex()[0], "[[0,0,0,0]]")
-    assert_dense(asc.chain_complex()[1], "[[-1,0],[1,0],[0,-1],[0,1]]")
+    assert_equal(asc.chain_complex().num_cells(0), 4)
+    assert_dense(asc.chain_complex().boundary(1), "[[-1,0],[1,0],[0,-1],[0,1]]")
     asc = asc_of([I("[[0],[2]]"), I("[[0,1],[2,3]]")])
     assert_int_array(asc.simplices[0], "[[0],[1],[2],[3]]")
-    assert_dense(asc.chain_complex()[1], "[[-1,0],[1,0],[0,-1],[0,1]]")
+    assert_dense(asc.chain_complex().boundary(1), "[[-1,0],[1,0],[0,-1],[0,1]]")
     asc = asc_of([I("[[2],[5]]"), I("[[0,1],[3,4]]")])
     assert_int_array(asc.simplices[0], "[[0],[1],[2],[3],[4],[5]]")
-    assert_dense(asc.chain_complex()[0], "[[0,0,0,0,0,0]]")
+    assert_equal(asc.chain_complex().num_cells(0), 6)
     assert_dense(
-        asc.chain_complex()[1], "[[-1,0],[1,0],[0,0],[0,-1],[0,1],[0,0]]"
+        asc.chain_complex().boundary(1),
+        "[[-1,0],[1,0],[0,0],[0,-1],[0,1],[0,0]]",
     )
 
 
 def test_asc_2d() raises:
     var asc = asc_of([I("[[0,1,2]]")])
     assert_int_array(asc.simplices[1], "[[0,1],[0,2],[1,2]]")
-    assert_dense(asc.chain_complex()[1], "[[-1,-1,0],[1,0,-1],[0,1,1]]")
-    assert_dense(asc.chain_complex()[2], "[[1],[-1],[1]]")
+    assert_dense(
+        asc.chain_complex().boundary(1), "[[-1,-1,0],[1,0,-1],[0,1,1]]"
+    )
+    assert_dense(asc.chain_complex().boundary(2), "[[1],[-1],[1]]")
     asc = asc_of([I("[[0,2]]"), I("[[0,1,2]]")])
     assert_int_array(asc.simplices[1], "[[0,1],[0,2],[1,2]]")
-    assert_dense(asc.chain_complex()[2], "[[1],[-1],[1]]")
+    assert_dense(asc.chain_complex().boundary(2), "[[1],[-1],[1]]")
     asc = asc_of([I("[[0,3],[4,5]]"), I("[[0,1,2]]")])
     assert_int_array(asc.simplices[0], "[[0],[1],[2],[3],[4],[5]]")
     assert_int_array(asc.simplices[1], "[[0,1],[0,2],[0,3],[1,2],[4,5]]")
     assert_dense(
-        asc.chain_complex()[1],
+        asc.chain_complex().boundary(1),
         "[[-1,-1,-1,0,0],[1,0,0,-1,0],[0,1,0,1,0],[0,0,1,0,0],[0,0,0,0,-1],[0,0,0,0,1]]",
     )
-    assert_dense(asc.chain_complex()[2], "[[1],[-1],[0],[1],[0]]")
+    assert_dense(asc.chain_complex().boundary(2), "[[1],[-1],[0],[1],[0]]")
 
 
 def test_rips_simplices() raises:
@@ -101,8 +105,8 @@ def test_rips_simplices() raises:
 
 def test_rips_chain_complex() raises:
     var r = rips_chain_complex([I("[[0],[1],[2]]"), I("[[0,2]]")])
-    assert_dense(r[0], "[[0,0,0]]")
-    assert_dense(r[1], "[[-1],[0],[1]]")
+    assert_equal(r.num_cells(0), 3)
+    assert_dense(r.boundary(1), "[[-1],[0],[1]]")
     r = rips_chain_complex(
         [
             I("[[0],[1],[2],[3],[4]]"),
@@ -111,10 +115,10 @@ def test_rips_chain_complex() raises:
         ]
     )
     assert_dense(
-        r[1],
+        r.boundary(1),
         "[[-1,-1,-1,0,0,0],[1,0,0,-1,0,0],[0,1,0,1,-1,-1],[0,0,1,0,1,0],[0,0,0,0,0,1]]",
     )
-    assert_dense(r[2], "[[1,0],[-1,1],[0,-1],[1,0],[0,1],[0,0]]")
+    assert_dense(r.boundary(2), "[[1,0],[-1,1],[0,-1],[1,0],[0,1],[0,0]]")
 
 
 def test_rips_complex_example() raises:
@@ -132,22 +136,20 @@ def test_rips_without_edges() raises:
     var rc = RipsComplex(nm.fromstring[f64]("[[0,0],[5,0],[0,5]]"), 1.0)
     assert_equal(len(rc.simplices), 1)
     assert_equal(rc.complex_dimension(), 0)
-    var b = rc.chain_complex()
-    var d = rc.cochain_complex()
-    assert_equal(len(b), 1)
-    assert_equal(len(d), 1)
-    assert_equal(d[0].nrows, 1)
-    assert_equal(d[0].ncols, 3)
-    assert_equal(len(rc.boundary_cells()), 1)
+    ref cc = rc.chain_complex()
+    assert_equal(len(cc), 1)
+    assert_equal(cc.num_cells(0), 3)
+    assert_true(rc.boundary_cells().is_empty())
     assert_equal(len(rc.interior_cells()[0]), 3)
 
 
-def check_exactness(var d: List[CSRMatrix], var b: List[CSRMatrix]) raises:
-    assert_equal(len(d), len(b))
-    for k in range(len(d) - 1):
-        assert_equal((d[k + 1] @ d[k]).max_abs(), 0.0)
-        assert_equal((b[k] @ b[k + 1]).max_abs(), 0.0)
-        assert_equal((d[k].T() - b[k + 1]).max_abs(), 0.0)
+def check_exactness(cc: ChainComplex) raises:
+    var n = cc.complex_dimension()
+    for k in range(n):
+        assert_equal((cc.coboundary(k).T() - cc.boundary(k + 1)).max_abs(), 0.0)
+    for k in range(n - 1):
+        assert_equal((cc.coboundary(k + 1) @ cc.coboundary(k)).max_abs(), 0.0)
+        assert_equal((cc.boundary(k + 1) @ cc.boundary(k + 2)).max_abs(), 0.0)
 
 
 def test_rips_random() raises:
@@ -176,7 +178,7 @@ def test_rips_random() raises:
                         assert_true(
                             (iget(s, r, a) * N + iget(s, r, b)) in edges
                         )
-        check_exactness(rc.cochain_complex(), rc.chain_complex())
+        check_exactness(rc.chain_complex())
 
 
 def test_kd_tree() raises:

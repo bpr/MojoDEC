@@ -11,6 +11,7 @@ followed by the (increasing) axes it spans.
 """
 
 from mojodec.core.sparse import CSRMatrix
+from mojodec.routines.simplex_array import FacesAndBoundary
 from mojodec.core.utils import (
     IntArray,
     compare_rows,
@@ -72,9 +73,7 @@ def cube_array_search(
     return out^
 
 
-def cube_array_boundary(
-    cubes: IntArray, dim: Int
-) raises -> Tuple[IntArray, CSRMatrix]:
+def cube_array_boundary(cubes: IntArray, dim: Int) raises -> FacesAndBoundary:
     """Faces and boundary operator of an array of `dim`-cubes in a regular grid.
 
     Each `dim`-cube has `2 * dim` faces: for its i-th axis, the face at its
@@ -141,7 +140,7 @@ def cube_array_boundary(
                 i * fw + j, faces.unsafe_get(unique_rows[i] * fw + j)
             )
     var B = CSRMatrix.from_coo(len(unique_rows), num_cubes, rows, cols, vals)
-    return (unique_faces^, B^)
+    return FacesAndBoundary(unique_faces^, B^)
 
 
 def _code(a: IntArray, i: Int, radix: List[Int]) -> Int:

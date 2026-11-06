@@ -41,9 +41,9 @@ def test_simplex_quivers() raises:
     # the Whitney form of edge (0,1) is l0 dl1 - l1 dl0
     var form = real_vector(3)
     form.unsafe_set(0, 1.0)
-    var bd = simplex_quivers(sc, form)
-    assert_rows(bd[0], "[[0.3333333333333333,0.3333333333333333]]")
-    assert_rows(bd[1], "[[0.6666666666666666,0.3333333333333333]]")
+    var q = simplex_quivers(sc, form)
+    assert_rows(q.bases, "[[0.3333333333333333,0.3333333333333333]]")
+    assert_rows(q.vectors, "[[0.6666666666666666,0.3333333333333333]]")
 
 
 def test_simplex_quivers_bad_length() raises:
@@ -59,9 +59,9 @@ def test_cube_quivers() raises:
     var vals = real_vector(rows_of(rcc[1].cube_array))
     for i in range(vals.size):
         vals.unsafe_set(i, 1.0)
-    var bd = cube_quivers(rcc, vals)
-    assert_rows(bd[0], "[[0.5,0.5]]")
-    assert_rows(bd[1], "[[1,1]]")
+    var q = cube_quivers(rcc, vals)
+    assert_rows(q.bases, "[[0.5,0.5]]")
+    assert_rows(q.vectors, "[[1,1]]")
 
 
 def test_draw() raises:

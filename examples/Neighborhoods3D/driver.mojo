@@ -29,7 +29,9 @@
 from std.python import Python, PythonObject
 
 from mojodec import (
+    CellSet,
     Simplex,
+    Subset,
     SimplicialComplex,
     VTKField,
     read_mesh,
@@ -52,34 +54,41 @@ def main() raises:
 
     var surface = sc.boundary_cells()
     var interior = sc.interior_cells()
-    var inner = interior[0][0]
-    var outer = surface[0][0]
+    var inner = interior[0].indices()[0]
+    var outer = surface[0].indices()[0]
 
     print("\n  cell              star (v/e/t/T)  link (v/e/t)  chi(link)")
-    _row(sc, "interior vertex", [[inner]])
-    _row(sc, "boundary vertex", [[outer]])
-    var edge = interior[1][0]
-    _row(sc, "interior edge", [[], [edge]])
-    var face = interior[2][0]
-    _row(sc, "interior face", [[], [], [face]])
-    var bface = surface[2][0]
-    _row(sc, "boundary face", [[], [], [bface]])
+    var v_in = CellSet.from_indices(sc, 0, [inner])
+    var v_out = CellSet.from_indices(sc, 0, [outer])
+    var edge = CellSet.from_indices(sc, 1, [interior[1].indices()[0]])
+    var face = CellSet.from_indices(sc, 2, [interior[2].indices()[0]])
+    var bface = CellSet.from_indices(sc, 2, [surface[2].indices()[0]])
+    _row(sc, "interior vertex", v_in)
+    _row(sc, "boundary vertex", v_out)
+    _row(sc, "interior edge", edge)
+    _row(sc, "interior face", face)
+    _row(sc, "boundary face", bface)
 
-    var lk_in = sc.link([[inner]])
-    var lk_out = sc.link([[outer]])
-    _check(_euler(lk_in) == 2, "interior vertex link is a sphere")
+    var lk_in = sc.link(v_in)
+    var lk_out = sc.link(v_out)
+    _check(
+        lk_in.euler_characteristic() == 2, "interior vertex link is a sphere"
+    )
     _check(_closed(sc, lk_in[2]), "interior vertex link has no boundary")
-    _check(_euler(lk_out) == 1, "boundary vertex link is a disk")
+    _check(lk_out.euler_characteristic() == 1, "boundary vertex link is a disk")
     _check(not _closed(sc, lk_out[2]), "boundary vertex link has a boundary")
-    _check(_euler(sc.link([[], [edge]])) == 0, "interior edge link is a circle")
-    _check(len(sc.link([[], [], [face]])[0]) == 2, "interior face link")
-    _check(len(sc.link([[], [], [bface]])[0]) == 1, "boundary face link")
+    _check(
+        sc.link(edge).euler_characteristic() == 0,
+        "interior edge link is a circle",
+    )
+    _check(len(sc.link(face)[0]) == 2, "interior face link")
+    _check(len(sc.link(bface)[0]) == 1, "boundary face link")
 
     # the closed star is a ball with the link as its boundary
-    var st = sc.star([[inner]])
+    var st = sc.star(v_in)
     var closed = sc.closure(st)
-    _check(_same(sc.boundary(closed), lk_in), "Bd(Cl(St(v))) = Lk(v)")
-    _check(_same(sc.interior(closed), st), "Int(Cl(St(v))) = St(v)")
+    _check(sc.boundary(closed) == lk_in, "Bd(Cl(St(v))) = Lk(v)")
+    _check(sc.interior(closed) == st, "Int(Cl(St(v))) = St(v)")
 
     # grow rings around the vertex: R_0 = Cl(St(v)), R_k = Cl(St(R_{k-1}))
     var ring = real_vector(sc[3].num_simplices)
@@ -95,30 +104,30 @@ def main() raises:
     )
     var k = 0
     while True:
-        for t in region[3]:
+        for t in region[3].indices():
             if ring.unsafe_get(t) < 0:
                 ring.unsafe_set(t, Float64(k))
         var bd = sc.boundary(region)
         var pinches = _pinches(sc, bd[2])
-        var shared = 0
-        for b in bd[2]:
-            if b in surface[2]:
-                shared += 1
+        var shared = len(bd[2] & surface[2])
         print(
             "  "
             + _pad(String(k), 6)
             + _pad(String(len(region[3])), 12)
             + _pad(String(len(bd[2])), 14)
-            + _pad(String(_euler(region)), 8)
-            + _pad(String(_euler(bd)), 11)
+            + _pad(String(region.euler_characteristic()), 8)
+            + _pad(String(bd.euler_characteristic()), 11)
             + _pad(String(pinches), 9)
             + String(shared)
         )
         _check(_closed(sc, bd[2]), "a ring boundary has no boundary")
         if pinches == 0:
-            _check(_euler(bd) == 2 * _euler(region), "chi(Bd R) = 2 chi(R)")
-        chi_region.append(Float64(_euler(region)))
-        chi_boundary.append(Float64(_euler(bd)))
+            _check(
+                bd.euler_characteristic() == 2 * region.euler_characteristic(),
+                "chi(Bd R) = 2 chi(R)",
+            )
+        chi_region.append(Float64(region.euler_characteristic()))
+        chi_boundary.append(Float64(bd.euler_characteristic()))
         if pinches > 0:
             pinched.append(k)
         if len(region[3]) == sc[3].num_simplices:
@@ -137,7 +146,7 @@ def main() raises:
         "edges,",
         len(surface[2]),
         "triangles; chi =",
-        _euler(surface),
+        surface.euler_characteristic(),
     )
     print(
         "interior:",
@@ -150,8 +159,8 @@ def main() raises:
         len(interior[3]),
         "tetrahedra",
     )
-    _check(_euler(surface) == 0, "the boundary is a torus")
-    _check(_same(sc.boundary(surface), [[], [], [], []]), "Bd(Bd(M)) is empty")
+    _check(surface.euler_characteristic() == 0, "the boundary is a torus")
+    _check(sc.boundary(surface).is_empty(), "Bd(Bd(M)) is empty")
 
     var show = show_requested()
     var plt = pyplot(interactive=show)
@@ -207,13 +216,13 @@ def main() raises:
         sc.vertices(),
         sc.simplices(),
         cell_data=[VTKField("ring", ring)],
-        format="appended",
+        format=.APPENDED,
     )
     # 0: interior vertex link, 1: boundary vertex link, 2: torus surface
     var parts: List[List[Int]] = [
-        lk_in[2].copy(),
-        lk_out[2].copy(),
-        surface[2].copy(),
+        lk_in[2].indices(),
+        lk_out[2].indices(),
+        surface[2].indices(),
     ]
     var count = len(parts[0]) + len(parts[1]) + len(parts[2])
     var triangles = int_array(count, 3)
@@ -230,14 +239,14 @@ def main() raises:
         sc.vertices(),
         triangles,
         cell_data=[VTKField("part", which)],
-        format="appended",
+        format=.APPENDED,
     )
     print("wrote neighborhoods3d.vtu and links.vtu")
     if show:
         plt.show()
 
 
-def _row(sc: SimplicialComplex, name: String, cells: List[List[Int]]) raises:
+def _row(sc: SimplicialComplex, name: String, cells: CellSet) raises:
     var st = sc.star(cells)
     var lk = sc.link(cells)
     print(
@@ -250,18 +259,16 @@ def _row(sc: SimplicialComplex, name: String, cells: List[List[Int]]) raises:
             16,
         )
         + _pad(String(len(lk[0]), "/", len(lk[1]), "/", len(lk[2])), 14)
-        + String(_euler(lk))
+        + String(lk.euler_characteristic())
     )
 
 
-def _closed(sc: SimplicialComplex, triangles: List[Int]) raises -> Bool:
+def _closed(sc: SimplicialComplex, triangles: Subset) raises -> Bool:
     """Whether every edge of the triangles is on exactly two of them."""
-    var cells = List[List[Int]](length=4, fill=List[Int]())
-    cells[2] = triangles.copy()
-    return len(sc.boundary(sc.closure(cells))[1]) == 0
+    return sc.boundary(CellSet.from_subset(sc, triangles)).is_empty()
 
 
-def _pinches(sc: SimplicialComplex, triangles: List[Int]) raises -> Int:
+def _pinches(sc: SimplicialComplex, triangles: Subset) raises -> Int:
     """The edges and vertices where the triangles are not a surface.
 
     On a closed surface every edge is on two triangles, and the triangles
@@ -273,7 +280,7 @@ def _pinches(sc: SimplicialComplex, triangles: List[Int]) raises -> Int:
     var fans = List[List[Tuple[Int, Int]]](
         length=sc[0].num_simplices, fill=List[Tuple[Int, Int]]()
     )
-    for t in triangles:
+    for t in triangles.indices():
         var v = sc[2].index_to_simplex(t).vertices.copy()
         for j in range(3):
             var a = v[(j + 1) % 3]
@@ -311,23 +318,6 @@ def _cycle_length(edges: List[Tuple[Int, Int]]) -> Int:
     return length
 
 
-def _euler(cells: List[List[Int]]) -> Int:
-    """The alternating sum of the numbers of k-cells."""
-    var chi = 0
-    for k in range(len(cells)):
-        chi += -len(cells[k]) if k % 2 == 1 else len(cells[k])
-    return chi
-
-
-def _same(a: List[List[Int]], b: List[List[Int]]) -> Bool:
-    if len(a) != len(b):
-        return False
-    for k in range(len(a)):
-        if a[k] != b[k]:
-            return False
-    return True
-
-
 def _check(ok: Bool, what: String) raises:
     if not ok:
         raise Error("check failed: " + what)
@@ -344,13 +334,13 @@ def _pad(s: String, width: Int) -> String:
 def _surface(
     ax: PythonObject,
     sc: SimplicialComplex,
-    triangles: List[Int],
+    triangles: Subset,
     color: String,
     alpha: Float64,
 ) raises:
     var art3d = Python.import_module("mpl_toolkits.mplot3d.art3d")
     var polys = sc.vertices().to_numpy()[
-        take_int_rows(sc[2].simplices, triangles).to_numpy()
+        take_int_rows(sc[2].simplices, triangles.indices()).to_numpy()
     ]
     var col = art3d.Poly3DCollection(polys)
     col.set_facecolor(color)

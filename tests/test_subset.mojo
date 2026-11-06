@@ -8,6 +8,7 @@ from std.testing import (
 )
 
 from mojodec import (
+    Primality,
     CSRMatrix,
     DiagonalOperator,
     SimplicialComplex,
@@ -22,7 +23,7 @@ from mojodec.routines.io.meshio import read_mesh
 
 def _grid(n: Int) raises -> SimplicialComplex:
     var m = simplicial_grid_2d(n)
-    return SimplicialComplex(m[0], m[1])
+    return SimplicialComplex(m)
 
 
 def _cube() raises -> SimplicialComplex:
@@ -64,7 +65,7 @@ def test_set_operations() raises:
     # dual 0-cells are the triangles: same bits, other kind
     var ad = a.dual()
     assert_equal(ad.dim, 0)
-    assert_false(ad.is_primal)
+    assert_true(ad.primality() == Primality.DUAL)
     assert_true(ad.dual() == a)
     assert_false(ad.indices() != a.indices())
     with assert_raises():
@@ -123,18 +124,16 @@ def test_mesh_boundary() raises:
     for sc in [_grid(5), _torus()]:
         var n = sc.complex_dimension()
         var cells = sc.boundary_cells()
-        for k in range(n):
-            var bd = sc.boundary_subset(k)
-            var expected = cells[k].copy()
-            sort(expected)
-            assert_equal(bd.indices(), expected)
-        assert_true(sc.boundary_subset(n).is_empty())
-        # the boundary faces are those `sc.boundary()` lists
+        # the boundary faces are those `sc.boundary()` lists, and the
+        # lower levels their faces
         var faces = Subset.from_simplices(sc, sc.boundary())
-        assert_true(faces == sc.boundary_subset(n - 1))
-    var closed = _cube()
-    for k in range(3):
-        assert_true(closed.boundary_subset(k).is_empty())
+        assert_true(faces == Subset.full(sc, n).manifold_boundary(sc))
+        for k in range(n - 1, -1, -1):
+            assert_true(cells[k] == faces)
+            if k > 0:
+                faces = faces.boundary(sc)
+        assert_true(cells[n].is_empty())
+    assert_true(_cube().boundary_cells().is_empty())
     # manifold boundary of a region: the grid's lower-left 2x2 block
     var sc = _grid(4)
     var region = Subset.empty(sc, 2)
@@ -152,7 +151,7 @@ def test_mesh_boundary() raises:
 
 def test_exclude_restrict() raises:
     var sc = _grid(3)
-    var bd = sc.boundary_subset(0)
+    var bd = sc.boundary_cells()[0].copy()
     var L = sc[0].d.T() @ sc[1].star @ sc[0].d
     var Le = L.exclude_subset(bd)
     var Lr = L.restrict_to_subset(bd)
@@ -171,7 +170,7 @@ def test_exclude_restrict() raises:
         assert_equal(S[i] + Sr[i], sc[0].star[i])
         assert_equal(S[i] == 0.0, i in bd)
     with assert_raises():
-        _ = L.exclude_subset(sc.boundary_subset(1))
+        _ = L.exclude_subset(sc.boundary_cells()[1].copy())
     with assert_raises():
         _ = sc[1].star.restrict_to_subset(bd)
 
@@ -180,7 +179,7 @@ def test_dirichlet_poisson() raises:
     """The DEC Laplacian reproduces a linear function from its boundary
     values: L u = 0 inside, u = g on the boundary."""
     var sc = _grid(8)
-    var fixed = sc.boundary_subset(0)
+    var fixed = sc.boundary_cells()[0].copy()
     var N = sc[0].num_simplices
     var L = sc[0].d.T() @ sc[1].star @ sc[0].d
     var A = (
@@ -197,7 +196,7 @@ def test_dirichlet_poisson() raises:
         assert_almost_equal(u.unsafe_get(i), g[i], atol=1e-12)
     # overwrite checks the kinds
     with assert_raises():
-        b.overwrite(sc.boundary_subset(1), g)
+        b.overwrite(sc.boundary_cells()[1].copy(), g)
 
 
 def main() raises:

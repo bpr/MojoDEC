@@ -34,6 +34,8 @@ def well_centeredness(sc: SimplicialComplex) raises -> RealArray:
     Positive for a well-centered simplex (circumcenter strictly inside),
     zero when the circumcenter lies on a face (a right triangle), and
     negative, increasingly so, as it moves outside (an obtuse triangle).
+    A complex with geometry already holds the circumcenters; without it,
+    they are computed here.
 
     Args:
         sc: A complex (geometry need not be computed).
@@ -47,6 +49,16 @@ def well_centeredness(sc: SimplicialComplex) raises -> RealArray:
     ref top = sc.simplices()
     var n = cols_of(top)
     var out = real_vector(rows_of(top))
+    if sc.has_geometry():
+        # the top level keeps the mesh's element order, its rows sorted;
+        # the smallest coordinate does not depend on the vertex order
+        ref bary = sc[n - 1].bary_circumcenter
+        for t in range(out.size):
+            var m = bary.unsafe_get(t * n)
+            for i in range(1, n):
+                m = min(m, bary.unsafe_get(t * n + i))
+            out.unsafe_set(t, m)
+        return out^
     for t in range(out.size):
         var b = circumcenter_barycentric(
             take_rows(sc.vertices(), row_list(top, t))

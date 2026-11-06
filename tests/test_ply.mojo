@@ -10,7 +10,8 @@ from numojo.prelude import *
 
 from mojodec.core.mesh import SimplicialMesh
 from mojodec.core.utils import cols_of, fget, iget, rows_of
-from mojodec.routines.io.ply import read_ply, write_ply
+from mojodec.routines.io.ply import PlyFormat, read_ply, write_ply
+from mojodec.routines.io.scan import append_le
 from mojodec.routines.io.text import loadtxt
 from mojodec.routines.mesh_generation import icosphere, simplicial_grid_2d
 
@@ -42,18 +43,62 @@ def test_vtk_files_in_every_encoding() raises:
 
 def test_round_trip() raises:
     var vt = icosphere(1, 2.0)
-    for format in ["ascii", "binary"]:
-        write_ply(TMP, vt[0], vt[1], format=format)
-        assert_mesh(read_ply(TMP), vt[0], vt[1])
+    var formats: List[PlyFormat] = [.ASCII, .BINARY]
+    for format in formats:
+        write_ply(TMP, vt.vertices, vt.elements, format=format)
+        assert_mesh(read_ply(TMP), vt.vertices, vt.elements)
     # 2D vertices come back with z = 0
     var grid = simplicial_grid_2d(2)
-    write_ply(TMP, grid[0], grid[1])
+    write_ply(TMP, grid.vertices, grid.elements)
     var mesh = read_ply(TMP)
     assert_equal(cols_of(mesh.vertices), 3)
-    for v in range(rows_of(grid[0])):
+    for v in range(rows_of(grid.vertices)):
         for k in range(2):
-            assert_equal(fget(mesh.vertices, v, k), fget(grid[0], v, k))
+            assert_equal(fget(mesh.vertices, v, k), fget(grid.vertices, v, k))
         assert_equal(fget(mesh.vertices, v, 2), 0.0)
+
+
+def test_float_vertices_and_other_index_types() raises:
+    # float32 x, y (no z) and uint32 indices with a ushort count, little-
+    # and big-endian, plus an extra element to skip
+    for big in [False, True]:
+        var header = String(
+            "ply\nformat ",
+            "binary_big_endian" if big else "binary_little_endian",
+            " 1.0\nelement vertex 4\nproperty float x\nproperty float y\n",
+            "element face 1\nproperty list ushort uint vertex_indices\n",
+            "element edge 1\nproperty int a\nproperty list uchar int b\n",
+            "end_header\n",
+        )
+        var body = List[Byte]()
+
+        def put[dtype: DType](x: Scalar[dtype]) {mut body, big}:
+            var le = List[Byte]()
+            append_le(le, x)
+            if big:
+                le.reverse()
+            body.extend(Span(le))
+
+        var xy: List[Float32] = [0, 0, 1, 0, 1, 1, 0, 1.5]
+        for x in xy:
+            put(x)
+        put(UInt16(4))
+        for v in range(4):
+            put(UInt32(v))
+        put(Int32(7))
+        put(UInt8(2))
+        put(Int32(1))
+        put(Int32(2))
+        with open(TMP, "w") as f:
+            f.write(header)
+            f.write_bytes(Span(body))
+        var mesh = read_ply(TMP)
+        assert_equal(cols_of(mesh.vertices), 2)
+        assert_equal(fget(mesh.vertices, 3, 1), 1.5)
+        assert_equal(rows_of(mesh.elements), 2)
+        assert_equal(iget(mesh.elements, 1, 0), 0)
+        assert_equal(iget(mesh.elements, 1, 1), 2)
+        assert_equal(iget(mesh.elements, 1, 2), 3)
 
 
 def test_polygons_become_fans() raises:

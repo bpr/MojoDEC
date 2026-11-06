@@ -13,6 +13,7 @@ from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.utils import RealArray, fget, iget, real_array, rows_of
 from mojodec.routines.io.meshio import read_mesh
+from mojodec.core.typed import PRIMAL, TypedCochain, TypedComplex
 from mojodec.routines.musical import dual_edge_pieces, flat
 from mojodec.routines.quality import well_centeredness
 from mojodec.vis.draw import simplex_quivers
@@ -54,7 +55,8 @@ def test_pieces_sum_to_dual_volumes() raises:
             for a in range(n + 1):
                 for b in range(a + 1, n + 1):
                     var e = sc[1].simplex_to_index(top_edge(sc, t, a, b))
-                    total[e] += fget(P, t, j)
+                    assert_equal(P.edge(t, j), e)
+                    total[e] += P.piece(t, j)
                     j += 1
         for e in range(len(total)):
             assert_almost_equal(
@@ -78,8 +80,8 @@ def test_obtuse_mesh_has_negative_pieces() raises:
     assert_true(obtuse_count >= 2)
     var P = dual_edge_pieces(sc)
     var negative = 0
-    for i in range(P.size):
-        if P.unsafe_get(i) < 0:
+    for i in range(P.values.size):
+        if P.values.unsafe_get(i) < 0:
             negative += 1
     assert_true(negative >= 1)
 
@@ -107,10 +109,20 @@ def test_constant_field_is_exact() raises:
 def test_flat_inverts_whitney_sharp_on_constant_forms() raises:
     var sc = obtuse()
     var c = flat(sc, constant_field(sc, [1.5, 0.25]))
-    var X = simplex_quivers(sc, c.v)[1].copy()
+    var X = simplex_quivers(sc, c.v).vectors.copy()
     var back = flat(sc, X)
     for e in range(c.v.size):
         assert_almost_equal(back[e], c[e], atol=1e-12)
+
+
+def test_typed_flat() raises:
+    var sc = obtuse()
+    var tc = TypedComplex[2](sc)
+    var X = constant_field(sc, [0.7, -1.3])
+    var c: TypedCochain[2, 1, PRIMAL] = flat(tc, X)
+    var u = flat(sc, X)
+    for e in range(len(c)):
+        assert_equal(c[e], u[e])
 
 
 def test_bad_shape() raises:

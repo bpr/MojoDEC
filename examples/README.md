@@ -119,9 +119,9 @@ Properties panel's advanced settings (the gear icon). A **Threshold**
 filter on `h` keeps only the edges where it is large, which outlines the
 holes.
 
-RipsComplex writes its VTK file in the compact `"appended"` binary
-format; the others write ASCII, which you can read in a text editor. Both
-open the same way.
+RipsComplex, Sphere, and Neighborhoods3D write their VTK files in the
+compact appended binary format (`format=.APPENDED`); the others write
+ASCII, which you can read in a text editor. Both open the same way.
 
 ## Plotting from your own program
 
@@ -141,8 +141,7 @@ from mojodec.vis import pyplot, show_requested, simplex_quivers, triplot
 
 def main() raises:
     # a 4x4 grid of the unit square and the 1-cochain dx (edge x-extents)
-    var vt = simplicial_grid_2d(4)
-    var sc = SimplicialComplex(vt[0], vt[1])
+    var sc = SimplicialComplex(simplicial_grid_2d(4))
     var dx = sc.get_cochain(1)
     for e in range(sc[1].num_simplices):
         var a = sc[1].index_to_simplex[e][0]
@@ -150,9 +149,9 @@ def main() raises:
         dx[e] = fget(sc.vertices(), b, 0) - fget(sc.vertices(), a, 0)
 
     # sample it at the triangle barycenters and plot it over the mesh
-    var bd = simplex_quivers(sc, dx.v)
-    var b = bd[0].to_numpy()
-    var v = bd[1].to_numpy()
+    var q = simplex_quivers(sc, dx.v)
+    var b = q.bases.to_numpy()
+    var v = q.vectors.to_numpy()
     var show = show_requested()
     var plt = pyplot(interactive=show)
     _ = triplot(sc.vertices(), sc.simplices())
@@ -165,8 +164,8 @@ def main() raises:
         "dx.vtu",
         sc.vertices(),
         sc.simplices(),
-        cell_data=[VTKField("dx", bd[1])],
-        format="appended",
+        cell_data=[VTKField("dx", q.vectors)],
+        format=.APPENDED,
     )
     print("wrote dx.png and dx.vtu")
     if show:

@@ -16,7 +16,7 @@ subset index into `sc[k].simplices` or `sc[n-k].simplices`; `dual()` swaps
 the kind without changing the bits.
 
 ```mojo
-var fixed = sc.boundary_subset(0)             # vertices on the boundary
+var fixed = sc.boundary_cells()[0].copy()    # vertices on the boundary
 var L = sc[0].d.T() @ sc[1].star @ sc[0].d
 var I = DiagonalOperator.identity(sc[0].num_simplices)
 var A = L.exclude_subset(fixed) + I.restrict_to_subset(fixed).to_csr()
@@ -27,6 +27,7 @@ var u = spsolve(A, f.v)
 
 from std.bit import count_trailing_zeros, pop_count
 
+from mojodec.core.primality import Primality
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
@@ -39,7 +40,7 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
     """Dimension k of the cells."""
     var n: Int
     """Dimension of the complex."""
-    var is_primal: Bool
+    var _primality: Primality
     """Primal k-simplices, or dual k-cells (primal (n-k)-simplices)."""
     var size: Int
     """Number of k-cells in the complex: indices run over `0..size-1`."""
@@ -51,7 +52,7 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
     # Construction
     # ===------------------------------------------------------------------=== #
 
-    def __init__(out self, dim: Int, n: Int, is_primal: Bool, size: Int):
+    def __init__(out self, dim: Int, n: Int, primality: Primality, size: Int):
         """The empty set of k-cells, for a complex of dimension `n` with
         `size` such cells.
 
@@ -60,25 +61,33 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
         Args:
             dim: The cell dimension k.
             n: The complex dimension.
-            is_primal: Primal k-simplices, or dual k-cells.
+            primality: Primal k-simplices, or dual k-cells.
             size: The number of k-cells.
         """
         self.dim = dim
         self.n = n
-        self.is_primal = is_primal
+        self._primality = primality
         self.size = size
         self._words = List[UInt64](length=(size + 63) // 64, fill=0)
 
+    def primality(self) -> Primality:
+        """Whether the cells are primal k-simplices or dual k-cells.
+
+        Returns:
+            `PRIMAL` or `DUAL`.
+        """
+        return self._primality
+
     @staticmethod
     def empty(
-        sc: SimplicialComplex, dim: Int, is_primal: Bool = True
+        sc: SimplicialComplex, dim: Int, primality: Primality = .PRIMAL
     ) raises -> Self:
         """The empty set of k-cells of `sc`.
 
         Args:
             sc: The complex.
             dim: The cell dimension k, `0 <= k <= n`.
-            is_primal: Primal k-simplices, or dual k-cells.
+            primality: Primal k-simplices, or dual k-cells.
 
         Returns:
             A subset with no cells.
@@ -89,19 +98,19 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
         var n = sc.complex_dimension()
         if dim < 0 or dim > n:
             raise Error(String("Subset: invalid dimension (", dim, ")"))
-        var level = dim if is_primal else n - dim
-        return Self(dim, n, is_primal, sc[level].num_simplices)
+        var level = primality.level(n, dim)
+        return Self(dim, n, primality, sc[level].num_simplices)
 
     @staticmethod
     def full(
-        sc: SimplicialComplex, dim: Int, is_primal: Bool = True
+        sc: SimplicialComplex, dim: Int, primality: Primality = .PRIMAL
     ) raises -> Self:
         """Every k-cell of `sc`.
 
         Args:
             sc: The complex.
             dim: The cell dimension k, `0 <= k <= n`.
-            is_primal: Primal k-simplices, or dual k-cells.
+            primality: Primal k-simplices, or dual k-cells.
 
         Returns:
             A subset with every cell.
@@ -109,14 +118,14 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
         Raises:
             If `dim` is outside `0..n`.
         """
-        return Self.empty(sc, dim, is_primal).complement()
+        return Self.empty(sc, dim, primality).complement()
 
     @staticmethod
     def from_indices(
         sc: SimplicialComplex,
         dim: Int,
         indices: List[Int],
-        is_primal: Bool = True,
+        primality: Primality = .PRIMAL,
     ) raises -> Self:
         """The k-cells with the given indices (repeats are allowed).
 
@@ -124,7 +133,7 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
             sc: The complex.
             dim: The cell dimension k, `0 <= k <= n`.
             indices: Cell indices in `0..size-1`.
-            is_primal: Primal k-simplices, or dual k-cells.
+            primality: Primal k-simplices, or dual k-cells.
 
         Returns:
             The subset of those cells.
@@ -132,7 +141,7 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
         Raises:
             If `dim` is outside `0..n` or an index is out of range.
         """
-        var out = Self.empty(sc, dim, is_primal)
+        var out = Self.empty(sc, dim, primality)
         for i in indices:
             out.add(i)
         return out^
@@ -142,7 +151,7 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
         sc: SimplicialComplex,
         dim: Int,
         mask: List[Bool],
-        is_primal: Bool = True,
+        primality: Primality = .PRIMAL,
     ) raises -> Self:
         """The k-cells `i` with `mask[i]` true; `mask` has one entry per cell.
 
@@ -150,7 +159,7 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
             sc: The complex.
             dim: The cell dimension k, `0 <= k <= n`.
             mask: One entry per k-cell.
-            is_primal: Primal k-simplices, or dual k-cells.
+            primality: Primal k-simplices, or dual k-cells.
 
         Returns:
             The subset of the cells marked true.
@@ -158,7 +167,7 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
         Raises:
             If `dim` is outside `0..n` or `mask` has the wrong length.
         """
-        var out = Self.empty(sc, dim, is_primal)
+        var out = Self.empty(sc, dim, primality)
         if len(mask) != out.size:
             raise Error("Subset.from_mask: mask length differs from cell count")
         for i in range(len(mask)):
@@ -304,7 +313,8 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
         """
         writer.write(
             "Subset(",
-            "primal " if self.is_primal else "dual ",
+            self._primality,
+            " ",
             self.dim,
             "-cells, ",
             len(self),
@@ -449,7 +459,7 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
         """
         var out = self.copy()
         out.dim = self.n - self.dim
-        out.is_primal = not self.is_primal
+        out._primality = self._primality.dual()
         return out^
 
     # ===------------------------------------------------------------------=== #
@@ -511,7 +521,7 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
         """
         var cob = self.coboundary(sc)
         var level = self._level() + self._step(1)
-        if self.is_primal:
+        if self._primality.is_primal():
             # sc[m].d: rows (m+1)-simplices, columns their faces
             _keep_rows_within(sc[level - 1].d, self, cob)
         else:
@@ -536,11 +546,13 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
             n-simplices, or n = 0.
         """
         self._check_complex(sc)
-        if not self.is_primal or self.dim != self.n or self.n == 0:
+        if self._primality.is_dual() or self.dim != self.n or self.n == 0:
             raise Error(
                 "Subset.manifold_boundary: needs primal n-simplices, n > 0"
             )
-        var out = Self(self.n - 1, self.n, True, sc[self.n - 1].num_simplices)
+        var out = Self(
+            self.n - 1, self.n, Primality.PRIMAL, sc[self.n - 1].num_simplices
+        )
         # row f of the n-boundary lists the n-simplices that have face f
         ref cob = sc[self.n].boundary
         for f in range(out.size):
@@ -578,11 +590,11 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
 
     def _level(self) -> Int:
         """The primal level the cells are indexed by."""
-        return self.dim if self.is_primal else self.n - self.dim
+        return self._primality.level(self.n, self.dim)
 
     def _step(self, ddim: Int) -> Int:
         """The primal level change for a cell dimension change `ddim`."""
-        return ddim if self.is_primal else -ddim
+        return ddim if self._primality.is_primal() else -ddim
 
     def _neighbors(
         self, sc: SimplicialComplex, dim: Int, step: Int
@@ -590,7 +602,7 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
         """The cells one primal level `step` away from some cell of the set."""
         var level = self._level()
         var out = Self(
-            dim, self.n, self.is_primal, sc[level + step].num_simplices
+            dim, self.n, self._primality, sc[level + step].num_simplices
         )
         if step == 1:
             # sc[m+1].boundary: rows m-simplices, columns their cofaces
@@ -618,7 +630,7 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
         return (
             self.dim == other.dim
             and self.n == other.n
-            and self.is_primal == other.is_primal
+            and self._primality == other._primality
             and self.size == other.size
         )
 

@@ -23,9 +23,46 @@ Unlike the smooth wedge, it is not associative in general.
 """
 
 from mojodec.core.cochain import Cochain
+from mojodec.core.primality import Primality
 from mojodec.core.simplex import Simplex
+from mojodec.core.typed import PRIMAL, TypedCochain
 from mojodec.core.utils import real_vector, row_list
 from mojodec.routines.combinatorial import permutation_parity, permutations
+
+
+def wedge[
+    n: Int, k: Int, l: Int
+](
+    a: TypedCochain[n, k, PRIMAL], b: TypedCochain[n, l, PRIMAL]
+) raises -> TypedCochain[n, k + l, PRIMAL]:
+    """The wedge product of two typed primal cochains.
+
+    The degree of the result is in its type, and a product past the complex
+    dimension does not compile:
+
+    ```mojo
+    var dx = tc.cochain[1, PRIMAL](...)
+    var area = wedge(dx, dy)          # TypedCochain[2, 2, PRIMAL]
+    # wedge(area, dx)                 # error: k + l exceeds n
+    ```
+
+    Parameters:
+        n: The complex dimension.
+        k: The degree of `a`.
+        l: The degree of `b`.
+
+    Args:
+        a: A primal k-cochain.
+        b: A primal l-cochain on the same complex.
+
+    Returns:
+        The primal (k+l)-cochain `a ^ b`.
+
+    Raises:
+        If the cochains live on different complexes.
+    """
+    comptime assert k + l <= n, "wedge: k + l exceeds the complex dimension"
+    return TypedCochain[n, k + l, PRIMAL](wedge(a.untyped(), b.untyped()))
 
 
 def wedge(a: Cochain, b: Cochain) raises -> Cochain:
@@ -46,7 +83,7 @@ def wedge(a: Cochain, b: Cochain) raises -> Cochain:
         If either cochain is dual, they live on different complexes, or
             `k + l` exceeds the complex dimension.
     """
-    if not a.is_primal or not b.is_primal:
+    if a.primality().is_dual() or b.primality().is_dual():
         raise Error("wedge: only primal cochains are supported")
     if not a.complex.is_same(b.complex):
         raise Error("wedge: cochains live on different complexes")
@@ -94,4 +131,4 @@ def wedge(a: Cochain, b: Cochain) raises -> Cochain:
         if Int(target.simplex_parity.unsafe_get(r)) == 1:
             total = -total
         out.unsafe_set(r, total / scale)
-    return Cochain(sc, k + l, True, out^)
+    return Cochain(sc, k + l, Primality.PRIMAL, out^)

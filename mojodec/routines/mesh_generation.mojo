@@ -15,6 +15,7 @@ from std.math import sqrt
 import numojo as nm
 from numojo.prelude import *
 
+from mojodec.core.mesh import SimplicialMesh
 from mojodec.core.utils import (
     IntArray,
     RealArray,
@@ -29,17 +30,39 @@ from mojodec.core.utils import (
 )
 
 
-def simplicial_grid_2d(n: Int) raises -> Tuple[RealArray, IntArray]:
+struct CubeGrid(Copyable, Movable):
+    """A regular grid of N-cubes, as `cube_grid` builds it."""
+
+    var vertices: RealArray
+    """`num_vertices x N` integer coordinates, axis 0 varying fastest."""
+    var corners: IntArray
+    """`(num_cubes, 2, ..., 2)`: entry `[c, b_0, ..., b_{N-1}]` is the
+    vertex at corner `b` of cube `c`."""
+
+    def __init__(out self, var vertices: RealArray, var corners: IntArray):
+        """A grid from its parts; normally built by `cube_grid`.
+
+        Args:
+            vertices: The vertex coordinates.
+            corners: The corner vertices of each cube.
+        """
+        self.vertices = vertices^
+        self.corners = corners^
+
+
+def simplicial_grid_2d(n: Int) raises -> SimplicialMesh:
     """An `n x n` grid of the unit square, each cell split into two triangles.
 
-    Returns `(vertices, triangles)`: `(n+1)^2` vertices (x varying fastest)
-    and `2 n^2` counter-clockwise triangles.
+    ```mojo
+    var sc = SimplicialComplex(simplicial_grid_2d(8))
+    ```
 
     Args:
         n: Cells per side, at least 1.
 
     Returns:
-        The `(n+1)^2 x 2` vertices and `2 n^2 x 3` triangles.
+        The mesh: `(n+1)^2` vertices (x varying fastest) and `2 n^2`
+        counter-clockwise triangles.
 
     Raises:
         Does not raise in practice.
@@ -61,28 +84,28 @@ def simplicial_grid_2d(n: Int) raises -> Tuple[RealArray, IntArray]:
             iset(indices, r + n, 0, base)
             iset(indices, r + n, 1, base + n + 2)
             iset(indices, r + n, 2, base + n + 1)
-    return (vertices^, indices^)
+    return SimplicialMesh(vertices, indices)
 
 
-def cube_grid(dims: List[Int]) raises -> Tuple[RealArray, IntArray]:
+def cube_grid(dims: List[Int]) raises -> CubeGrid:
     """A regular N-cube mesh with the given number of cells per axis.
 
-    Returns `(vertices, indices)`. Vertex `v` sits at integer coordinates with
-    axis 0 varying fastest. `indices` has shape `(num_cubes, 2, ..., 2)`:
-    entry `[c, b_0, ..., b_{N-1}]` is the vertex at corner `b` of cube `c`;
-    cubes are enumerated with the last axis varying fastest.
+    Vertex `v` sits at integer coordinates with axis 0 varying fastest.
+    `corners` has shape `(num_cubes, 2, ..., 2)`: entry
+    `[c, b_0, ..., b_{N-1}]` is the vertex at corner `b` of cube `c`; cubes
+    are enumerated with the last axis varying fastest.
 
     ```mojo
-    var vi = cube_grid([2, 1])
-    # vertices [[0,0],[1,0],[2,0],[0,1],[1,1],[2,1]]
-    # indices  [[[0,3],[1,4]], [[1,4],[2,5]]]
+    var grid = cube_grid([2, 1])
+    # grid.vertices [[0,0],[1,0],[2,0],[0,1],[1,1],[2,1]]
+    # grid.corners  [[[0,3],[1,4]], [[1,4],[2,5]]]
     ```
 
     Args:
         dims: Cells along each of the `N >= 1` axes.
 
     Returns:
-        The `num_vertices x N` vertices and the `(num_cubes, 2, ..., 2)`
+        The grid: `num_vertices x N` vertices and `(num_cubes, 2, ..., 2)`
         corner indices.
 
     Raises:
@@ -131,15 +154,34 @@ def cube_grid(dims: List[Int]) raises -> Tuple[RealArray, IntArray]:
                 break
             corner[i] = 0
             i -= 1
-    return (vertices^, indices^)
+    return CubeGrid(vertices^, indices^)
+
+
+def triangulate_ncube(grid: CubeGrid) raises -> SimplicialMesh:
+    """Triangulate a `cube_grid` of N-cubes (N <= 2); see the other overload.
+
+    ```mojo
+    var mesh = triangulate_ncube(cube_grid([3, 2]))
+    ```
+
+    Args:
+        grid: The cubes.
+
+    Returns:
+        The vertices (with cell centers appended) and the simplices.
+
+    Raises:
+        If the cubes have dimension above 2.
+    """
+    return triangulate_ncube(grid.vertices, grid.corners)
 
 
 def triangulate_ncube(
     vertices: RealArray, indices: IntArray
-) raises -> Tuple[RealArray, IntArray]:
+) raises -> SimplicialMesh:
     """Triangulate a mesh of N-cubes (N <= 2) by coning each face to the cell center.
 
-    `indices` is as returned by `cube_grid`. A 1-cube mesh (edges) is
+    `indices` is laid out as `CubeGrid.corners`. A 1-cube mesh (edges) is
     returned unchanged; 2-cubes become four triangles each, with one new
     vertex per cell (numbered after the original vertices).
 
@@ -160,7 +202,7 @@ def triangulate_ncube(
         )
         for i in range(indices.size):
             flat.unsafe_set(i, indices.unsafe_get(i))
-        return (vertices.copy(), flat^)
+        return SimplicialMesh(vertices, flat)
     if n_dims > 2:
         raise Error("triangulate_ncube: nCube meshes with n > 2 not supported")
     var n_cubes = rows_of(indices)
@@ -199,20 +241,18 @@ def triangulate_ncube(
             iset(tris, r, 0, n_verts + c)
             iset(tris, r, 1, a)
             iset(tris, r, 2, b)
-    return (new_vertices^, tris^)
+    return SimplicialMesh(new_vertices, tris)
 
 
-def icosahedron(radius: Float64 = 1.0) raises -> Tuple[RealArray, IntArray]:
+def icosahedron(radius: Float64 = 1.0) raises -> SimplicialMesh:
     """The regular icosahedron inscribed in the sphere of radius `radius`.
-
-    Returns `(vertices, triangles)`: 12 vertices and 20 triangles, each
-    oriented with its normal pointing outward.
 
     Args:
         radius: The circumscribed sphere's radius.
 
     Returns:
-        The `12 x 3` vertices and `20 x 3` triangles.
+        The mesh: 12 vertices and 20 triangles, each oriented with its
+        normal pointing outward.
 
     Raises:
         Does not raise in practice.
@@ -263,12 +303,12 @@ def icosahedron(radius: Float64 = 1.0) raises -> Tuple[RealArray, IntArray]:
     for t in range(20):
         for k in range(3):
             iset(triangles, t, k, faces[t][k])
-    return (vertices^, triangles^)
+    return SimplicialMesh(vertices, triangles)
 
 
 def icosphere(
     subdivisions: Int, radius: Float64 = 1.0
-) raises -> Tuple[RealArray, IntArray]:
+) raises -> SimplicialMesh:
     """A triangulated sphere: a subdivided icosahedron projected onto the sphere.
 
     Each subdivision splits every triangle into four (`loop_subdivision`)
@@ -281,20 +321,17 @@ def icosphere(
         radius: The sphere's radius.
 
     Returns:
-        The vertices and triangles.
+        The mesh.
 
     Raises:
         If `subdivisions` is negative.
     """
     if subdivisions < 0:
         raise Error("icosphere: subdivisions must be >= 0")
-    var vt = icosahedron(radius)
-    var vertices = vt[0].copy()
-    var triangles = vt[1].copy()
+    var mesh = icosahedron(radius)
     for _ in range(subdivisions):
-        var sub = loop_subdivision(vertices, triangles)
-        vertices = sub[0].copy()
-        triangles = sub[1].copy()
+        mesh = loop_subdivision(mesh)
+        ref vertices = mesh.vertices
         for v in range(rows_of(vertices)):
             var r: Float64 = 0
             for k in range(3):
@@ -302,12 +339,10 @@ def icosphere(
             r = sqrt(r)
             for k in range(3):
                 fset(vertices, v, k, fget(vertices, v, k) * radius / r)
-    return (vertices^, triangles^)
+    return mesh^
 
 
-def loop_subdivision(
-    vertices: RealArray, simplices: IntArray
-) raises -> Tuple[RealArray, IntArray]:
+def loop_subdivision(mesh: SimplicialMesh) raises -> SimplicialMesh:
     """One step of Loop's subdivision connectivity on a triangle mesh.
 
     Every edge gains a midpoint vertex and every triangle becomes four.
@@ -316,16 +351,19 @@ def loop_subdivision(
     midpoint subdivision; Loop's smoothing weights are not applied.
 
     Args:
-        vertices: `num_vertices x E` coordinates.
-        simplices: `num_triangles x 3` vertex indices.
+        mesh: A triangle mesh.
 
     Returns:
         The vertices with edge midpoints appended, and the
         `4 num_triangles x 3` triangles, oriented as their parents.
 
     Raises:
-        Does not raise in practice.
+        If the mesh is not made of triangles.
     """
+    ref vertices = mesh.vertices
+    ref simplices = mesh.elements
+    if cols_of(simplices) != 3:
+        raise Error("loop_subdivision: the mesh must be made of triangles")
     var nv = rows_of(vertices)
     var nt = rows_of(simplices)
     var edge_index = Dict[Int, Int]()
@@ -373,4 +411,4 @@ def loop_subdivision(
                 + fget(vertices, edge_ends[k][1], e)
             )
             fset(new_vertices, nv + k, e, m)
-    return (new_vertices^, new_tris^)
+    return SimplicialMesh(new_vertices, new_tris)

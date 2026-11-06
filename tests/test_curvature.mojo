@@ -36,7 +36,7 @@ from mojodec.routines.quality import (
 
 def sphere(subdivisions: Int, radius: Float64) raises -> SimplicialComplex:
     var vt = icosphere(subdivisions, radius)
-    return SimplicialComplex(vt[0], vt[1])
+    return SimplicialComplex(vt)
 
 
 def total(x: nm.NDArray[f64]) -> Float64:
@@ -49,20 +49,24 @@ def total(x: nm.NDArray[f64]) -> Float64:
 def test_icosphere_shape() raises:
     for s in range(3):
         var vt = icosphere(s, 2.0)
-        assert_equal(rows_of(vt[0]), 10 * 4**s + 2)
-        assert_equal(rows_of(vt[1]), 20 * 4**s)
-        for v in range(rows_of(vt[0])):
+        assert_equal(rows_of(vt.vertices), 10 * 4**s + 2)
+        assert_equal(rows_of(vt.elements), 20 * 4**s)
+        for v in range(rows_of(vt.vertices)):
             var r: Float64 = 0
             for k in range(3):
-                r += fget(vt[0], v, k) ** 2
+                r += fget(vt.vertices, v, k) ** 2
             assert_almost_equal(sqrt(r), 2.0, atol=1e-14)
         # every triangle's normal points away from the center
-        for t in range(rows_of(vt[1])):
+        for t in range(rows_of(vt.elements)):
             var p = List[List[Float64]]()
             for c in range(3):
-                var i = iget(vt[1], t, c)
+                var i = iget(vt.elements, t, c)
                 p.append(
-                    [fget(vt[0], i, 0), fget(vt[0], i, 1), fget(vt[0], i, 2)]
+                    [
+                        fget(vt.vertices, i, 0),
+                        fget(vt.vertices, i, 1),
+                        fget(vt.vertices, i, 2),
+                    ]
                 )
             var u: List[Float64] = [
                 p[1][0] - p[0][0],
@@ -86,7 +90,7 @@ def test_icosphere_shape() raises:
 def test_euler_characteristic() raises:
     assert_equal(sphere(2, 1.0).euler_characteristic(), 2)
     var vt = simplicial_grid_2d(4)
-    assert_equal(SimplicialComplex(vt[0], vt[1]).euler_characteristic(), 1)
+    assert_equal(SimplicialComplex(vt).euler_characteristic(), 1)
     var torus = read_mesh("tests/meshes/torus_tet.xml")
     assert_equal(
         SimplicialComplex(
@@ -112,7 +116,7 @@ def test_gauss_bonnet() raises:
         assert_almost_equal(total(angle_defect(sc)), 4 * pi, atol=1e-12)
     # a square: no interior defect, pi/2 at each corner, 0 elsewhere on the edge
     var vt = simplicial_grid_2d(4)
-    var sc = SimplicialComplex(vt[0], vt[1])
+    var sc = SimplicialComplex(vt)
     var D = angle_defect(sc)
     assert_almost_equal(total(D), 2 * pi, atol=1e-12)
     var corners: List[Int] = [0, 4, 20, 24]
@@ -146,12 +150,12 @@ def test_sphere_curvatures() raises:
 def test_flat_surface_in_3d() raises:
     # a planar grid lifted into 3D: no curvature at interior vertices
     var vt = simplicial_grid_2d(4)
-    var V = nm.zeros[f64](Shape(rows_of(vt[0]), 3))
-    for v in range(rows_of(vt[0])):
-        V.unsafe_set(3 * v, fget(vt[0], v, 0))
-        V.unsafe_set(3 * v + 1, 0.5 * fget(vt[0], v, 1))
-        V.unsafe_set(3 * v + 2, 0.5 * fget(vt[0], v, 1))
-    var sc = SimplicialComplex(V, vt[1])
+    var V = nm.zeros[f64](Shape(rows_of(vt.vertices), 3))
+    for v in range(rows_of(vt.vertices)):
+        V.unsafe_set(3 * v, fget(vt.vertices, v, 0))
+        V.unsafe_set(3 * v + 1, 0.5 * fget(vt.vertices, v, 1))
+        V.unsafe_set(3 * v + 2, 0.5 * fget(vt.vertices, v, 1))
+    var sc = SimplicialComplex(V, vt.elements)
     var Hn = mean_curvature_normal(sc)
     var K = gaussian_curvature(sc)
     for v in range(rows_of(V)):
@@ -183,6 +187,19 @@ def test_quality() raises:
     assert_almost_equal(w.unsafe_get(0), 1.0 / 3.0, atol=1e-12)  # equilateral
     assert_almost_equal(w.unsafe_get(1), 0.0, atol=1e-12)  # right angle at 3
     assert_true(w.unsafe_get(2) < -0.5)  # obtuse: 157 degrees at (3, 0.2)
+    # stored circumcenters (geometry) and recomputed ones (none) agree,
+    # whatever the vertex order of the elements
+    var verts = sc.vertices().copy()
+    var flipped = nm.fromstring[DType.int]("[[2,1,0],[4,1,3],[6,5,3]]")
+    var with_geometry = well_centeredness(SimplicialComplex(verts, flipped))
+    var without = well_centeredness(
+        SimplicialComplex(verts, flipped, compute_geometry=False)
+    )
+    for t in range(3):
+        assert_almost_equal(
+            with_geometry.unsafe_get(t), w.unsafe_get(t), atol=1e-12
+        )
+        assert_almost_equal(without.unsafe_get(t), w.unsafe_get(t), atol=1e-12)
     assert_almost_equal(well_centered_fraction(sc), 1.0 / 3.0, atol=1e-15)
     assert_almost_equal(
         well_centered_fraction(sc, tol=-1e-9), 2.0 / 3.0, atol=1e-15
@@ -191,7 +208,7 @@ def test_quality() raises:
     assert_almost_equal(s.unsafe_get(0), 1.0, atol=1e-12)
     assert_true(s.unsafe_get(1) < 1)
     var vt = icosahedron()
-    var ico = SimplicialComplex(vt[0], vt[1])
+    var ico = SimplicialComplex(vt)
     assert_almost_equal(well_centered_fraction(ico), 1.0, atol=0)
     var reg = shape_regularity(ico)
     for t in range(reg.size):

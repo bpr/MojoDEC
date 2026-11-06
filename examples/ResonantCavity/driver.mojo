@@ -50,9 +50,9 @@ def main() raises:
     M = M.select(interior, interior)
 
     # eigenvalues and eigenvectors of K x = lambda M x
-    var wv = eigh_generalized(K.todense(), M.todense())
-    ref eigenvalues = wv[0]
-    ref eigenvectors = wv[1]
+    var eig = eigh_generalized(K.todense(), M.todense())
+    ref eigenvalues = eig.values
+    ref eigenvectors = eig.vectors
 
     var NUM_EIGS = 50  # number of eigenvalues to report
     var values = List[Float64]()
@@ -88,9 +88,9 @@ def main() raises:
     plt.savefig("eigenvalues.png")
 
     # plot the eigenvector 1-cochain as a vector field
-    var bd = simplex_quivers(sc, all_values)
-    var bases = bd[0].to_numpy()
-    var arrows = bd[1].to_numpy()
+    var q = simplex_quivers(sc, all_values)
+    var bases = q.bases.to_numpy()
+    var arrows = q.vectors.to_numpy()
     var V = sc.vertices().to_numpy()
     ax = plt.figure().gca()
     ax.set_title("Mode #" + String(N + 1))
@@ -103,7 +103,7 @@ def main() raises:
         "mode3.vtu",
         sc.vertices(),
         sc.simplices(),
-        cell_data=[VTKField("mode3", bd[1])],
+        cell_data=[VTKField("mode3", q.vectors)],
     )
     print("wrote mode3.vtu")
     if show:

@@ -48,17 +48,39 @@ def simplex_array_searchsorted(s: IntArray, v: IntArray) raises -> IntArray:
         raise Error("simplex_array_searchsorted: number of columns must agree")
     var ns = rows_of(s)
     var nv = rows_of(v)
+    var c = cols_of(s)
     var out = int_vector(nv)
+    # The rows with leading vertex f are rows start[f]:start[f + 1] of s, so
+    # each search covers only those (a vertex's few simplices). Skipped for
+    # negative or very large vertex labels, where the table would not fit.
+    var start = List[Int]()
+    var first = Int(s.unsafe_get(0)) if ns > 0 and c > 0 else -1
+    var last = Int(s.unsafe_get((ns - 1) * c)) if ns > 0 and c > 0 else -1
+    if last > 4 * ns + 1024:
+        first = -1
+    if first >= 0:
+        start = List[Int](length=last + 2, fill=0)
+        for r in range(ns):
+            start[Int(s.unsafe_get(r * c)) + 1] += 1
+        for f in range(last + 1):
+            start[f + 1] += start[f]
     for i in range(nv):
         var lo = 0
         var hi = ns
+        if first >= 0:
+            var f = Int(v.unsafe_get(i * c))
+            if f < 0 or f > last:
+                raise Error("simplex_array_searchsorted: simplex not found")
+            lo = start.unsafe_get(f)
+            hi = start.unsafe_get(f + 1)
+        var end = hi
         while lo < hi:
             var mid = (lo + hi) // 2
             if compare_rows(s, mid, v, i) < 0:
                 lo = mid + 1
             else:
                 hi = mid
-        if lo >= ns or compare_rows(s, lo, v, i) != 0:
+        if lo >= end or compare_rows(s, lo, v, i) != 0:
             raise Error("simplex_array_searchsorted: simplex not found")
         out.unsafe_set(i, Scalar[DType.int](lo))
     return out^
@@ -98,9 +120,29 @@ def simplex_array_parity(s: IntArray) raises -> IntArray:
     return out^
 
 
+struct FacesAndBoundary(Copyable, Movable):
+    """The faces of an array of simplices or cubes, and its boundary
+    operator."""
+
+    var faces: IntArray
+    """The unique faces, one per row."""
+    var boundary: CSRMatrix
+    """The `num_faces x num_cells` boundary operator."""
+
+    def __init__(out self, var faces: IntArray, var boundary: CSRMatrix):
+        """A result from its parts.
+
+        Args:
+            faces: The faces.
+            boundary: The boundary operator.
+        """
+        self.faces = faces^
+        self.boundary = boundary^
+
+
 def simplex_array_boundary(
     s: IntArray, parity: IntArray
-) raises -> Tuple[IntArray, CSRMatrix]:
+) raises -> FacesAndBoundary:
     """Boundary faces and boundary operator of an array of sorted simplices.
 
     `s` must have sorted rows; `parity` gives each simplex's orientation
@@ -170,4 +212,4 @@ def simplex_array_boundary(
     var B = CSRMatrix.from_coo(
         len(unique_rows), num_simplices, rows, cols, vals
     )
-    return (unique_faces^, B^)
+    return FacesAndBoundary(unique_faces^, B^)

@@ -61,10 +61,10 @@ def test_gradients() raises:
 def test_massmatrix_rowcols() raises:
     var sc = SimplicialComplex(R("[[0,0],[1,0],[0,1]]"), I("[[0,1,2]]"))
     var rc = massmatrix_rowcols(sc, 0)
-    assert_equal(rc[0], [0, 0, 0, 1, 1, 1, 2, 2, 2])
-    assert_equal(rc[1], [0, 1, 2, 0, 1, 2, 0, 1, 2])
+    assert_equal(rc.rows, [0, 0, 0, 1, 1, 1, 2, 2, 2])
+    assert_equal(rc.cols, [0, 1, 2, 0, 1, 2, 0, 1, 2])
     rc = massmatrix_rowcols(sc, 2)
-    assert_equal(rc[0], [0])
+    assert_equal(rc.rows, [0])
 
 
 def check_whitney(
@@ -247,6 +247,40 @@ def test_cube_innerproduct() raises:
                     expected.unsafe_get(off) + local.unsafe_get(i * 4 + j) / 6,
                 )
     assert_close(K, expected)
+
+
+def test_whitney_extreme_degrees() raises:
+    # a p-simplex in R^p: the Whitney p-form is 1/volume on it, and the
+    # 0-forms are the barycentric coordinates, with mass
+    # volume (1 + delta_ij) / ((p + 1)(p + 2)); p = 4 takes the eliminated
+    # 4 x 4 determinants
+    for p in range(1, 5):
+        var v = List[List[Float64]]()
+        v.append(List[Float64](length=p, fill=0))
+        for i in range(p):
+            var row = List[Float64](length=p, fill=0)
+            row[i] = Float64(i + 1)
+            # shear so that the edges are not orthogonal
+            if i > 0:
+                row[0] = 0.5
+            v.append(row^)
+        var vs = String("[")
+        for i in range(p + 1):
+            vs += String(v[i]) + ("," if i < p else "]")
+        var s = String("[")
+        for i in range(p + 1):
+            s += String(i) + ("," if i < p else "]]")
+        var sc = SimplicialComplex(R(vs), I("[" + s))
+        var vol = abs(sc[p].primal_volume.unsafe_get(0))
+        var top = whitney_innerproduct(sc, p).todense()
+        assert_almost_equal(top.unsafe_get(0) * vol, 1.0, atol=1e-13)
+        var M0 = whitney_innerproduct(sc, 0).todense()
+        for i in range(p + 1):
+            for j in range(p + 1):
+                var expected = (
+                    vol * Float64(1 + Int(i == j)) / Float64((p + 1) * (p + 2))
+                )
+                assert_almost_equal(fget(M0, i, j), expected, atol=1e-14 * vol)
 
 
 def test_whitney_needs_geometry() raises:

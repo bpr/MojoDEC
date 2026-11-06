@@ -8,11 +8,11 @@ VTK files (`mojodec.routines.io.vtk`).
 Writers for VTK's XML unstructured-grid format (`.vtu`), which ParaView and
 VisIt open. Not in PyDEC.
 
-`format` chooses how the data arrays are stored:
+`format` (a `VTKFormat`) chooses how the data arrays are stored:
 
-- `"ascii"` (the default): readable text.
-- `"binary"`: base64 inside the XML, so the file is still valid XML.
-- `"appended"`: raw bytes after the XML; the smallest and fastest to read.
+- `.ASCII` (the default): readable text.
+- `.BINARY`: base64 inside the XML, so the file is still valid XML.
+- `.APPENDED`: raw bytes after the XML; the smallest and fastest to read.
 
 Binary values are little-endian Float64, Int64, and UInt8, each array
 preceded by its byte count as a UInt64, as VTK's `header_type="UInt64"`
@@ -33,18 +33,63 @@ write_vtu(
     sc[1].simplices,
     point_data=[VTKField("x", x)],
     cell_data=[VTKField("h", h)],
-    format="appended",
+    format=.APPENDED,
 )
 ```
 """
 
 from std.base64 import b64encode
-from std.memory import bitcast
 from std.sys import size_of
 
 from mojodec.core.regular_cube_complex import RegularCubeComplex
 from mojodec.core.utils import IntArray, RealArray, cols_of, int_array, rows_of
 from mojodec.routines.cube_array import cube_array_search
+from mojodec.routines.io.scan import append_le
+
+
+struct VTKFormat(Equatable, ImplicitlyCopyable, Writable):
+    """How `write_vtu` and `write_vtu_cubes` store the data arrays."""
+
+    var _code: UInt8
+
+    comptime ASCII = VTKFormat(0)
+    """Readable text."""
+    comptime BINARY = VTKFormat(1)
+    """Base64 inside the XML."""
+    comptime APPENDED = VTKFormat(2)
+    """Raw bytes after the XML."""
+
+    def __init__(out self, code: UInt8):
+        """A format from its code; use the named members instead.
+
+        Args:
+            code: 0, 1, or 2.
+        """
+        self._code = code
+
+    def __eq__(self, other: Self) -> Bool:
+        """Whether two formats are the same.
+
+        Args:
+            other: The other format.
+
+        Returns:
+            True if they are equal.
+        """
+        return self._code == other._code
+
+    def write_to(self, mut writer: Some[Writer]):
+        """Write the name VTK uses in a `DataArray`'s `format` attribute.
+
+        Args:
+            writer: The destination.
+        """
+        if self == Self.ASCII:
+            writer.write("ascii")
+        elif self == Self.BINARY:
+            writer.write("binary")
+        else:
+            writer.write("appended")
 
 
 struct VTKField(Copyable, Movable):
@@ -73,7 +118,7 @@ def write_vtu(
     cells: IntArray,
     point_data: List[VTKField] = [],
     cell_data: List[VTKField] = [],
-    format: String = "ascii",
+    format: VTKFormat = .ASCII,
 ) raises:
     """Write a simplicial mesh, with optional data, as a VTK `.vtu` file.
 
@@ -87,12 +132,12 @@ def write_vtu(
         cells: The simplices, one row of `k + 1` vertex indices each.
         point_data: Fields with one row per vertex.
         cell_data: Fields with one row per cell.
-        format: `ascii`, `binary` (base64), or `appended` (raw bytes).
+        format: `ASCII`, `BINARY` (base64), or `APPENDED` (raw bytes).
 
     Raises:
         If `cells` is not 2-D, has more than 4 columns, or uses a vertex
         index out of range; `vertices` is not 2-D with at most 3 columns;
-        `format` is unknown; a field has more than 3 columns or the wrong
+        a field has more than 3 columns or the wrong
         number of rows; or the file cannot be written.
     """
     if cells.ndim != 2:
@@ -125,7 +170,7 @@ def write_vtu_cubes(
     k: Int,
     point_data: List[VTKField] = [],
     cell_data: List[VTKField] = [],
-    format: String = "ascii",
+    format: VTKFormat = .ASCII,
 ) raises:
     """Write the k-cubes of a regular cube complex as a VTK `.vtu` file.
 
@@ -140,11 +185,11 @@ def write_vtu_cubes(
         k: The dimension of the cubes to write, `0 <= k <= min(N, 3)`.
         point_data: Fields with one row per vertex.
         cell_data: Fields with one row per k-cube.
-        format: `ascii`, `binary` (base64), or `appended` (raw bytes).
+        format: `ASCII`, `BINARY` (base64), or `APPENDED` (raw bytes).
 
     Raises:
         If `k` is out of range; the complex has dimension above 3 (its
-        vertices have too many coordinates); `format` is unknown; a field
+        vertices have too many coordinates); a field
         has more than 3 columns or the wrong number of rows; or the file
         cannot be written.
     """
@@ -200,14 +245,8 @@ def _write(
     cell_type: Int,
     point_data: List[VTKField],
     cell_data: List[VTKField],
-    format: String,
+    format: VTKFormat,
 ) raises:
-    if format != "ascii" and format != "binary" and format != "appended":
-        raise Error(
-            "write_vtu: unknown format ["
-            + format
-            + "]; expected ascii, binary, or appended"
-        )
     if vertices.ndim != 2 or cols_of(vertices) > 3:
         raise Error("write_vtu: vertices must be N x E with E <= 3")
     var num_points = rows_of(vertices)
@@ -240,7 +279,7 @@ def _write(
     enc.xml += "</Cells>\n</Piece>\n</UnstructuredGrid>\n"
     with open(path, "w") as f:
         f.write(enc.xml)
-        if format == "appended":
+        if format == VTKFormat.APPENDED:
             f.write('<AppendedData encoding="raw">\n_')
             f.write_bytes(Span(enc.appended))
             f.write("\n</AppendedData>\n")
@@ -255,10 +294,10 @@ struct _Encoder(Movable):
     """
 
     var xml: String
-    var format: String
+    var format: VTKFormat
     var appended: List[Byte]
 
-    def __init__(out self, format: String):
+    def __init__(out self, format: VTKFormat):
         self.xml = String()
         self.format = format
         self.appended = List[Byte]()
@@ -275,10 +314,10 @@ struct _Encoder(Movable):
                 var x: Float64 = 0
                 if c < cols:
                     x = values.unsafe_get(r * cols + c)
-                if self.format == "ascii":
+                if self.format == VTKFormat.ASCII:
                     self.xml.write(x, "\n" if c == components - 1 else " ")
                 else:
-                    _append_le(block, bitcast[DType.uint64](x), 8)
+                    append_le(block, x)
         self._close(block^)
 
     def ints[
@@ -289,12 +328,12 @@ struct _Encoder(Movable):
         self._open(_vtk_type[dtype](), name, 1)
         var block = _block(size * len(values))
         for i in range(len(values)):
-            if self.format == "ascii":
+            if self.format == VTKFormat.ASCII:
                 self.xml.write(
                     values[i], "\n" if (i + 1) % per_line == 0 else " "
                 )
             else:
-                _append_le(block, UInt64(Int64(values[i])), size)
+                append_le(block, Scalar[dtype](values[i]))
         self._close(block^)
 
     def _open(mut self, type_name: String, name: String, components: Int):
@@ -304,17 +343,17 @@ struct _Encoder(Movable):
         self.xml.write(
             ' NumberOfComponents="', components, '" format="', self.format, '"'
         )
-        if self.format == "appended":
+        if self.format == VTKFormat.APPENDED:
             self.xml.write(' offset="', len(self.appended), '"')
         self.xml += ">\n"
 
     def _close(mut self, var block: List[Byte]):
-        if self.format != "ascii":
+        if self.format != VTKFormat.ASCII:
             # the UInt64 byte count that heads every block
             var count = UInt64(len(block) - 8)
             for b in range(8):
                 block[b] = Byte((count >> UInt64(8 * b)) & 0xFF)
-            if self.format == "binary":
+            if self.format == VTKFormat.BINARY:
                 # b64encode overwrites its result, so encode separately
                 var encoded = String()
                 b64encode(Span(block), encoded)
@@ -357,11 +396,6 @@ def _block(data_bytes: Int) -> List[Byte]:
     for _ in range(8):
         block.append(0)
     return block^
-
-
-def _append_le(mut out: List[Byte], u: UInt64, size: Int):
-    for b in range(size):
-        out.append(Byte((u >> UInt64(8 * b)) & 0xFF))
 
 
 def _vtk_type[dtype: DType]() -> String:

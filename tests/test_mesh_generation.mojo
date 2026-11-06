@@ -23,15 +23,15 @@ from mojodec.routines.mesh_generation import (
 
 def test_simplicial_grid_2d() raises:
     var vi = simplicial_grid_2d(4)
-    assert_equal(rows_of(vi[0]), 25)
-    assert_equal(rows_of(vi[1]), 32)
+    assert_equal(rows_of(vi.vertices), 25)
+    assert_equal(rows_of(vi.elements), 32)
     var total: Float64 = 0
-    for t in range(rows_of(vi[1])):
-        var v = signed_volume(take_rows(vi[0], row_list(vi[1], t)))
+    for t in range(rows_of(vi.elements)):
+        var v = signed_volume(take_rows(vi.vertices, row_list(vi.elements, t)))
         assert_true(v > 0)
         total += v
     assert_almost_equal(total, 1.0)
-    var sc = SimplicialComplex(vi[0], vi[1])
+    var sc = SimplicialComplex(vi)
     assert_equal(sc[1].num_simplices, 25 + 32 - 1)
 
 
@@ -39,20 +39,20 @@ def test_cube_grid() raises:
     var vi = cube_grid([2, 1])
     var V = nm.fromstring[f64]("[[0,0],[1,0],[2,0],[0,1],[1,1],[2,1]]")
     for i in range(V.size):
-        assert_equal(vi[0].unsafe_get(i), V.unsafe_get(i))
+        assert_equal(vi.vertices.unsafe_get(i), V.unsafe_get(i))
     var expected: List[Int] = [0, 3, 1, 4, 1, 4, 2, 5]
-    assert_equal(vi[1].ndim, 3)
+    assert_equal(vi.corners.ndim, 3)
     for i in range(8):
-        assert_equal(Int(vi[1].unsafe_get(i)), expected[i])
+        assert_equal(Int(vi.corners.unsafe_get(i)), expected[i])
 
 
 def test_triangulate_ncube() raises:
     var vi = cube_grid([3, 2])
-    var tv = triangulate_ncube(vi[0], vi[1])
-    assert_equal(rows_of(tv[1]), 4 * 6)
+    var tv = triangulate_ncube(vi)
+    assert_equal(rows_of(tv.elements), 4 * 6)
     var total: Float64 = 0
-    for t in range(rows_of(tv[1])):
-        var v = signed_volume(take_rows(tv[0], row_list(tv[1], t)))
+    for t in range(rows_of(tv.elements)):
+        var v = signed_volume(take_rows(tv.vertices, row_list(tv.elements, t)))
         assert_true(v > 0)
         total += v
     assert_almost_equal(total, 6.0)
@@ -60,12 +60,14 @@ def test_triangulate_ncube() raises:
 
 def test_loop_subdivision() raises:
     var vi = simplicial_grid_2d(2)
-    var sub = loop_subdivision(vi[0], vi[1])
-    assert_equal(rows_of(sub[1]), 4 * rows_of(vi[1]))
-    assert_equal(rows_of(sub[0]), 9 + 16)
+    var sub = loop_subdivision(vi)
+    assert_equal(rows_of(sub.elements), 4 * rows_of(vi.elements))
+    assert_equal(rows_of(sub.vertices), 9 + 16)
     var total: Float64 = 0
-    for t in range(rows_of(sub[1])):
-        total += signed_volume(take_rows(sub[0], row_list(sub[1], t)))
+    for t in range(rows_of(sub.elements)):
+        total += signed_volume(
+            take_rows(sub.vertices, row_list(sub.elements, t))
+        )
     assert_almost_equal(total, 1.0)
 
 

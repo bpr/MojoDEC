@@ -20,7 +20,7 @@ def main() raises:
     for i in range(elements.size):
         elements.unsafe_set(i, elements.unsafe_get(i) - 1)
     var mymesh = SimplicialMesh(vertices, elements)
-    write_mesh("square_8.xml", mymesh, format="basic")
+    write_mesh("square_8.xml", mymesh, format=.BASIC)
     var rmesh = read_mesh("square_8.xml")
     print(rmesh)
     var same = True

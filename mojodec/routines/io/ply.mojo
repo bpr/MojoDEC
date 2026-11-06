@@ -16,19 +16,63 @@ the `face` element, skipping every other property and element. Polygons
 with more than three vertices are split into fans of triangles.
 """
 
-from std.memory import bitcast
+from std.sys import size_of
+
+import numojo as nm
+from numojo.prelude import *
 
 from mojodec.core.mesh import SimplicialMesh
 from mojodec.core.utils import (
     IntArray,
     RealArray,
     cols_of,
-    fget,
-    iget,
     int_array,
     real_array,
     rows_of,
 )
+from mojodec.routines.io.scan import (
+    ByteReader,
+    append_le,
+    native_little_endian,
+)
+
+
+struct PlyFormat(Equatable, ImplicitlyCopyable, Writable):
+    """How `write_ply` stores the mesh."""
+
+    var _code: UInt8
+
+    comptime ASCII = PlyFormat(0)
+    """Readable text."""
+    comptime BINARY = PlyFormat(1)
+    """`binary_little_endian`."""
+
+    def __init__(out self, code: UInt8):
+        """A format from its code; use the named members instead.
+
+        Args:
+            code: 0 or 1.
+        """
+        self._code = code
+
+    def __eq__(self, other: Self) -> Bool:
+        """Whether two formats are the same.
+
+        Args:
+            other: The other format.
+
+        Returns:
+            True if they are equal.
+        """
+        return self._code == other._code
+
+    def write_to(self, mut writer: Some[Writer]):
+        """Write the name used in the PLY header.
+
+        Args:
+            writer: The destination.
+        """
+        writer.write("ascii" if self == Self.ASCII else "binary_little_endian")
 
 
 def read_ply(path: String) raises -> SimplicialMesh:
@@ -58,32 +102,33 @@ def read_ply(path: String) raises -> SimplicialMesh:
         vertices or an out-of-range index; or `SimplicialMesh` rejects
         the result.
     """
-    var data: List[Byte]
-    with open(path, "r") as f:
-        data = f.read_bytes()
-    var header = _Header(data)
-    var body = _Body(data, header.data_start, header.format)
+    var reader = ByteReader.open(path, "read_ply")
+    var header = _Header(reader.data)
+    reader.pos = header.data_start
+    reader.big_endian = header.format == _BIG_ENDIAN
+    var ascii = header.format == _ASCII
     var vertices = real_array(0, 1)
     var triangles = List[Int]()
     var have_faces = False
     for ref element in header.elements:
         if element.name == "vertex":
-            vertices = _read_vertices(body, element)
+            vertices = _read_vertices(reader, ascii, element)
         elif element.name == "face":
-            _read_faces(body, element, triangles)
+            _read_faces(reader, ascii, element, triangles)
             have_faces = True
         else:
             for _ in range(element.count):
                 for ref prop in element.properties:
-                    _ = body.property(prop)
+                    _skip(reader, ascii, prop)
     if rows_of(vertices) == 0:
         raise Error("read_ply: no vertex element in " + path)
     if not have_faces:
         raise Error("read_ply: no face element in " + path)
     var elements = int_array(len(triangles) // 3, 3)
+    var nv = rows_of(vertices)
     for i in range(len(triangles)):
-        var v = triangles[i]
-        if v < 0 or v >= rows_of(vertices):
+        var v = triangles.unsafe_get(i)
+        if v < 0 or v >= nv:
             raise Error("read_ply: face vertex index out of range")
         elements.unsafe_set(i, Scalar[DType.int](v))
     return SimplicialMesh(vertices, elements)
@@ -93,26 +138,24 @@ def write_ply(
     path: String,
     vertices: RealArray,
     triangles: IntArray,
-    format: String = "ascii",
+    format: PlyFormat = .ASCII,
 ) raises:
-    """Write a triangle mesh as a PLY file, `format` `"ascii"` or `"binary"`.
+    """Write a triangle mesh as a PLY file.
 
     Coordinates are written as doubles; 2D vertices get `z = 0`, which
-    most programs expect. `"binary"` is `binary_little_endian`. Faces are
-    a `uchar` count and `int` (32-bit) indices.
+    most programs expect. Faces are a `uchar` count and `int` (32-bit)
+    indices.
 
     Args:
         path: The file to write; an existing file is replaced.
         vertices: Vertex coordinates, `N x 2` or `N x 3`.
         triangles: The triangles, `M x 3` vertex indices.
-        format: `ascii` or `binary`.
+        format: `ASCII` or `BINARY` (`binary_little_endian`).
 
     Raises:
-        If `format` is unknown, `vertices` is not `N x 2` or `N x 3`,
-        `triangles` is not `M x 3`, or the file cannot be written.
+        If `vertices` is not `N x 2` or `N x 3`, `triangles` is not
+        `M x 3`, or the file cannot be written.
     """
-    if format != "ascii" and format != "binary":
-        raise Error("write_ply: unknown format [" + format + "]")
     if vertices.ndim != 2 or cols_of(vertices) < 2 or cols_of(vertices) > 3:
         raise Error("write_ply: vertices must be N x 2 or N x 3")
     if triangles.ndim != 2 or cols_of(triangles) != 3:
@@ -122,7 +165,7 @@ def write_ply(
     var E = cols_of(vertices)
     var header = String(
         "ply\nformat ",
-        "ascii" if format == "ascii" else "binary_little_endian",
+        format,
         " 1.0\ncomment written by MojoDEC\nelement vertex ",
         nv,
         "\nproperty double x\nproperty double y\nproperty double z\n",
@@ -132,20 +175,22 @@ def write_ply(
     )
     with open(path, "w") as f:
         f.write(header)
-        if format == "ascii":
+        if format == PlyFormat.ASCII:
             var text = String()
             for v in range(nv):
                 for k in range(3):
-                    var x: Float64 = fget(vertices, v, k) if k < E else 0.0
+                    var x: Float64 = (
+                        vertices.unsafe_get(v * E + k) if k < E else 0.0
+                    )
                     text.write(x, "\n" if k == 2 else " ")
             for t in range(nt):
                 text.write(
                     "3 ",
-                    iget(triangles, t, 0),
+                    triangles.unsafe_get(3 * t),
                     " ",
-                    iget(triangles, t, 1),
+                    triangles.unsafe_get(3 * t + 1),
                     " ",
-                    iget(triangles, t, 2),
+                    triangles.unsafe_get(3 * t + 2),
                     "\n",
                 )
             f.write(text)
@@ -153,33 +198,49 @@ def write_ply(
             var bytes = List[Byte](capacity=24 * nv + 13 * nt)
             for v in range(nv):
                 for k in range(3):
-                    var x: Float64 = fget(vertices, v, k) if k < E else 0.0
-                    _put_le(bytes, bitcast[DType.uint64](x), 8)
+                    var x: Float64 = (
+                        vertices.unsafe_get(v * E + k) if k < E else 0.0
+                    )
+                    append_le(bytes, x)
             for t in range(nt):
                 bytes.append(3)
                 for k in range(3):
-                    _put_le(
-                        bytes,
-                        UInt64(
-                            bitcast[DType.uint32](Int32(iget(triangles, t, k)))
-                        ),
-                        4,
-                    )
+                    append_le(bytes, Int32(triangles.unsafe_get(3 * t + k)))
             f.write_bytes(Span(bytes))
+
+
+# ===----------------------------------------------------------------------=== #
+# Header
+# ===----------------------------------------------------------------------=== #
+
+comptime _ASCII = 0
+comptime _LITTLE_ENDIAN = 1
+comptime _BIG_ENDIAN = 2
+
+# scalar property types
+comptime _INT8 = 0
+comptime _UINT8 = 1
+comptime _INT16 = 2
+comptime _UINT16 = 3
+comptime _INT32 = 4
+comptime _UINT32 = 5
+comptime _FLOAT32 = 6
+comptime _FLOAT64 = 7
 
 
 struct _Property(Copyable, Movable):
     var name: String
-    var type: String
+    var type: Int
+    """A scalar type code; the item type of a list."""
     var is_list: Bool
-    var count_type: String
+    var count_type: Int
 
     def __init__(
         out self,
         name: String,
-        type: String,
+        type: Int,
         is_list: Bool = False,
-        count_type: String = "",
+        count_type: Int = _UINT8,
     ):
         self.name = name
         self.type = type
@@ -199,7 +260,7 @@ struct _Element(Copyable, Movable):
 
 
 struct _Header(Movable):
-    var format: String
+    var format: Int
     var elements: List[_Element]
     var data_start: Int
 
@@ -213,7 +274,7 @@ struct _Header(Movable):
             start += 1
         self.data_start = start + 1
         var text = String(unsafe_from_utf8=Span(data)[:end])
-        self.format = ""
+        var format = String()
         self.elements = List[_Element]()
         for line in text.splitlines():
             var words = line.split()
@@ -221,7 +282,7 @@ struct _Header(Movable):
                 continue
             var key = words[0]
             if key == "format":
-                self.format = String(words[1])
+                format = String(words[1])
             elif key == "element":
                 self.elements.append(_Element(String(words[1]), atol(words[2])))
             elif key == "property":
@@ -231,75 +292,106 @@ struct _Header(Movable):
                     self.elements[len(self.elements) - 1].properties.append(
                         _Property(
                             String(words[4]),
-                            _type_name(String(words[3])),
+                            _type_code(String(words[3])),
                             True,
-                            _type_name(String(words[2])),
+                            _type_code(String(words[2])),
                         )
                     )
                 else:
                     self.elements[len(self.elements) - 1].properties.append(
                         _Property(
-                            String(words[2]), _type_name(String(words[1]))
+                            String(words[2]), _type_code(String(words[1]))
                         )
                     )
-        if (
-            self.format != "ascii"
-            and self.format != "binary_little_endian"
-            and self.format != "binary_big_endian"
-        ):
-            raise Error("read_ply: unsupported format [" + self.format + "]")
-
-
-struct _Body(Movable):
-    """A cursor over the data: whitespace-separated tokens or raw bytes."""
-
-    var data: List[Byte]
-    var pos: Int
-    var ascii: Bool
-    var big_endian: Bool
-    var tokens: List[String]
-
-    def __init__(out self, data: List[Byte], start: Int, format: String):
-        self.data = data.copy()
-        self.ascii = format == "ascii"
-        self.big_endian = format == "binary_big_endian"
-        self.tokens = List[String]()
-        self.pos = start
-        if self.ascii:
-            var text = String(unsafe_from_utf8=Span(data)[start:])
-            for word in text.split():
-                self.tokens.append(String(word))
-            self.pos = 0
-
-    def scalar(mut self, type: String) raises -> Float64:
-        if self.ascii:
-            if self.pos >= len(self.tokens):
-                raise Error("read_ply: file ends early")
-            self.pos += 1
-            return atof(self.tokens[self.pos - 1])
-        var size = _type_size(type)
-        if self.pos + size > len(self.data):
-            raise Error("read_ply: file ends early")
-        var u: UInt64 = 0
-        for b in range(size):
-            var shift = 8 * (size - 1 - b) if self.big_endian else 8 * b
-            u |= UInt64(self.data[self.pos + b]) << UInt64(shift)
-        self.pos += size
-        return _decode(type, u)
-
-    def property(mut self, prop: _Property) raises -> List[Float64]:
-        """One property's value, or all of a list property's items."""
-        var out = List[Float64]()
-        if prop.is_list:
-            var n = Int(self.scalar(prop.count_type))
-            for _ in range(n):
-                out.append(self.scalar(prop.type))
+        if format == "ascii":
+            self.format = _ASCII
+        elif format == "binary_little_endian":
+            self.format = _LITTLE_ENDIAN
+        elif format == "binary_big_endian":
+            self.format = _BIG_ENDIAN
         else:
-            out.append(self.scalar(prop.type))
-        return out^
+            raise Error("read_ply: unsupported format [" + format + "]")
 
 
-def _read_vertices(mut body: _Body, element: _Element) raises -> RealArray:
+def _type_code(t: String) raises -> Int:
+    """The code of a PLY scalar type name."""
+    if t == "char" or t == "int8":
+        return _INT8
+    if t == "uchar" or t == "uint8":
+        return _UINT8
+    if t == "short" or t == "int16":
+        return _INT16
+    if t == "ushort" or t == "uint16":
+        return _UINT16
+    if t == "int" or t == "int32":
+        return _INT32
+    if t == "uint" or t == "uint32":
+        return _UINT32
+    if t == "float" or t == "float32":
+        return _FLOAT32
+    if t == "double" or t == "float64":
+        return _FLOAT64
+    raise Error("read_ply: unknown property type [" + t + "]")
+
+
+def _type_size(t: Int) -> Int:
+    if t == _FLOAT64:
+        return 8
+    if t >= _INT32:
+        return 4
+    if t >= _INT16:
+        return 2
+    return 1
+
+
+# ===----------------------------------------------------------------------=== #
+# Data
+# ===----------------------------------------------------------------------=== #
+
+
+def _real(mut r: ByteReader, ascii: Bool, t: Int) raises -> Float64:
+    """One scalar of type `t`."""
+    if ascii:
+        return r.float_()
+    if t == _FLOAT64:
+        return r.binary[DType.float64]()
+    if t == _FLOAT32:
+        return Float64(r.binary[DType.float32]())
+    return Float64(_int(r, ascii, t))
+
+
+def _int(mut r: ByteReader, ascii: Bool, t: Int) raises -> Int:
+    """One scalar of integer type `t` (floats are truncated)."""
+    if ascii:
+        return Int(r.number[DType.int]())
+    if t == _UINT8:
+        return Int(r.binary[DType.uint8]())
+    if t == _INT32:
+        return Int(r.binary[DType.int32]())
+    if t == _UINT32:
+        return Int(r.binary[DType.uint32]())
+    if t == _INT8:
+        return Int(r.binary[DType.int8]())
+    if t == _INT16:
+        return Int(r.binary[DType.int16]())
+    if t == _UINT16:
+        return Int(r.binary[DType.uint16]())
+    return Int(_real(r, ascii, t))
+
+
+def _skip(mut r: ByteReader, ascii: Bool, prop: _Property) raises:
+    """Move past one property's value, or all of a list's items."""
+    var n = _int(r, ascii, prop.count_type) if prop.is_list else 1
+    if ascii:
+        for _ in range(n):
+            _ = r.float_()
+    else:
+        r.skip(n * _type_size(prop.type))
+
+
+def _read_vertices(
+    mut r: ByteReader, ascii: Bool, element: _Element
+) raises -> RealArray:
     var axes = List[Int]()  # property position of x, y, z
     for name in ["x", "y", "z"]:
         for i in range(len(element.properties)):
@@ -307,19 +399,51 @@ def _read_vertices(mut body: _Body, element: _Element) raises -> RealArray:
                 axes.append(i)
     if len(axes) < 2:
         raise Error("read_ply: vertices need at least x and y properties")
-    var vertices = real_array(element.count, len(axes))
-    var values = List[Float64](length=len(element.properties), fill=0.0)
-    for v in range(element.count):
+    var n = element.count
+    var cols = len(axes)
+    # a vertex takes at least one byte: check before allocating
+    r.require(n)
+    # the common binary layouts: exactly x, y, z of one type, in the
+    # machine's byte order
+    var plain = not ascii and len(element.properties) == cols
+    for k in range(cols):
+        ref prop = element.properties[k]
+        plain = plain and axes[k] == k and not prop.is_list
+        plain = plain and prop.type == element.properties[0].type
+    plain = plain and r.big_endian != native_little_endian()
+    if plain and element.properties[0].type == _FLOAT64:
+        var vertices = real_array(n, cols)
+        r.binary_into(vertices, 0, n * cols)
+        return vertices^
+    if plain and element.properties[0].type == _FLOAT32:
+        var block = nm.zeros[DType.float32](Shape(n * cols))
+        r.binary_into(block, 0, n * cols)
+        var vertices = real_array(n, cols)
+        for i in range(n * cols):
+            vertices.unsafe_set(i, Float64(block.unsafe_get(i)))
+        return vertices^
+    # the column of each property, or -1
+    var column = List[Int](length=len(element.properties), fill=-1)
+    for k in range(cols):
+        column[axes[k]] = k
+    var vertices = real_array(n, cols)
+    for v in range(n):
         for i in range(len(element.properties)):
-            var x = body.property(element.properties[i])
-            values[i] = x[0] if len(x) > 0 else 0.0
-        for k in range(len(axes)):
-            vertices.unsafe_set(v * len(axes) + k, values[axes[k]])
+            ref prop = element.properties[i]
+            if prop.is_list or column[i] < 0:
+                _skip(r, ascii, prop)
+            else:
+                vertices.unsafe_set(
+                    v * cols + column[i], _real(r, ascii, prop.type)
+                )
     return vertices^
 
 
 def _read_faces(
-    mut body: _Body, element: _Element, mut triangles: List[Int]
+    mut r: ByteReader,
+    ascii: Bool,
+    element: _Element,
+    mut triangles: List[Int],
 ) raises:
     var index = -1
     for i in range(len(element.properties)):
@@ -330,68 +454,26 @@ def _read_faces(
             index = i
     if index < 0:
         raise Error("read_ply: faces need a vertex_indices list property")
+    r.require(element.count)
+    triangles.reserve(len(triangles) + 3 * element.count)
     for _ in range(element.count):
         for i in range(len(element.properties)):
-            var x = body.property(element.properties[i])
+            ref prop = element.properties[i]
             if i != index:
+                _skip(r, ascii, prop)
                 continue
-            if len(x) < 3:
+            var n = _int(r, ascii, prop.count_type)
+            if n < 3:
                 raise Error("read_ply: a face has fewer than 3 vertices")
             # a fan of triangles around the first vertex
-            for j in range(1, len(x) - 1):
-                triangles.append(Int(x[0]))
-                triangles.append(Int(x[j]))
-                triangles.append(Int(x[j + 1]))
-
-
-def _type_name(t: String) raises -> String:
-    """The canonical name of a PLY scalar type."""
-    if t == "char" or t == "int8":
-        return "int8"
-    if t == "uchar" or t == "uint8":
-        return "uint8"
-    if t == "short" or t == "int16":
-        return "int16"
-    if t == "ushort" or t == "uint16":
-        return "uint16"
-    if t == "int" or t == "int32":
-        return "int32"
-    if t == "uint" or t == "uint32":
-        return "uint32"
-    if t == "float" or t == "float32":
-        return "float32"
-    if t == "double" or t == "float64":
-        return "float64"
-    raise Error("read_ply: unknown property type [" + t + "]")
-
-
-def _type_size(t: String) -> Int:
-    if t == "float64":
-        return 8
-    if t == "int32" or t == "uint32" or t == "float32":
-        return 4
-    if t == "int16" or t == "uint16":
-        return 2
-    return 1
-
-
-def _decode(t: String, u: UInt64) -> Float64:
-    if t == "float64":
-        return bitcast[DType.float64](u)
-    if t == "float32":
-        return Float64(bitcast[DType.float32](UInt32(u)))
-    if t == "int32":
-        return Float64(bitcast[DType.int32](UInt32(u)))
-    if t == "int16":
-        return Float64(bitcast[DType.int16](UInt16(u)))
-    if t == "int8":
-        return Float64(bitcast[DType.int8](UInt8(u)))
-    return Float64(u)
-
-
-def _put_le(mut out: List[Byte], u: UInt64, size: Int):
-    for b in range(size):
-        out.append(Byte((u >> UInt64(8 * b)) & 0xFF))
+            var first = _int(r, ascii, prop.type)
+            var prev = _int(r, ascii, prop.type)
+            for _ in range(2, n):
+                var v = _int(r, ascii, prop.type)
+                triangles.append(first)
+                triangles.append(prev)
+                triangles.append(v)
+                prev = v
 
 
 def _find(data: List[Byte], word: String) -> Int:
