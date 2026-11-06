@@ -23,13 +23,27 @@ var f = L @ u                      # TypedCochain[2, 0, PRIMAL]
 ```
 
 The degree and primality are compile-time parameters, so the complex
-dimension `n` must be one too: `TypedComplex[n]` checks it when built. The
-untyped core remains available through `complex()`, `untyped()`, `.mat`,
-and `.diag`.
+dimension `n` must be one too: `TypedComplex[n]` checks it when built. For
+a mesh whose dimension is known only at run time, such as one read from a
+file, `visit_typed` calls a `TypedComplexVisitor` with the `TypedComplex`
+of the right dimension:
+
+```mojo
+struct Report(TypedComplexVisitor):
+    def visit[n: Int](mut self, tc: TypedComplex[n]) raises:
+        print(n, tc.num_cells[n, PRIMAL]())
+
+var r = Report()
+visit_typed[min_n=2](SimplicialComplex(read_mesh(path)), r)
+```
+
+The untyped core remains available through `complex()`, `untyped()`,
+`.mat`, and `.diag`.
 """
 
 from mojodec.core.cochain import Cochain
 from mojodec.core.diagonal import DiagonalOperator
+from mojodec.core.mesh import SimplicialMesh
 from mojodec.core.primality import Primality
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
@@ -107,6 +121,23 @@ struct TypedComplex[n: Int](ImplicitlyCopyable, Movable):
             not `n`.
         """
         self = Self(SimplicialComplex(vertices, simplices, compute_geometry))
+
+    def __init__(
+        out self, mesh: SimplicialMesh, compute_geometry: Bool = True
+    ) raises:
+        """Build the complex of a mesh, e.g. one from `read_mesh` or
+        `GmshMesh.mesh()`.
+
+        Args:
+            mesh: The vertices and top simplices.
+            compute_geometry: Whether to compute circumcenters, volumes, and
+                Hodge stars; `star` and the operators built on it need them.
+
+        Raises:
+            If the `SimplicialComplex` cannot be built, or its dimension is
+            not `n`.
+        """
+        self = Self(SimplicialComplex(mesh, compute_geometry))
 
     def complex(self) -> SimplicialComplex:
         """The untyped complex.
@@ -287,6 +318,54 @@ struct TypedComplex[n: Int](ImplicitlyCopyable, Movable):
                 self.delta[k + 1, primal]() @ self.d[k, primal]()
             )
 
+    def laplace_beltrami[
+        k: Int, primal: Bool
+    ](self) raises -> MatrixOp[Self.n, k, primal, k, primal]:
+        """The Laplace-Beltrami operator `delta d` on k-cochains.
+
+        On 0-cochains it equals `laplacian[0, primal]`.
+
+        Parameters:
+            k: The degree, `0..n-1`.
+            primal: `PRIMAL` or `DUAL`.
+
+        Returns:
+            The operator from k-cochains to k-cochains of the same kind.
+
+        Raises:
+            If the complex was built without geometry.
+        """
+        comptime assert (
+            0 <= k and k < Self.n
+        ), "laplace_beltrami: degree out of range"
+        return self.delta[k + 1, primal]() @ self.d[k, primal]()
+
+    def zero[
+        in_k: Int, in_primal: Bool, out_k: Int, out_primal: Bool
+    ](self) raises -> MatrixOp[Self.n, in_k, in_primal, out_k, out_primal]:
+        """The zero operator between two kinds of cochain, e.g. an empty
+        block of a `BlockOp`.
+
+        Parameters:
+            in_k: The degree of the cochains it takes, `0..n`.
+            in_primal: Whether the cochains it takes are primal.
+            out_k: The degree of the cochains it gives, `0..n`.
+            out_primal: Whether the cochains it gives are primal.
+
+        Returns:
+            An operator with no stored entries.
+
+        Raises:
+            Only if the level lookup fails, which the degree check rules out.
+        """
+        return MatrixOp[Self.n, in_k, in_primal, out_k, out_primal](
+            CSRMatrix(
+                self.num_cells[out_k, out_primal](),
+                self.num_cells[in_k, in_primal](),
+            ),
+            self.sc,
+        )
+
     def identity[
         k: Int, primal: Bool
     ](self) raises -> DiagonalOp[Self.n, k, primal, k, primal]:
@@ -329,6 +408,41 @@ struct TypedComplex[n: Int](ImplicitlyCopyable, Movable):
         if len(values) != self.num_cells[k, primal]():
             raise Error("TypedComplex.diagonal: wrong number of values")
         return DiagonalOp[Self.n, k, primal, k, primal](
+            DiagonalOperator(values^), self.sc
+        )
+
+    def dual_diagonal[
+        k: Int, primal: Bool
+    ](self, var values: List[Float64]) raises -> DiagonalOp[
+        Self.n, k, primal, Self.n - k, not primal
+    ]:
+        """A diagonal operator from k-cochains to the dual (n-k)-cochains on
+        the same cells, the kind of a Hodge star: e.g. a star weighted by a
+        material coefficient, or (with ones on some cells) the rows that
+        impose Dirichlet values in a system whose equations are dual.
+
+        ```mojo
+        # rows of the identity on the fixed vertices of d0^T *1 d0
+        var ones = List[Float64](length=tc.num_cells[0, PRIMAL](), fill=1.0)
+        var I = tc.dual_diagonal[0, PRIMAL](ones^).restrict_to_subset(fixed.dual())
+        ```
+
+        Parameters:
+            k: The degree, `0..n`.
+            primal: `PRIMAL` or `DUAL`.
+
+        Args:
+            values: One value per cell, `num_cells[k, primal]()` of them.
+
+        Returns:
+            The diagonal operator with `values` on the diagonal.
+
+        Raises:
+            If `values` has the wrong length.
+        """
+        if len(values) != self.num_cells[k, primal]():
+            raise Error("TypedComplex.dual_diagonal: wrong number of values")
+        return DiagonalOp[Self.n, k, primal, Self.n - k, not primal](
             DiagonalOperator(values^), self.sc
         )
 
@@ -377,6 +491,76 @@ struct TypedComplex[n: Int](ImplicitlyCopyable, Movable):
             self.sc,
             Subset.from_indices(self.sc, k, indices, Primality(primal)),
         )
+
+
+trait TypedComplexVisitor:
+    """Code generic over the complex dimension, run by `visit_typed` on a
+    complex whose dimension is known only at run time.
+
+    ```mojo
+    struct Poisson(TypedComplexVisitor):
+        var energy: Float64
+
+        def visit[n: Int](mut self, tc: TypedComplex[n]) raises:
+            var L = tc.laplacian[0, PRIMAL]()
+            ...
+    ```
+    """
+
+    def visit[n: Int](mut self, tc: TypedComplex[n]) raises:
+        """Run on the complex, its dimension `n` now a parameter.
+
+        Parameters:
+            n: The complex dimension.
+
+        Args:
+            tc: The complex.
+
+        Raises:
+            As the implementation does.
+        """
+        ...
+
+
+def visit_typed[
+    V: TypedComplexVisitor, //, min_n: Int = 1, max_n: Int = 3
+](sc: SimplicialComplex, mut visitor: V) raises:
+    """Call `visitor.visit[n]` with `TypedComplex[n](sc)`, `n` the dimension
+    of `sc`.
+
+    `visit` is compiled for every `n` in `min_n..max_n`, so raise `min_n`
+    when it uses operators that need a larger complex (`d[1]` needs
+    `n >= 2`, and a `comptime assert` in it fails to compile otherwise).
+
+    Parameters:
+        V: The visitor type.
+        min_n: The smallest dimension accepted.
+        max_n: The largest dimension accepted.
+
+    Args:
+        sc: The complex.
+        visitor: The code to run; it may keep results in its fields.
+
+    Raises:
+        If the dimension of `sc` is outside `min_n..max_n`, or as `visit`
+        does.
+    """
+    comptime assert 0 <= min_n and min_n <= max_n, "visit_typed: empty range"
+    var dim = sc.complex_dimension()
+    comptime for n in range(min_n, max_n + 1):
+        if dim == n:
+            visitor.visit[n](TypedComplex[n](sc))
+            return
+    raise Error(
+        String(
+            "visit_typed: the complex has dimension ",
+            dim,
+            ", outside ",
+            min_n,
+            "..",
+            max_n,
+        )
+    )
 
 
 struct TypedSubset[n: Int, k: Int, primal: Bool](
@@ -1050,6 +1234,58 @@ struct MatrixOp[
         """
         return self * -1.0
 
+    def transpose(
+        self,
+    ) raises -> MatrixOp[
+        Self.n,
+        Self.n - Self.out_k,
+        not Self.out_primal,
+        Self.n - Self.in_k,
+        not Self.in_primal,
+    ]:
+        """The transpose, the adjoint under the pairing of primal k-cochains
+        with dual (n-k)-cochains (one value per cell on each side).
+
+        An operator from k-cochains to l-cochains transposes to one from
+        the duals of l-cochains to the duals of k-cochains: `d[k, PRIMAL]`
+        to `(-1)^(n-k-1) d[n-k-1, DUAL]`, so
+        `tc.d[0, PRIMAL]().T() @ tc.star[1, PRIMAL]() @ tc.d[0, PRIMAL]()`
+        is the positive semidefinite stiffness matrix from primal
+        0-cochains to dual n-cochains.
+
+        Returns:
+            The operator with the transposed matrix.
+
+        Raises:
+            Does not raise in practice.
+        """
+        return MatrixOp[
+            Self.n,
+            Self.n - Self.out_k,
+            not Self.out_primal,
+            Self.n - Self.in_k,
+            not Self.in_primal,
+        ](self.mat.transpose(), self.complex)
+
+    def T(
+        self,
+    ) raises -> MatrixOp[
+        Self.n,
+        Self.n - Self.out_k,
+        not Self.out_primal,
+        Self.n - Self.in_k,
+        not Self.in_primal,
+    ]:
+        """The transpose (alias of `transpose`).
+
+        Returns:
+            The operator with the transposed matrix.
+
+        Raises:
+            Does not raise in practice.
+        """
+        return self.transpose()
+
     def exclude_subset(
         self, subset: TypedSubset[Self.n, Self.out_k, Self.out_primal]
     ) raises -> Self:
@@ -1232,6 +1468,46 @@ struct DiagonalOp[
         return DiagonalOp[
             Self.n, Self.out_k, Self.out_primal, Self.in_k, Self.in_primal
         ](self.diag.inverse(), self.complex)
+
+    def transpose(
+        self,
+    ) -> DiagonalOp[
+        Self.n,
+        Self.n - Self.out_k,
+        not Self.out_primal,
+        Self.n - Self.in_k,
+        not Self.in_primal,
+    ]:
+        """The transpose: the same diagonal between the dual kinds, as for
+        `MatrixOp.transpose`. A Hodge star from primal k-cochains keeps its
+        kind; one from dual k-cochains does too.
+
+        Returns:
+            The operator with the same diagonal.
+        """
+        return DiagonalOp[
+            Self.n,
+            Self.n - Self.out_k,
+            not Self.out_primal,
+            Self.n - Self.in_k,
+            not Self.in_primal,
+        ](self.diag.copy(), self.complex)
+
+    def T(
+        self,
+    ) -> DiagonalOp[
+        Self.n,
+        Self.n - Self.out_k,
+        not Self.out_primal,
+        Self.n - Self.in_k,
+        not Self.in_primal,
+    ]:
+        """The transpose (alias of `transpose`).
+
+        Returns:
+            The operator with the same diagonal.
+        """
+        return self.transpose()
 
     def to_matrix_op(
         self,

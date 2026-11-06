@@ -109,20 +109,24 @@ struct RegularCubeComplex(CellComplex, Copyable, Movable, Sized, Writable):
         var N = mesh.dimension()
         var arrays = List[IntArray](length=N + 1, fill=int_array(0, 1))
         var bounds = List[CSRMatrix](length=N + 1, fill=CSRMatrix(0, 0))
+        var cobounds = List[CSRMatrix](length=N + 1, fill=CSRMatrix(0, 0))
         arrays[N] = mesh.cube_array()
+        cobounds[N] = CSRMatrix(1, rows_of(arrays[N]))
         for i in range(N - 1, -1, -1):
             var fb = cube_array_boundary(arrays[i + 1], i + 1)
-            arrays[i] = fb.faces.copy()
-            bounds[i + 1] = fb.boundary.copy()
+            swap(arrays[i], fb.faces)
+            swap(bounds[i + 1], fb.boundary)
+            swap(cobounds[i], fb.coboundary)
         bounds[0] = CSRMatrix(1, rows_of(arrays[0]))
         self.levels = List[CubeLevel]()
         for i in range(N + 1):
-            var d = bounds[i + 1].transpose() if i < N else CSRMatrix(
-                1, rows_of(arrays[i])
-            )
-            self.levels.append(
-                CubeLevel(arrays[i].copy(), bounds[i].copy(), d^)
-            )
+            var a = int_array(0, 1)
+            var b = CSRMatrix(0, 0)
+            var d = CSRMatrix(0, 0)
+            swap(a, arrays[i])
+            swap(b, bounds[i])
+            swap(d, cobounds[i])
+            self.levels.append(CubeLevel(a^, b^, d^))
         ref v = self.levels[0].cube_array
         self.vertices = real_array(rows_of(v), cols_of(v))
         for i in range(v.size):

@@ -7,7 +7,8 @@ Finite element inner products (`mojodec.routines.innerproduct`).
 ================================================================
 Port of `pydec.fem.innerproduct`: mass matrices of Whitney k-forms on a
 simplicial complex, and of the analogous tensor-product elements on a regular
-cube complex.
+cube complex. `whitney_innerproduct[k](tc)` gives the Whitney mass matrix as
+a typed operator from primal k-cochains to dual (n-k)-cochains.
 """
 
 from std.math import sqrt
@@ -15,6 +16,7 @@ from std.math import sqrt
 from mojodec.core.regular_cube_complex import RegularCubeComplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
+from mojodec.core.typed import DUAL, PRIMAL, MatrixOp, TypedComplex
 from mojodec.core.utils import (
     factorial,
     iget,
@@ -109,6 +111,41 @@ def massmatrix_rowcols(sc: SimplicialComplex, k: Int) raises -> COOPattern:
                 cp[unsafe_offset=at] = Int(indices.unsafe_get(s * fps + m))
                 at += 1
     return COOPattern(rows^, cols^)
+
+
+def whitney_innerproduct[
+    n: Int, //, k: Int
+](tc: TypedComplex[n]) raises -> MatrixOp[n, k, PRIMAL, n - k, DUAL]:
+    """The Whitney mass matrix as a typed operator.
+
+    It takes primal k-cochains to dual (n-k)-cochains, as the diagonal Hodge
+    star `tc.star[k, PRIMAL]()` does, and can replace it in a composition:
+
+    ```mojo
+    var M2 = whitney_innerproduct[2](tc)     # primal 2 -> dual 0, in 2D
+    var K = tc.d[0, DUAL]() @ M2 @ tc.d[1, PRIMAL]()
+    var eig = eigh_generalized(K, whitney_innerproduct[1](tc))
+    ```
+
+    Parameters:
+        n: The complex dimension (inferred).
+        k: The form degree, `0..n`.
+
+    Args:
+        tc: The complex, with geometry.
+
+    Returns:
+        The symmetric mass matrix, on `tc`'s complex.
+
+    Raises:
+        As the untyped overload.
+    """
+    comptime assert (
+        0 <= k and k <= n
+    ), "whitney_innerproduct: degree out of range"
+    return MatrixOp[n, k, PRIMAL, n - k, DUAL](
+        whitney_innerproduct(tc.sc, k), tc.sc
+    )
 
 
 def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:

@@ -22,6 +22,13 @@ var inlet = msh.subset(sc, "inlet", 1)        # edges of the inlet curve
 var fixed = msh.subset(sc, "walls", 0)        # vertices of the walls
 ```
 
+With a `TypedComplex`, the dimension is a parameter and the result typed:
+
+```mojo
+var tc = TypedComplex[2](msh.mesh())
+var walls = msh.subset[0](tc, "walls")        # TypedSubset[2, 0, PRIMAL]
+```
+
 Gmsh saves only the elements of physical groups once any group is
 defined, so a `.geo` file that tags boundary curves must also tag the
 surface (`Physical Surface("domain") = {1};`) or set `Mesh.SaveAll = 1;`,
@@ -36,6 +43,7 @@ from mojodec.core.mesh import SimplicialMesh
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.subset import Subset
+from mojodec.core.typed import PRIMAL, TypedComplex, TypedSubset
 from mojodec.core.utils import (
     IntArray,
     RealArray,
@@ -241,6 +249,59 @@ struct GmshMesh(Movable, Writable):
                     )
             raise Error(self._unknown(name))
         return out^
+
+    def subset[
+        n: Int, //, k: Int
+    ](self, tc: TypedComplex[n], name: String) raises -> TypedSubset[
+        n, k, PRIMAL
+    ]:
+        """The primal k-simplices of the named group, typed; see the
+        untyped overload.
+
+        Parameters:
+            n: The complex dimension (inferred).
+            k: The dimension of the simplices to return, `0..n`.
+
+        Args:
+            tc: The complex built from `self.mesh()`.
+            name: A physical group's name.
+
+        Returns:
+            The k-simplices of the group, or the k-faces of its cells.
+
+        Raises:
+            As the untyped overload.
+        """
+        comptime assert 0 <= k and k <= n, "GmshMesh.subset: k out of range"
+        return TypedSubset[n, k, PRIMAL](tc.sc, self.subset(tc.sc, name, k))
+
+    def subset[
+        n: Int, //, k: Int
+    ](
+        self, tc: TypedComplex[n], *, group_dim: Int, tag: Int
+    ) raises -> TypedSubset[n, k, PRIMAL]:
+        """The primal k-simplices of the group with this dimension and
+        physical tag, typed; see the untyped overload.
+
+        Parameters:
+            n: The complex dimension (inferred).
+            k: The dimension of the simplices to return, `0..n`.
+
+        Args:
+            tc: The complex built from `self.mesh()`.
+            group_dim: The group's dimension.
+            tag: The group's physical tag.
+
+        Returns:
+            The k-simplices of the group, or the k-faces of its cells.
+
+        Raises:
+            As the untyped overload.
+        """
+        comptime assert 0 <= k and k <= n, "GmshMesh.subset: k out of range"
+        return TypedSubset[n, k, PRIMAL](
+            tc.sc, self.subset(tc.sc, group_dim=group_dim, tag=tag, dim=k)
+        )
 
     def subset(
         self, sc: SimplicialComplex, *, group_dim: Int, tag: Int, dim: Int

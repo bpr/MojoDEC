@@ -70,6 +70,32 @@ def top_edge(sc: SimplicialComplex, t: Int, a: Int, b: Int) raises -> Simplex:
     return Simplex([iget(sc[n].simplices, t, a), iget(sc[n].simplices, t, b)])
 
 
+def test_triangle_pieces_are_signed_distances() raises:
+    # in a triangle, the piece of an edge's dual is the distance from the
+    # edge's midpoint to the circumcenter, negative when the circumcenter
+    # lies across the edge from the third vertex
+    var sc = obtuse()
+    var P = dual_edge_pieces(sc)
+    ref V = sc.vertices()
+    for t in range(sc[2].num_simplices):
+        var j = 0
+        for a in range(3):
+            for b in range(a + 1, 3):
+                var va = iget(sc[2].simplices, t, a)
+                var vb = iget(sc[2].simplices, t, b)
+                var vc = iget(sc[2].simplices, t, 3 - a - b)
+                var dist: Float64 = 0
+                var side: Float64 = 0
+                for k in range(2):
+                    var m = 0.5 * (fget(V, va, k) + fget(V, vb, k))
+                    var to_c = fget(sc[2].circumcenter, t, k) - m
+                    dist += to_c * to_c
+                    side += to_c * (fget(V, vc, k) - m)
+                var expected = dist**0.5 * (-1.0 if side < 0 else 1.0)
+                assert_almost_equal(P.piece(t, j), expected, atol=1e-12)
+                j += 1
+
+
 def test_obtuse_mesh_has_negative_pieces() raises:
     var sc = obtuse()
     var w = well_centeredness(sc)

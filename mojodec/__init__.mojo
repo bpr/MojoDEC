@@ -66,11 +66,14 @@ from mojodec.core.typed import (
     TypedComplex,
     TypedCochain,
     TypedSubset,
+    TypedComplexVisitor,
+    visit_typed,
     MatrixOp,
     DiagonalOp,
     PRIMAL,
     DUAL,
 )
+from mojodec.core.typed_block import BlockOp, CochainPair
 from mojodec.core.kd_tree import KDTree
 from mojodec.core.utils import IntArray, RealArray
 
@@ -109,6 +112,7 @@ from mojodec.routines.linalg import (
     eigh_generalized,
     SolveResult,
     StopReason,
+    TypedEighResult,
 )
 from mojodec.routines.dense import (
     EighResult,

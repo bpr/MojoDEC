@@ -40,8 +40,13 @@ mesh fixtures live in `tests/meshes/`. Examples run from their own directory
 
 ## Toolchain constraints
 
-- `pixi.toml` pins the nightly `mojo ==1.3.0.dev2026110305` and the matching
-  `max-core`; change both together when moving versions.
+- `pixi.toml` asks for `mojo >=1.3.0.dev0` and `max-core >=26.8.0.dev0`
+  (plain `>=1.3` would exclude the 1.3 nightlies, which conda orders before
+  1.3.0); `pixi.lock` records the build actually tested. Don't pin exact
+  versions in `pixi.toml` except temporarily while testing one. `max-core`
+  is needed by the vendored NuMojo (`max.algorithm`, `max.gpu`); MojoDEC
+  may use `max.algorithm.parallelize` too. `benchmarks/parallel_for.mojo`
+  is a pure-Mojo POSIX-threads baseline to time it against.
 - NuMojo v0.12.0 is vendored in `third_party/numojo` with a Mojo 1.3 patch
   (`third_party/numojo-mojo-1.3.patch`; see `third_party/README.md`) because
   the published package requires Mojo < 1.3. Code is compiled against
@@ -74,6 +79,13 @@ Key design points that span several files:
   (circumcenters, primal/dual volumes, diagonal Hodge `star`/`star_inv`).
   Geometry is computed eagerly at construction, unlike PyDEC's lazy
   `__getattr__`; `compute_geometry=False` skips it for degenerate meshes.
+  `simplex_array_boundary` builds `d` directly (k+1 entries per row) and
+  `boundary` is its transpose. Circumcenters are closed-form up to
+  triangles. Dual volumes come from one walk down the chains of
+  circumcenters (`_add_dual_pieces`); `dual_edge_piece_values` runs the
+  same walk to keep the edge pieces per top simplex, which `flat` and
+  `dual_edge_pieces` use. In loops, look faces up with
+  `level.find_vertices(sorted_list)`, not `simplex_to_index(Simplex(...))`.
 - **Cochains** (`core/cochain.mojo`): PyDEC's dual-typed `cochain.v` is split
   into `Cochain` (NuMojo vector) and `CochainBasis` (`CSRMatrix`), both
   implementing the `CochainLike` trait. `d`, `star`, `delta`,
@@ -115,8 +127,19 @@ Key design points that span several files:
   `__matmul__` signatures; degree ranges by `comptime assert`. Ops built
   by `TypedComplex` record its complex (`Optional`, `None` when wrapped
   from a bare matrix) and refuse cochains and ops from another one.
-  `TypedSubset[n, k, primal]` types subsets the same way; typed `wedge`
-  and `flat` overloads live next to the untyped ones. Mojo
+  `TypedSubset[n, k, primal]` types subsets the same way; typed `wedge`,
+  `flat`, `whitney_innerproduct[k](tc)`, solver (`cg`, `lsqr`,
+  `spsolve`, `eigh_generalized` -> `SolveResult[TypedCochain[...]]`,
+  `TypedEighResult`) and `GmshMesh.subset[k](tc, ...)` overloads live next
+  to the untyped ones. A typed solve takes `A: in -> out` and `b: out` and
+  gives `x: in`. `MatrixOp`/`DiagonalOp.T()` maps `(k, p) -> (l, q)` to
+  `(n-l, !q) -> (n-k, !p)`; build symmetric operators as `B.T() @ S @ B`
+  rather than with a dual `d`, which carries a sign. `visit_typed[min_n, max_n](sc, visitor)` turns a runtime
+  dimension into the parameter of a `TypedComplexVisitor.visit[n]`; it
+  compiles `visit` for every n in the range, so its `comptime assert`s
+  must hold for all of them. `core/typed_block.mojo` has `BlockOp` (2 x 2
+  typed blocks, zero blocks from `tc.zero[...]()`) and `CochainPair`;
+  its `spsolve` overloads are in `routines/linalg.mojo`. Mojo
   simplifies parameter expressions (`n - (n - k + 1)` = `k - 1`), but
   `comptime if k == 0` does not refine `k` inside the branch, so write
   branches in terms of `k`. Keep it a thin layer: operators are built
@@ -157,4 +180,9 @@ Key design points that span several files:
 - The examples double as regression checks against PyDEC; README.md's
   Examples table lists the expected results (e.g. DarcyFlow pressures to
   1e-14, ResonantCavity eigenvalues m²+n², MakeMesh matches
-  `examples/MakeMesh/ExpectedOutput/`).
+  `examples/MakeMesh/ExpectedOutput/`). DarcyFlow, HeatConduction, and
+  ResonantCavity use the typed layer. HeatConduction imposes Dirichlet rows
+  with `exclude_subset(fixed.dual())` plus `tc.dual_diagonal[...]`
+  restricted to the same cells; DarcyFlow solves the mixed `BlockOp` with
+  `spsolve(..., values=, fixed_first=, fixed_second=)`, which reproduces
+  PyDEC's elimination bit for bit.

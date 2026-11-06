@@ -7,7 +7,15 @@ from std.testing import (
     assert_true,
 )
 
-from mojodec import GmshMesh, SimplicialComplex, Subset, read_gmsh
+from mojodec import (
+    GmshMesh,
+    PRIMAL,
+    SimplicialComplex,
+    Subset,
+    TypedComplex,
+    TypedSubset,
+    read_gmsh,
+)
 from mojodec.core.utils import cols_of, fget, iget, rows_of
 
 # Fixtures: tests/meshes/gmsh/*.geo, meshed by Gmsh 4.15 in each format.
@@ -109,6 +117,20 @@ def test_square_groups() raises:
     assert_true((g42 - walls).is_empty())
     assert_true(_all_vertices(sc, g42, 1, 0.0))
     assert_equal(msh.group("walls").num_cells(), 8)
+
+
+def test_typed_subsets() raises:
+    var msh = _square("v41")
+    var tc = TypedComplex[2](msh.mesh())
+    var inlet: TypedSubset[2, 0, PRIMAL] = msh.subset[0](tc, "inlet")
+    assert_true(inlet.untyped() == msh.subset(tc.sc, "inlet", 0))
+    var left: TypedSubset[2, 2, PRIMAL] = msh.subset[2](tc, "left")
+    assert_true(left.untyped() == msh.subset(tc.sc, "left", 2))
+    var g42 = msh.subset[1](tc, group_dim=1, tag=42)
+    assert_equal(len(g42), 2)
+    with assert_raises(contains="no physical group"):
+        _ = msh.subset[1](tc, "nowhere")
+    # msh.subset[3](tc, "left") does not compile: k exceeds n = 2
 
 
 def test_square_errors() raises:

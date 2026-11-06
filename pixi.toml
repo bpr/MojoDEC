@@ -21,8 +21,8 @@ doc-check = { cmd = "python docs/check_docstrings.py", depends-on = ["numojo"] }
 docs = { cmd = "python docs/gen_api.py", depends-on = ["numojo"] }
 
 [dependencies]
-mojo = "==1.3.0.dev2026110305"
-max-core = "==26.8.0.dev2026110305"
+mojo = ">=1.3.0.dev0"
+max-core = ">=26.8.0.dev0"
 python = ">=3.12,<3.14"
 numpy = ">=2.5.4,<3"
 matplotlib = ">=3.11.2,<4"

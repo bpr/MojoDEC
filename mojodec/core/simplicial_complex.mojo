@@ -150,17 +150,34 @@ struct SimplexLevel(Copyable, Movable):
         """
         if len(s) != self.dim + 1:
             return -1
+        return self.find_vertices(s.vertices)
+
+    def find_vertices(self, vertices: List[Int]) -> Int:
+        """Index of the simplex with these vertices, or -1 if there is none.
+
+        `find_simplex` without building a `Simplex`, for lookups in a loop.
+
+        Args:
+            vertices: `k + 1` vertex indices in increasing order.
+
+        Returns:
+            The simplex's row in `simplices`, or -1.
+        """
         var w = self.dim + 1
+        if len(vertices) != w:
+            return -1
         var lo = 0
         var hi = self.num_simplices
+        var ordered = len(self._order) > 0
         while lo < hi:
             var mid = (lo + hi) // 2
-            var row = self._order[mid] if len(self._order) > 0 else mid
+            var row = self._order.unsafe_get(mid) if ordered else mid
             var c = 0
             for j in range(w):
                 var x = Int(self.simplices.unsafe_get(row * w + j))
-                if x != s.vertices[j]:
-                    c = -1 if x < s.vertices[j] else 1
+                var y = vertices.unsafe_get(j)
+                if x != y:
+                    c = -1 if x < y else 1
                     break
             if c == 0:
                 return row
@@ -785,8 +802,12 @@ struct SimplicialComplex(
         """Circumcenters of the simplices of one dimension, in Cartesian
         (`circumcenter`) and barycentric (`bary_circumcenter`) coordinates.
 
-        Solves PyDEC's system `[[2 P P^T, 1], [1^T, 0]] [b; mu] = [|p_i|^2; 1]`
-        once per simplex, in place, with buffers reused across simplices.
+        Vertices are their own circumcenters and edges have their midpoints.
+        A triangle's barycentric weights are `a (b + c - a)`, `b (c + a - b)`,
+        `c (a + b - c)` over their sum, with `a`, `b`, `c` the squared lengths
+        of the edges opposite each vertex. Higher dimensions solve PyDEC's
+        system `[[2 P P^T, 1], [1^T, 0]] [b; mu] = [|p_i|^2; 1]` per simplex,
+        in place, with buffers reused across simplices.
 
         Args:
             dim: The dimension of the simplices.
@@ -801,6 +822,11 @@ struct SimplicialComplex(
         var m = w + 1
         var out = real_array(data.num_simplices, E)
         var bary = real_array(data.num_simplices, w)
+        if dim <= 2:
+            _small_circumcenters(V, data.simplices, dim, out, bary)
+            data.circumcenter = out^
+            data.bary_circumcenter = bary^
+            return
         var A = List[Float64](length=m * m, fill=0)
         var b = List[Float64](length=m, fill=0)
         var verts = List[Int](length=w, fill=0)
@@ -888,11 +914,51 @@ struct SimplicialComplex(
         ref top = self[n]
         # q[j*E : (j+1)*E] is the j-th orthonormalized edge of the chain
         var q = List[Float64](length=max(n, 1) * E, fill=0)
+        var fact = _factorials(n + 1)
+        var unused = List[Float64]()
         for t in range(top.num_simplices):
             # the dual of a top simplex is its circumcenter: unit volume
             top.dual_volume.unsafe_set(t, top.dual_volume.unsafe_get(t) + 1)
             if n > 0:
-                self._add_dual_pieces(n, t, t, 1.0, 1.0, q)
+                self._add_dual_pieces(n, t, t, 1.0, 1.0, q, fact, unused, 0)
+
+    def dual_edge_piece_values(self) raises -> RealArray:
+        """The pieces `|*e ^ t|` of each edge's dual cell inside each top
+        simplex: the terms the dual-volume walk adds to `sc[1].dual_volume`,
+        kept apart by top simplex.
+
+        `dual_edge_pieces` (in `mojodec.routines.musical`) pairs them with
+        their edges.
+
+        Returns:
+            A `num_top_simplices x C(n+1, 2)` array: column `j` is the `j`-th
+            vertex pair of the top simplex's row of `self[n].simplices`, in
+            `combinations` order.
+
+        Raises:
+            If the complex has no edges or its circumcenters have not been
+            computed.
+        """
+        var n = self.complex_dimension()
+        if n < 1:
+            raise Error("dual_edge_piece_values: the complex has no edges")
+        var E = self.embedding_dimension()
+        ref top = self[n]
+        var pairs = (n + 1) * n // 2
+        var pieces = List[Float64](length=top.num_simplices * pairs, fill=0)
+        if n == 1:
+            # an edge is its own top simplex, whose dual is a point
+            for t in range(top.num_simplices):
+                pieces.unsafe_set(t, 1.0)
+        else:
+            var q = List[Float64](length=n * E, fill=0)
+            var fact = _factorials(n + 1)
+            for t in range(top.num_simplices):
+                self._add_dual_pieces(n, t, t, 1.0, 1.0, q, fact, pieces, pairs)
+        var out = real_array(top.num_simplices, pairs)
+        for i in range(len(pieces)):
+            out.unsafe_set(i, pieces.unsafe_get(i))
+        return out^
 
     def construct_hodge(self) raises:
         """The diagonal Hodge stars `dual_volume / primal_volume`, and their
@@ -929,39 +995,43 @@ struct SimplicialComplex(
         var parity = simplex_array_parity(s)
         sort_each_row(s)
 
+        # levels from the top down; each step's faces are the next level
         var simplices = List[IntArray]()
         var parities = List[IntArray]()
-        var chain = List[CSRMatrix]()
-        simplices.append(s.copy())
-        parities.append(parity.copy())
-        while cols_of(s) > 1:
-            var fb = simplex_array_boundary(s, parity)
-            s = fb.faces.copy()
-            parity = int_vector(rows_of(s))
-            simplices.append(s.copy())
-            chain.append(fb.boundary.copy())
-            parities.append(parity.copy())
-        chain.append(CSRMatrix(1, rows_of(s)))
-
-        simplices.reverse()
-        chain.reverse()
-        parities.reverse()
-
-        # d_k = B_{k+1}^T, and the top-level d is a 1 x N zero matrix
         var cochain = List[CSRMatrix]()
-        for k in range(1, len(chain)):
-            cochain.append(chain[k].transpose())
-        cochain.append(CSRMatrix(1, chain[len(chain) - 1].ncols))
+        var chain = List[CSRMatrix]()
+        # the top-level d is a 1 x N zero matrix
+        cochain.append(CSRMatrix(1, rows_of(s)))
+        simplices.append(s^)
+        parities.append(parity^)
+        while cols_of(simplices[len(simplices) - 1]) > 1:
+            var top = len(simplices) - 1
+            var fb = simplex_array_boundary(simplices[top], parities[top])
+            var faces = IntArray(Shape(0))
+            var boundary = CSRMatrix(0, 0)
+            var d = CSRMatrix(0, 0)
+            swap(faces, fb.faces)
+            swap(boundary, fb.boundary)
+            swap(d, fb.coboundary)
+            chain.append(boundary^)
+            # d_k = B_{k+1}^T, built with the faces
+            cochain.append(d^)
+            parities.append(int_vector(rows_of(faces)))
+            simplices.append(faces^)
+        chain.append(CSRMatrix(1, rows_of(simplices[len(simplices) - 1])))
 
         for k in range(K):
+            var j = K - 1 - k
+            var level_s = IntArray(Shape(0))
+            var level_p = IntArray(Shape(0))
+            var level_d = CSRMatrix(0, 0)
+            var level_b = CSRMatrix(0, 0)
+            swap(level_s, simplices[j])
+            swap(level_p, parities[j])
+            swap(level_d, cochain[j])
+            swap(level_b, chain[j])
             self._data[].levels.append(
-                SimplexLevel(
-                    k,
-                    simplices[k].copy(),
-                    parities[k].copy(),
-                    cochain[k].copy(),
-                    chain[k].copy(),
-                )
+                SimplexLevel(k, level_s^, level_p^, level_d^, level_b^)
             )
 
     def _add_dual_pieces(
@@ -972,19 +1042,29 @@ struct SimplicialComplex(
         sign: Float64,
         vol: Float64,
         mut q: List[Float64],
+        fact: List[Float64],
+        mut edge_pieces: List[Float64],
+        pairs: Int,
     ) raises:
         """Add the pieces of a chain of circumcenters to the dual volumes.
 
         The chain runs from top simplex `root` down to `dim`-simplex `i`;
         `sign` and `vol` (the chain's volume times its factorial) belong to
-        that prefix, and `q` holds its orthonormalized edges.
+        that prefix, and `q` holds its orthonormalized edges. `fact[j]` is
+        `j!`.
+
+        With `pairs > 0`, the pieces of the edges' dual cells are added to
+        `edge_pieces[root * pairs + j]` (`j` the edge's vertex pair in the
+        root's row) instead, and the walk stops at the edges.
         """
         var n = self.complex_dimension()
         var E = self.embedding_dimension()
         var m = n - dim
+        var record = pairs > 0
         ref parent = self[dim]
         ref faces = self[dim - 1]
         ref C = self[n].circumcenter
+        var scale = fact.unsafe_get(m + 1)
         # row i of d_{dim-1} lists the faces of the dim-simplex i
         ref d = faces.d
         for p in range(d.indptr.unsafe_get(i), d.indptr.unsafe_get(i + 1)):
@@ -1031,13 +1111,103 @@ struct SimplicialComplex(
                 for k in range(E):
                     q.unsafe_set(m * E + k, q.unsafe_get(m * E + k) / (h))
             var new_vol = vol * h
-            faces.dual_volume.unsafe_set(
-                f,
-                faces.dual_volume.unsafe_get(f)
-                + s * new_vol / factorial(m + 1),
-            )
+            if not record:
+                faces.dual_volume.unsafe_set(
+                    f, faces.dual_volume.unsafe_get(f) + s * new_vol / scale
+                )
+            elif dim == 2:
+                var j = self._local_pair(root, f)
+                edge_pieces.unsafe_set(
+                    root * pairs + j,
+                    edge_pieces.unsafe_get(root * pairs + j)
+                    + s * new_vol / scale,
+                )
+                continue
             if dim > 1:
-                self._add_dual_pieces(dim - 1, f, root, s, new_vol, q)
+                self._add_dual_pieces(
+                    dim - 1, f, root, s, new_vol, q, fact, edge_pieces, pairs
+                )
+
+    def _local_pair(self, t: Int, e: Int) raises -> Int:
+        """The position of edge `e` among the vertex pairs of top simplex
+        `t`'s row, in `combinations` order."""
+        var n = self.complex_dimension()
+        ref top = self[n].simplices
+        ref edges = self[1].simplices
+        var a = edges.unsafe_get(2 * e)
+        var b = edges.unsafe_get(2 * e + 1)
+        var pa = -1
+        var pb = -1
+        for j in range(n + 1):
+            var v = top.unsafe_get(t * (n + 1) + j)
+            if v == a or v == b:
+                if pa < 0:
+                    pa = j
+                else:
+                    pb = j
+        return pa * (n + 1) - pa * (pa + 1) // 2 + (pb - pa - 1)
+
+
+def _factorials(n: Int) -> List[Float64]:
+    """`j!` for `j = 0..n`."""
+    var out = List[Float64](capacity=n + 1)
+    var f: Float64 = 1
+    out.append(1)
+    for j in range(1, n + 1):
+        f *= Float64(j)
+        out.append(f)
+    return out^
+
+
+def _small_circumcenters(
+    V: RealArray,
+    S: IntArray,
+    dim: Int,
+    mut out: RealArray,
+    mut bary: RealArray,
+) raises:
+    """Circumcenters of vertices, edges, or triangles in closed form."""
+    var E = cols_of(V)
+    var w = dim + 1
+    for i in range(rows_of(S)):
+        if dim == 0:
+            bary.unsafe_set(i, 1.0)
+        elif dim == 1:
+            bary.unsafe_set(2 * i, 0.5)
+            bary.unsafe_set(2 * i + 1, 0.5)
+        else:
+            var v0 = Int(S.unsafe_get(3 * i)) * E
+            var v1 = Int(S.unsafe_get(3 * i + 1)) * E
+            var v2 = Int(S.unsafe_get(3 * i + 2)) * E
+            # squared lengths of the edges opposite vertices 0, 1, 2
+            var a: Float64 = 0
+            var b: Float64 = 0
+            var c: Float64 = 0
+            for k in range(E):
+                var x0 = V.unsafe_get(v0 + k)
+                var x1 = V.unsafe_get(v1 + k)
+                var x2 = V.unsafe_get(v2 + k)
+                a += (x1 - x2) * (x1 - x2)
+                b += (x0 - x2) * (x0 - x2)
+                c += (x0 - x1) * (x0 - x1)
+            var w0 = a * (b + c - a)
+            var w1 = b * (c + a - b)
+            var w2 = c * (a + b - c)
+            var total = w0 + w1 + w2
+            if total == 0:
+                raise Error(
+                    "circumcenter: degenerate simplex (singular system)"
+                )
+            bary.unsafe_set(3 * i, w0 / total)
+            bary.unsafe_set(3 * i + 1, w1 / total)
+            bary.unsafe_set(3 * i + 2, w2 / total)
+        for k in range(E):
+            var x: Float64 = 0
+            for r in range(w):
+                x += bary.unsafe_get(i * w + r) * V.unsafe_get(
+                    Int(S.unsafe_get(i * w + r)) * E + k
+                )
+            out.unsafe_set(i * E + k, x)
 
 
 def _is_negative_zero(x: Float64) -> Bool:
@@ -1148,18 +1318,21 @@ def _simplex_volumes(
         for r in range(dim):
             var v = Int(S.unsafe_get(i * w + r + 1))
             for k in range(E):
-                edges[r * E + k] = V.unsafe_get(v * E + k) - V.unsafe_get(
-                    v0 * E + k
+                edges.unsafe_set(
+                    r * E + k,
+                    V.unsafe_get(v * E + k) - V.unsafe_get(v0 * E + k),
                 )
         if signed:
             for r in range(dim * dim):
-                M[r] = edges[r]
+                M.unsafe_set(r, edges.unsafe_get(r))
             out.unsafe_set(i, _det_in_place(M, dim) / scale)
         else:
             for r in range(dim):
                 for c in range(dim):
                     var g: Float64 = 0
                     for k in range(E):
-                        g += edges[r * E + k] * edges[c * E + k]
-                    M[r * dim + c] = g
+                        g += edges.unsafe_get(r * E + k) * edges.unsafe_get(
+                            c * E + k
+                        )
+                    M.unsafe_set(r * dim + c, g)
             out.unsafe_set(i, sqrt(abs(_det_in_place(M, dim))) / scale)

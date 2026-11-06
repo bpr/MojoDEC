@@ -14,6 +14,10 @@
 # where K * star1 weighs each dual edge by the conductivities of the two
 # triangles it crosses: its part in triangle T, cot(angle opposite the
 # edge in T) / 2, times k_T. With k = 1 these weights are the Hodge star.
+#
+# The program uses the typed layer: the temperature is a primal 0-cochain,
+# the operator takes it to a dual 2-cochain (the net heat leaving each
+# vertex's dual cell), and the compiler checks that the pieces compose.
 # The exact temperature is piecewise linear in x, with a kink at the
 # interface where the heat flux k du/dx is continuous; since the interface
 # is a line of the mesh, DEC reproduces it to rounding error. The heat
@@ -33,11 +37,11 @@
 from std.python import Python
 
 from mojodec import (
-    CSRMatrix,
-    DiagonalOperator,
+    DUAL,
+    PRIMAL,
     Simplex,
-    SimplicialComplex,
-    Subset,
+    TypedCochain,
+    TypedComplex,
     VTKField,
     read_gmsh,
     spsolve,
@@ -66,7 +70,8 @@ def exact(x: Float64) -> Float64:
 def main() raises:
     # dim=2 makes sure the triangles were saved, not just the tagged curves
     var msh = read_gmsh("plate.msh", dim=2)
-    var sc = SimplicialComplex(msh.mesh())
+    var tc = TypedComplex[2](msh.mesh())
+    ref sc = tc.sc
     print(sc)
     print("physical groups:", msh.group_names())
     var N0 = sc[0].num_simplices
@@ -75,10 +80,10 @@ def main() raises:
     ref V = sc.vertices()
 
     # the named pieces of the plate, as sets of vertices and triangles
-    var hot = msh.subset(sc, "hot", 0)
-    var cold = msh.subset(sc, "cold", 0)
-    var interface = msh.subset(sc, "interface", 0)
-    var conductor = msh.subset(sc, "conductor", 2)
+    var hot = msh.subset[0](tc, "hot")
+    var cold = msh.subset[0](tc, "cold")
+    var interface = msh.subset[0](tc, "interface")
+    var conductor = msh.subset[2](tc, "conductor")
     print(
         "vertices: hot",
         len(hot),
@@ -118,30 +123,33 @@ def main() raises:
         star_err = max(star_err, abs(star1[e] - sc[1].star[e]))
     print("max |cot weights - star1| =", star_err)
 
-    # the operator d0^T K star1 d0, with the temperature fixed on the hot
-    # and cold vertices: those rows become rows of the identity
-    var L = sc[0].d.T() @ (DiagonalOperator(weights^) @ sc[0].d)
-    var fixed = hot | cold
-    var A = (
-        L.exclude_subset(fixed)
-        + DiagonalOperator.identity(N0).restrict_to_subset(fixed).to_csr()
-    )
-    var b = sc.get_cochain(0)
+    # the operator d0^T K star1 d0, from primal 0- to dual 2-cochains; the
+    # weights take primal edges to dual edges, as a Hodge star does
+    var d0 = tc.d[0, PRIMAL]()
+    var L = d0.T() @ tc.dual_diagonal[1, PRIMAL](weights^) @ d0
+    # the temperature is fixed on the hot and cold vertices: the equations
+    # of their dual cells become rows of the identity
+    var fixed = (hot | cold).dual()
+    var ones = List[Float64](length=N0, fill=1.0)
+    var A = L.exclude_subset(fixed) + tc.dual_diagonal[0, PRIMAL](
+        ones^
+    ).restrict_to_subset(fixed)
+    var b = tc.cochain[2, DUAL]()
     for i in hot.indices():
         b[i] = 1.0
-    var u = spsolve(A, b.v)
+    var u: TypedCochain[2, 0, PRIMAL] = spsolve(A, b)
 
     var max_err: Float64 = 0
     with open("temperature.txt", "w") as f:
         for i in range(N0):
             var x = fget(V, i, 0)
             var ex = exact(x)
-            max_err = max(max_err, abs(u.unsafe_get(i) - ex))
-            f.write(x, " ", fget(V, i, 1), " ", u.unsafe_get(i), " ", ex, "\n")
+            max_err = max(max_err, abs(u[i] - ex))
+            f.write(x, " ", fget(V, i, 1), " ", u[i], " ", ex, "\n")
     print("max |temperature - exact| =", max_err)
     var at_interface: Float64 = 0
     for i in interface.indices():
-        at_interface += u.unsafe_get(i) / Float64(len(interface))
+        at_interface += u[i] / Float64(len(interface))
     print(
         "mean temperature on the interface:",
         at_interface,
@@ -149,19 +157,19 @@ def main() raises:
         exact(INTERFACE_X),
     )
 
-    # heat balance: (L u)_i is the heat leaving vertex i into the plate, so
-    # it vanishes everywhere but the hot and cold edges
+    # heat balance: L u is a dual 2-cochain, the heat leaving each vertex's
+    # dual cell, so it vanishes everywhere but the hot and cold edges
     var r = L @ u
     var q_in: Float64 = 0
     var q_out: Float64 = 0
     var leak: Float64 = 0
     for i in range(N0):
         if i in hot:
-            q_in += r.unsafe_get(i)
+            q_in += r[i]
         elif i in cold:
-            q_out -= r.unsafe_get(i)
+            q_out -= r[i]
         else:
-            leak = max(leak, abs(r.unsafe_get(i)))
+            leak = max(leak, abs(r[i]))
     print("heat in through 'hot':  ", q_in)
     print("heat out through 'cold':", q_out)
     print(
@@ -179,8 +187,8 @@ def main() raises:
     var T = sc.simplices().to_numpy()
     plt.figure(figsize=Python.tuple(9, 4.5))
     var ax = plt.gca()
-    var tc = ax.tripcolor(
-        Vn.T[0], Vn.T[1], T, u.to_numpy(), shading="gouraud", cmap="inferno"
+    var tp = ax.tripcolor(
+        Vn.T[0], Vn.T[1], T, u.v.to_numpy(), shading="gouraud", cmap="inferno"
     )
     ax.triplot(Vn.T[0], Vn.T[1], T, color="w", linewidth=0.2, alpha=0.5)
     ax.plot(
@@ -189,7 +197,7 @@ def main() raises:
         "c--",
         linewidth=1.5,
     )
-    plt.colorbar(tc, ax=ax, label="temperature")
+    plt.colorbar(tp, ax=ax, label="temperature")
     ax.set_aspect("equal")
     ax.set_title(
         "insulator (k = 1)  |  conductor (k = 5)\nhot edge at x = 0, cold"
@@ -200,7 +208,7 @@ def main() raises:
     # the temperature at every vertex against x, and the exact profile
     plt.figure()
     ax = plt.gca()
-    ax.plot(Vn.T[0], u.to_numpy(), "ro", markersize=4, mec="r")
+    ax.plot(Vn.T[0], u.v.to_numpy(), "ro", markersize=4, mec="r")
     ax.plot(
         Python.list(0, INTERFACE_X, LENGTH),
         Python.list(1, exact(INTERFACE_X), 0),
@@ -218,7 +226,7 @@ def main() raises:
         "heat.vtu",
         V,
         sc.simplices(),
-        point_data=[VTKField("temperature", u)],
+        point_data=[VTKField("temperature", u.v)],
         cell_data=[VTKField("conductivity", k)],
     )
     print("wrote heat.vtu")

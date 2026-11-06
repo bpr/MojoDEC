@@ -1,4 +1,6 @@
-# Solve the resonant cavity problem with Whitney forms.
+# Solve the resonant cavity problem with Whitney forms, using the typed
+# layer: the stiffness and mass matrices are operators from primal to dual
+# 1-cochains, and the eigenvectors come back as primal 1-cochains.
 #
 # Reference:
 #   D. N. Arnold, R. S. Falk, R. Winther. "Finite element exterior calculus:
@@ -13,18 +15,17 @@
 # mode3.png, and writes the mode, sampled at the triangle barycenters, to
 # mode3.vtu for ParaView.
 
-import numojo as nm
-from numojo.prelude import *
-
 from mojodec import (
-    SimplicialComplex,
+    PRIMAL,
+    TypedCochain,
+    TypedComplex,
     loadtxt,
     whitney_innerproduct,
     eigh_generalized,
     VTKField,
     write_vtu,
 )
-from mojodec.core.utils import fget, real_vector, real_vector_from_list
+from mojodec.core.utils import real_vector_from_list
 from mojodec.vis import pyplot, show_requested, simplex_quivers
 
 
@@ -32,36 +33,37 @@ def main() raises:
     # read the mesh and construct the complex
     var vertices = loadtxt("vertices.txt")
     var triangles = loadtxt[DType.int]("triangles.txt")
-    var sc = SimplicialComplex(vertices, triangles)
+    var tc = TypedComplex[2](vertices, triangles)
+    ref sc = tc.sc
 
-    # stiffness and mass matrices
-    var K = sc[1].d.T() @ whitney_innerproduct(sc, 2) @ sc[1].d
-    var M = whitney_innerproduct(sc, 1)
+    # stiffness and mass matrices, both from primal 1-cochains (the
+    # electric field on the edges) to dual 1-cochains
+    var d1 = tc.d[1, PRIMAL]()
+    var K = d1.T() @ whitney_innerproduct[2](tc) @ d1
+    var M = whitney_innerproduct[1](tc)
 
-    # eliminate the boundary edges
-    var is_boundary = List[Bool](length=sc[1].num_simplices, fill=False)
-    for ref e in sc.boundary():
-        is_boundary[sc[1].simplex_to_index(e)] = True
-    var interior = List[Int]()
-    for i in range(sc[1].num_simplices):
-        if not is_boundary[i]:
-            interior.append(i)
-    K = K.select(interior, interior)
-    M = M.select(interior, interior)
+    # the field's tangential part vanishes on the boundary: P zeroes the
+    # boundary edges and Q keeps only them. P^T K P and P^T M P are the
+    # problem on the interior edges; Q^T M Q, with no stiffness, adds an
+    # eigenvalue 0 per boundary edge, which the zero filter below drops
+    var boundary = tc.boundary_cells[1]()
+    var P = tc.identity[1, PRIMAL]().exclude_subset(boundary)
+    var Q = tc.identity[1, PRIMAL]().restrict_to_subset(boundary)
+    var K_int = P.T() @ K @ P
+    var M_int = P.T() @ M @ P + Q.T() @ M @ Q
 
     # eigenvalues and eigenvectors of K x = lambda M x
-    var eig = eigh_generalized(K.todense(), M.todense())
-    ref eigenvalues = eig.values
-    ref eigenvectors = eig.vectors
+    var eig = eigh_generalized(K_int, M_int)
 
     var NUM_EIGS = 50  # number of eigenvalues to report
     var values = List[Float64]()
     var columns = List[Int]()
-    for i in range(eigenvalues.size):
-        if eigenvalues.unsafe_get(i) > 1e-10 and len(values) < NUM_EIGS:
-            values.append(eigenvalues.unsafe_get(i))
+    for i in range(len(eig)):
+        var v = eig.values.unsafe_get(i)
+        if v > 1e-10 and len(values) < NUM_EIGS:
+            values.append(v)
             columns.append(i)
-    print("interior edges:", len(interior))
+    print("interior edges:", sc[1].num_simplices - len(boundary))
     print("first", len(values), "nonzero eigenvalues:")
     for i in range(len(values)):
         print("  ", i, values[i])
@@ -69,14 +71,12 @@ def main() raises:
         for v in values:
             f.write(v, "\n")
 
-    # the third nonzero mode as a 1-cochain on all edges
+    # the third nonzero mode, a primal 1-cochain (zero on the boundary)
     var N = 2
-    var all_values = real_vector(sc[1].num_simplices)
-    for i in range(len(interior)):
-        all_values.unsafe_set(interior[i], fget(eigenvectors, i, columns[N]))
+    var mode: TypedCochain[2, 1, PRIMAL] = eig.mode(columns[N])
     with open("mode3.txt", "w") as f:
-        for i in range(all_values.size):
-            f.write(all_values.unsafe_get(i), "\n")
+        for i in range(len(mode)):
+            f.write(mode[i], "\n")
     print("wrote eigenvalues.txt and mode3.txt")
 
     # plot the eigenvalues
@@ -88,7 +88,7 @@ def main() raises:
     plt.savefig("eigenvalues.png")
 
     # plot the eigenvector 1-cochain as a vector field
-    var q = simplex_quivers(sc, all_values)
+    var q = simplex_quivers(sc, mode.v)
     var bases = q.bases.to_numpy()
     var arrows = q.vectors.to_numpy()
     var V = sc.vertices().to_numpy()

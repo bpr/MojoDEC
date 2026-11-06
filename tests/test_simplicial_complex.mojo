@@ -25,6 +25,19 @@ def idx(sc: SimplicialComplex, s: List[Int]) raises -> Int:
     return sc[len(s) - 1].simplex_to_index(Simplex(s))
 
 
+def test_find_vertices() raises:
+    var sc = SimplicialComplex(
+        nm.fromstring[f64]("[[0,0],[1,0],[0,1],[1,1]]"),
+        nm.fromstring[DType.int]("[[0,1,3],[0,3,2]]"),
+    )
+    for k in range(3):
+        for i in range(sc[k].num_simplices):
+            var s = sc[k].index_to_simplex(i)
+            assert_equal(sc[k].find_vertices(s.vertices), i)
+    assert_equal(sc[1].find_vertices([1, 2]), -1)
+    assert_equal(sc[1].find_vertices([0, 1, 3]), -1)
+
+
 def test_d_in_1d() raises:
     var sc = SimplicialComplex(R("[[0],[1]]"), I("[[0,1]]"))
     assert_equal(sc[0].d.nrows, 1)

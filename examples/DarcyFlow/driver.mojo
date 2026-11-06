@@ -18,8 +18,11 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec import (
-    SimplicialComplex,
-    CSRMatrix,
+    DUAL,
+    PRIMAL,
+    BlockOp,
+    CochainPair,
+    TypedComplex,
     VTKField,
     loadtxt,
     spsolve,
@@ -28,10 +31,7 @@ from mojodec import (
 from mojodec.core.utils import (
     fget,
     fset,
-    iget,
     real_array,
-    real_vector,
-    rows_of,
     take_rows,
     row_list,
 )
@@ -46,37 +46,33 @@ def main() raises:
     var triangles = loadtxt[DType.int]("triangles.txt")
     for i in range(triangles.size):
         triangles.unsafe_set(i, triangles.unsafe_get(i) - 1)
-    var sc = SimplicialComplex(vertices, triangles)
+    var tc = TypedComplex[2](vertices, triangles)
+    ref sc = tc.sc
     # Nk is the number of k-simplices
     var N1 = sc[1].num_simplices
     var N2 = sc[2].num_simplices
     # permeability k > 0 and viscosity mu > 0
     var k: Float64 = 1
     var mu: Float64 = 1
-    # The full linear system for Darcy flow in 2D, before boundary conditions:
-    #   [-(mu/k) star1   d1^T ]
-    #   [      d1         0   ]
-    var blocks = List[List[Optional[CSRMatrix]]]()
-    blocks.append(
-        [Optional((sc[1].star * (-mu / k)).to_csr()), Optional(sc[1].d.T())]
+    # The mixed system for Darcy flow in 2D, before boundary conditions, for
+    # the flux u (a primal 1-cochain) and the pressure p (a dual 0-cochain,
+    # at the triangle circumcenters):
+    #   [-(mu/k) star1   d1^T ] [u]   [0]    on the dual edges
+    #   [      d1         0   ] [p] = [0]    on the triangles
+    # The types check each block: star1 takes primal 1- to dual 1-cochains,
+    # d1^T dual 0- to dual 1-cochains, d1 primal 1- to primal 2-cochains.
+    var d1 = tc.d[1, PRIMAL]()
+    var A = BlockOp(
+        tc.star[1, PRIMAL]().to_matrix_op() * (-mu / k),
+        d1.T(),
+        d1,
+        tc.zero[0, DUAL, 2, PRIMAL](),
     )
-    blocks.append([Optional(sc[1].d.copy()), Optional[CSRMatrix](None)])
-    var A = CSRMatrix.bmat(blocks)
-    var all_fluxes = real_vector(N1)
+    print(A)
 
-    # boundary and internal edges
-    var boundary_edges = sc.boundary()  # sorted, as returned
-    var boundary_indices = List[Int]()
-    var is_boundary = List[Bool](length=N1, fill=False)
-    for ref e in boundary_edges:
-        var i = sc[1].simplex_to_index(e)
-        boundary_indices.append(i)
-        is_boundary[i] = True
-    var internal_indices = List[Int]()
-    for i in range(N1):
-        if not is_boundary[i]:
-            internal_indices.append(i)
-
+    # the flux through the boundary edges, from the prescribed velocity
+    # (sc.boundary() gives them oriented along the boundary)
+    var boundary_flux = tc.cochain[1, PRIMAL]()
     # all triangles have the same orientation, so look at the first one
     var t0 = take_rows(vertices, row_list(triangles, 0))
     var edge_mat = nm.zeros[f64](Shape(2, 2))
@@ -84,8 +80,7 @@ def main() raises:
         for c in range(2):
             edge_mat.unsafe_set(r * 2 + c, fget(t0, r + 1, c) - fget(t0, 0, c))
     var s: Float64 = 1.0 if det(edge_mat) > 0 else -1.0
-    for i in range(len(boundary_edges)):
-        ref e = boundary_edges[i]
+    for ref e in sc.boundary():
         var sign: Float64 = -1.0 if e.parity == 1 else 1.0
         var ev0 = sign * (fget(vertices, e[1], 0) - fget(vertices, e[0], 0))
         var ev1 = sign * (fget(vertices, e[1], 1) - fget(vertices, e[0], 1))
@@ -94,37 +89,29 @@ def main() raises:
         var len2 = ev0 * ev0 + ev1 * ev1
         var vdotn = velocity[0] * n0 + velocity[1] * n1
         var area = abs(n0 * ev1 - n1 * ev0)
-        all_fluxes.unsafe_set(
-            boundary_indices[i], -s * (1 / len2) * vdotn * area
+        boundary_flux[sc[1].simplex_to_index(e)] = (
+            -s * (1 / len2) * vdotn * area
         )
 
-    var pressures = real_vector(N2)
-    # adjust the right-hand side for the known fluxes and pressures
-    var known = real_vector(N1 + N2)
-    for i in range(N1):
-        known.unsafe_set(i, all_fluxes.unsafe_get(i))
-    var b = (A @ known) * -1.0
-    # the pressure at the right-most triangle circumcenter is taken as known (0)
+    # the pressure at the right-most triangle circumcenter is taken as known
+    # (0); the fluxes are known on the boundary edges. spsolve drops the
+    # equations on those cells and moves the known values to the right side
     var rightmost = 0
     for i in range(N2):
         if fget(sc[2].circumcenter, i, 0) > fget(
             sc[2].circumcenter, rightmost, 0
         ):
             rightmost = i
-    var keep = internal_indices.copy()
-    for i in range(N2):
-        if i != rightmost:
-            keep.append(N1 + i)
-    var bk = real_vector(len(keep))
-    for i in range(len(keep)):
-        bk.unsafe_set(i, b.unsafe_get(keep[i]))
-    var Ak = A.select(keep, keep)
-    var u = spsolve(Ak, bk)
-    var ni = len(internal_indices)
-    for i in range(ni):
-        all_fluxes.unsafe_set(internal_indices[i], u.unsafe_get(i))
-    for i in range(ni, len(keep)):
-        pressures.unsafe_set(keep[i] - N1, u.unsafe_get(i))
+    var boundary = tc.boundary_cells[1]()
+    var pinned = tc.subset[0, DUAL]([rightmost])
+    var known = CochainPair(boundary_flux^, tc.cochain[0, DUAL]())
+    var zero = CochainPair(tc.cochain[1, DUAL](), tc.cochain[2, PRIMAL]())
+    var solution = spsolve(
+        A, zero, values=known, fixed_first=boundary, fixed_second=pinned
+    )
+    ref fluxes = solution.first  # TypedCochain[2, 1, PRIMAL]
+    ref pressures = solution.second  # TypedCochain[2, 0, DUAL]
+    var unknowns = N1 - len(boundary) + N2 - 1
 
     # compare with the exact pressure: slope -1 through the known point
     var xmax = fget(sc[2].circumcenter, rightmost, 0)
@@ -133,9 +120,9 @@ def main() raises:
         for i in range(N2):
             var x = fget(sc[2].circumcenter, i, 0)
             var exact = xmax - x
-            max_err = max(max_err, abs(pressures.unsafe_get(i) - exact))
-            f.write(x, " ", pressures.unsafe_get(i), " ", exact, "\n")
-    print("edges:", N1, " triangles:", N2, " unknowns:", len(keep))
+            max_err = max(max_err, abs(pressures[i] - exact))
+            f.write(x, " ", pressures[i], " ", exact, "\n")
+    print("edges:", N1, " triangles:", N2, " unknowns:", unknowns)
     print("max |pressure - exact| =", max_err)
     print("wrote pressures.txt")
 
@@ -148,7 +135,7 @@ def main() raises:
     var ax = plt.gca()
     ax.set_xlabel("x", fontsize=20)
     ax.set_ylabel("Pressure", fontsize=20)
-    ax.plot(cc.T[0], pressures.to_numpy(), "ro", markersize=8, mec="r")
+    ax.plot(cc.T[0], pressures.v.to_numpy(), "ro", markersize=8, mec="r")
     var xmin = cc.T[0].min()
     ax.plot(
         Python.list(xmin, xmax), Python.list(xmax - xmin, 0), "k", linewidth=2
@@ -163,7 +150,7 @@ def main() raises:
     ax.triplot(V.T[0], V.T[1], triangles.to_numpy())
     # Whitney interpolate the flux and sample it at the barycenters, then
     # rotate 90 degrees opposite to the triangles' orientation
-    var q = simplex_quivers(sc, all_fluxes)
+    var q = simplex_quivers(sc, fluxes.v)
     var bases = q.bases.to_numpy()
     var arrows = q.vectors.to_numpy()
     ax.quiver(
@@ -192,7 +179,7 @@ def main() raises:
         vertices,
         triangles,
         cell_data=[
-            VTKField("pressure", pressures),
+            VTKField("pressure", pressures.v),
             VTKField("velocity", barycenter_velocity),
         ],
     )

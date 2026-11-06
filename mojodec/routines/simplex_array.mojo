@@ -128,14 +128,39 @@ struct FacesAndBoundary(Copyable, Movable):
     """The unique faces, one per row."""
     var boundary: CSRMatrix
     """The `num_faces x num_cells` boundary operator."""
+    var coboundary: CSRMatrix
+    """Its transpose, `num_cells x num_faces`: the coboundary `d` on the
+    faces."""
 
-    def __init__(out self, var faces: IntArray, var boundary: CSRMatrix):
+    def __init__(
+        out self,
+        var faces: IntArray,
+        var boundary: CSRMatrix,
+        var coboundary: CSRMatrix,
+    ):
         """A result from its parts.
 
         Args:
             faces: The faces.
             boundary: The boundary operator.
+            coboundary: Its transpose.
         """
+        self.faces = faces^
+        self.boundary = boundary^
+        self.coboundary = coboundary^
+
+    def __init__(out self, var faces: IntArray, var boundary: CSRMatrix) raises:
+        """A result from the faces and the boundary operator; the
+        coboundary is its transpose.
+
+        Args:
+            faces: The faces.
+            boundary: The boundary operator.
+
+        Raises:
+            Does not raise in practice.
+        """
+        self.coboundary = boundary.transpose()
         self.faces = faces^
         self.boundary = boundary^
 
@@ -202,14 +227,21 @@ def simplex_array_boundary(
                 i * fw + j, faces.unsafe_get(unique_rows[i] * fw + j)
             )
 
-    var rows = List[Int](capacity=num_faces)
-    var cols = List[Int](capacity=num_faces)
-    var vals = List[Float64](capacity=num_faces)
+    # d (simplices x faces) has k+1 entries per row; visiting the faces in
+    # sorted order fills each row's columns in increasing order
+    var indptr = List[Int](capacity=num_simplices + 1)
+    for r in range(num_simplices + 1):
+        indptr.append(r * faces_per_simplex)
+    var indices = List[Int](length=num_faces, fill=0)
+    var data = List[Float64](length=num_faces, fill=0)
+    var filled = List[Int](length=num_simplices, fill=0)
     for t in range(num_faces):
-        rows.append(face_index[t])
-        cols.append(owner[perm[t]])
-        vals.append(orient[perm[t]])
-    var B = CSRMatrix.from_coo(
-        len(unique_rows), num_simplices, rows, cols, vals
-    )
-    return FacesAndBoundary(unique_faces^, B^)
+        var p = perm.unsafe_get(t)
+        var r = owner.unsafe_get(p)
+        var at = r * faces_per_simplex + filled.unsafe_get(r)
+        indices.unsafe_set(at, face_index.unsafe_get(t))
+        data.unsafe_set(at, orient.unsafe_get(p))
+        filled.unsafe_set(r, filled.unsafe_get(r) + 1)
+    var d = CSRMatrix(num_simplices, len(unique_rows), indptr^, indices^, data^)
+    var B = d.transpose()
+    return FacesAndBoundary(unique_faces^, B^, d^)

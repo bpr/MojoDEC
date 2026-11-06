@@ -26,24 +26,15 @@ from std.math import abs
 from mojodec.core.cochain import Cochain
 from mojodec.core.primality import Primality
 from mojodec.core.typed import PRIMAL, TypedCochain, TypedComplex
-from mojodec.core.simplex import Simplex
-from mojodec.core.simplicial_complex import (
-    SimplicialComplex,
-    _is_negative_zero,
-)
+from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.utils import (
     IntArray,
     RealArray,
     cols_of,
-    fget,
     int_array,
-    real_array,
     real_vector,
-    row_list,
     rows_of,
 )
-from mojodec.routines.combinatorial import combinations, permutations
-from mojodec.routines.geometry import unsigned_volume
 
 
 def flat[
@@ -116,17 +107,20 @@ def flat(sc: SimplicialComplex, X: RealArray) raises -> Cochain:
     var plain = real_vector(edges.num_simplices)
     var count = List[Int](length=edges.num_simplices, fill=0)
     var size = real_vector(edges.num_simplices)
+    var pieces = dual_edge_pieces(sc)
+    ref V = sc.vertices()
+    var pairs = (n + 1) * n // 2
     for t in range(top.num_simplices):
-        var verts = row_list(top.simplices, t)
-        for pair in combinations(verts, 2):
-            var e = edges.simplex_to_index(Simplex(pair))
+        for j in range(pairs):
+            var e = pieces.edge(t, j)
+            var v0 = Int(edges.simplices.unsafe_get(2 * e))
+            var v1 = Int(edges.simplices.unsafe_get(2 * e + 1))
             var along: Float64 = 0
             for c in range(E):
-                along += fget(X, t, c) * (
-                    fget(sc.vertices(), pair[1], c)
-                    - fget(sc.vertices(), pair[0], c)
+                along += X.unsafe_get(t * E + c) * (
+                    V.unsafe_get(v1 * E + c) - V.unsafe_get(v0 * E + c)
                 )
-            var piece = _dual_piece(sc, verts, pair)
+            var piece = pieces.piece(t, j)
             weighted.unsafe_set(e, weighted.unsafe_get(e) + piece * along)
             plain.unsafe_set(e, plain.unsafe_get(e) + along)
             size.unsafe_set(e, size.unsafe_get(e) + abs(piece))
@@ -217,71 +211,17 @@ def dual_edge_pieces(sc: SimplicialComplex) raises -> DualEdgePieces:
         raise Error("dual_edge_pieces: the complex was built without geometry")
     ref top = sc[n]
     var pairs = (n + 1) * n // 2
-    var values = real_array(top.num_simplices, pairs)
+    var values = sc.dual_edge_piece_values()
     var edges = int_array(top.num_simplices, pairs)
+    var key = List[Int](length=2, fill=0)
     for t in range(top.num_simplices):
-        var verts = row_list(top.simplices, t)
         var j = 0
-        for pair in combinations(verts, 2):
-            values.unsafe_set(t * pairs + j, _dual_piece(sc, verts, pair))
-            edges.unsafe_set(
-                t * pairs + j,
-                Scalar[DType.int](sc[1].simplex_to_index(Simplex(pair))),
-            )
-            j += 1
+        for a in range(n + 1):
+            for b in range(a + 1, n + 1):
+                key[0] = Int(top.simplices.unsafe_get(t * (n + 1) + a))
+                key[1] = Int(top.simplices.unsafe_get(t * (n + 1) + b))
+                edges.unsafe_set(
+                    t * pairs + j, Scalar[DType.int](sc[1].find_vertices(key))
+                )
+                j += 1
     return DualEdgePieces(values^, edges^)
-
-
-def _dual_piece(
-    sc: SimplicialComplex, top: List[Int], edge: List[Int]
-) raises -> Float64:
-    """`|*edge ^ top|`, summed over the flags edge < ... < top.
-
-    Each flag contributes the volume of the simplex spanned by its
-    circumcenters, signed as in the dual volumes: a step to a face is
-    negative when the parent's circumcenter lies across that face from
-    the parent's opposite vertex.
-    """
-    var n = sc.complex_dimension()
-    var E = sc.embedding_dimension()
-    var rest = List[Int]()
-    for v in top:
-        if v not in edge:
-            rest.append(v)
-    var orders = permutations(rest)
-    if len(orders) == 0:
-        orders.append(List[Int]())  # the edge is a top simplex
-    var total: Float64 = 0
-    for ref order in orders:
-        var flag = edge.copy()
-        var pts = real_array(n, E)
-        var sign: Float64 = 1
-        _set_circumcenter(sc, flag, pts, 0)
-        for j in range(len(order)):
-            var parent = flag.copy()
-            parent.append(order[j])
-            sort(parent)
-            # barycentric weight of the parent's circumcenter on the vertex
-            # not in the face below it
-            var p = sc[len(parent) - 1].simplex_to_index(Simplex(parent))
-            var b = fget(
-                sc[len(parent) - 1].bary_circumcenter,
-                p,
-                parent.index(order[j]),
-            )
-            if b < 0 or (b == 0 and _is_negative_zero(b)):
-                sign = -sign
-            flag = parent^
-            _set_circumcenter(sc, flag, pts, j + 1)
-        total += sign * unsigned_volume(pts)
-    return total
-
-
-def _set_circumcenter(
-    sc: SimplicialComplex, simplex: List[Int], mut pts: RealArray, row: Int
-) raises:
-    ref level = sc[len(simplex) - 1]
-    var i = level.simplex_to_index(Simplex(simplex))
-    var E = cols_of(pts)
-    for c in range(E):
-        pts.unsafe_set(row * E + c, fget(level.circumcenter, i, c))

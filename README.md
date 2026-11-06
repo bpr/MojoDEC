@@ -74,9 +74,9 @@ pixi run format
 ```
 
 Notes about installation:
-- Mojo 1.3 is not yet released as stable, so `pixi.toml` pins the nightly
-  `1.3.0.dev2026110305` and its matching `max-core`. To move to a later
-  nightly or to the 1.3.0 release, change both pins.
+- `pixi.toml` accepts any Mojo from the 1.3 nightlies on (`>=1.3.0.dev0`);
+  `pixi.lock` holds the nightly it was tested with (`1.3.0.dev2026110305`),
+  and `pixi update` moves to a later one.
 - The published NuMojo 0.12 package requires Mojo < 1.3, so NuMojo v0.12.0
   is vendored in `third_party/numojo` with a small 1.3 patch; see
   `third_party/README.md`. The `test`, `examples`, and `package` tasks build
@@ -96,6 +96,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/core/diagonal.mojo` — `DiagonalOperator` | (new; PyDEC uses `scipy.sparse` diagonal matrices) |
 | `mojodec/core/subset.mojo` — `Subset` | (new) |
 | `mojodec/core/typed.mojo` — `TypedComplex`, `TypedCochain`, `MatrixOp`, `DiagonalOp` | (new) |
+| `mojodec/core/typed_block.mojo` — `BlockOp`, `CochainPair` | (new) |
 | `mojodec/core/simplex.mojo` — `Simplex` | `mesh/simplex.py` (`simplex`) |
 | `mojodec/core/mesh.mojo` — `SimplicialMesh`, `RegularCubeMesh` | `mesh/simplex.py`, `mesh/regular_cube.py` |
 | `mojodec/core/ncube.mojo` — `NCube` | `mesh/ncube.py` |
@@ -253,8 +254,9 @@ the published mathematics:
   primal]` a k-cochain, and `MatrixOp` / `DiagonalOp[n, in_k, in_primal,
   out_k, out_primal]` a sparse or diagonal operator between two kinds of
   cochain. `tc.d[k, primal]()`, `tc.star[k, primal]()`,
-  `tc.delta[k, primal]()`, and `tc.laplacian[k, primal]()` agree with the
-  untyped `d`, `star`, `delta`, and `laplace_derham`. `A @ B` and `A @ c`
+  `tc.delta[k, primal]()`, `tc.laplacian[k, primal]()`, and
+  `tc.laplace_beltrami[k, primal]()` agree with the untyped `d`, `star`,
+  `delta`, `laplace_derham`, and `laplace_beltrami`. `A @ B` and `A @ c`
   compile only when the kinds match, and `d` past degree n−1 fails a
   compile-time check:
 
@@ -273,9 +275,54 @@ the published mathematics:
   `TypedCochain.overwrite` accept only subsets of the cells they act on.
   `wedge(a, b)` on typed primal cochains has degree `k + l` in its type
   and does not compile past the complex dimension, and `flat(tc, X)`
-  returns a `TypedCochain[n, 1, PRIMAL]`. `complex()`, `untyped()`, `.mat`, and `.diag`
-  lead back to the untyped API, and `TypedCochain(c)` checks an untyped
-  cochain's kind at run time.
+  returns a `TypedCochain[n, 1, PRIMAL]`.
+
+  `whitney_innerproduct[k](tc)` is the Whitney mass matrix as an operator
+  from primal k-cochains to dual (n−k)-cochains, the slot of
+  `tc.star[k, PRIMAL]()`. `cg`, `lsqr`, `spsolve`, and `eigh_generalized`
+  have typed overloads: an operator from one kind of cochain to another
+  takes a right-hand side of the output kind and gives a solution (or
+  eigenvectors, `TypedEighResult.mode(i)`) of the input kind, so a
+  stiffness matrix from primal 0-cochains to dual n-cochains cannot be
+  handed a primal right-hand side. `A.T()` transposes an operator from
+  k-cochains to l-cochains into one from the duals of l-cochains to the
+  duals of k-cochains (the adjoint under the pairing of primal k-cochains
+  with dual (n−k)-cochains), so `d0.T()` takes dual (n−1)- to dual
+  n-cochains:
+
+  ```mojo
+  var d0 = tc.d[0, PRIMAL]()
+  var A = d0.T() @ tc.star[1, PRIMAL]() @ d0   # primal 0 -> dual 2
+  var u = cg(A, b, rtol=1e-10).take_x()        # b dual 2, u primal 0
+  var K = tc.d[0, DUAL]() @ whitney_innerproduct[2](tc) @ tc.d[1, PRIMAL]()
+  var eig = eigh_generalized(K, whitney_innerproduct[1](tc))
+  ```
+
+  For a mesh read from a file, `TypedComplex[n](read_mesh(path))` checks
+  the dimension, and `visit_typed(sc, visitor)` calls a
+  `TypedComplexVisitor`'s `visit[n]` with the dimension of `sc` as a
+  parameter, for code written once for every dimension.
+  `BlockOp` is a 2 × 2 block of typed operators for mixed formulations,
+  acting on a `CochainPair`; the blocks' kinds must agree along each row
+  and column. `spsolve(A, b, values=..., fixed_first=..., fixed_second=...)`
+  solves it with some unknowns given (Dirichlet data, a pinned pressure),
+  dropping the equations on the same cells, which needs each equation to be
+  of the dual kind of its unknown. DarcyFlow's mixed system:
+
+  ```mojo
+  var d1 = tc.d[1, PRIMAL]()
+  var A = BlockOp(
+      tc.star[1, PRIMAL]().to_matrix_op() * (-mu / k),  # primal 1 -> dual 1
+      d1.T(),                                          # dual 0 -> dual 1
+      d1,                                              # primal 1 -> primal 2
+      tc.zero[0, DUAL, 2, PRIMAL](),
+  )
+  ```
+
+  `GmshMesh.subset[k](tc, name)` gives a physical group as a
+  `TypedSubset[n, k, PRIMAL]`. `complex()`, `untyped()`, `.mat`, and
+  `.diag` lead back to the untyped API, and `TypedCochain(c)` checks an
+  untyped cochain's kind at run time.
 - **`icosahedron` and `icosphere`**, closed surfaces to test on.
 - **`read_ply` and `write_ply`**, for meshes from MeshLab, Blender, and
   scanners (ASCII and binary, either byte order; `write_ply` takes
@@ -416,7 +463,7 @@ from your own program.
 | DarcyFlow | pressures agree with the exact solution to 1e-14 |
 | HeatConduction | mesh and boundary pieces from a Gmsh file; the piecewise-linear temperature through two materials to 7e-15, and the heat in through the hot edge equals the heat out through the cold one and the exact 25/26 (not from PyDEC) |
 | ResonantCavity | eigenvalues 1, 1, 2, 4, 4, 5, 5, 8, 9, 9, 10, 10, 13, 13, … (the exact m²+n²) |
-| Sphere | Hodge-Laplacian spectra near n(n+1) for 0-, 1-, and 2-forms; the 1-form spectrum is the 0- and 2-form spectra merged (to 2e-12); Gauss-Bonnet exact; Gaussian and mean curvature 1.02 and 1.0001 (not from PyDEC) |
+| Sphere | Hodge-Laplacian spectra near n(n+1) for 0-, 1-, and 2-forms; the 1-form spectrum is the 0- and 2-form spectra merged (to 3e-12); Gauss-Bonnet exact; Gaussian and mean curvature 1.02 and 1.0001 (not from PyDEC) |
 | Neighborhoods | interior links are hexagons (χ = 0), boundary links paths (χ = 1); Bd(Cl(St(v))) = Lk(v); every ring boundary has χ = 0; the square's boundary has 4n edges and an empty boundary (not from PyDEC) |
 | Neighborhoods3D | interior vertex links are spheres (χ = 2), boundary links disks (χ = 1); growing rings are balls (χ = 1) until they meet themselves around the hole (one pinched step), then the solid torus (χ = 0) bounded by a torus; χ(Bd R) = 2 χ(R) whenever Bd R is a surface (not from PyDEC) |
 | MakeMesh | writes a mesh and reads it back; matches `ExpectedOutput/` |
@@ -427,8 +474,15 @@ does not converge (PyDEC's call to SciPy's `cg` returns `info > 0`), and
 the resulting "harmonic" forms are not harmonic. This port solves that
 system with LSQR.
 
+**DarcyFlow, HeatConduction, and ResonantCavity** are written with the
+typed layer (`TypedComplex`, typed operators and solves); the others use
+the untyped API, as PyDEC's drivers do.
+
 **ResonantCavity.** The original PyDEC driver no longer runs on current
-NumPy: `whitney_innerproduct` assigns a 1×1 array to a scalar.
+NumPy: `whitney_innerproduct` assigns a 1×1 array to a scalar. This one
+keeps every edge and decouples the boundary edges (`P^T K P`,
+`P^T M P + Q^T M Q`) rather than deleting their rows and columns; they add
+zero eigenvalues, which the report skips with the gradients' ones.
 
 ## License
 

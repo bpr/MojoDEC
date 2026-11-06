@@ -25,9 +25,14 @@ Unlike the smooth wedge, it is not associative in general.
 from mojodec.core.cochain import Cochain
 from mojodec.core.primality import Primality
 from mojodec.core.simplex import Simplex
+from mojodec.core.simplicial_complex import SimplexLevel
 from mojodec.core.typed import PRIMAL, TypedCochain
-from mojodec.core.utils import real_vector, row_list
-from mojodec.routines.combinatorial import permutation_parity, permutations
+from mojodec.core.utils import real_vector
+from mojodec.routines.combinatorial import (
+    combinations,
+    permutation_parity,
+    permutations,
+)
 
 
 def wedge[
@@ -101,34 +106,104 @@ def wedge(a: Cochain, b: Cochain) raises -> Cochain:
                 sc.complex_dimension(),
             )
         )
+    # The sum over permutations depends only on which faces the two
+    # halves of a permutation pick and in what order, so it collapses to
+    # coef[x][y] * a[face x] * b[face y], with the faces as combinations of
+    # the target simplex's (sorted) vertex positions.
     var m = k + l + 1
-    var order = List[Int](capacity=m)
+    var positions = List[Int](capacity=m)
     for i in range(m):
-        order.append(i)
-    var perms = permutations(order)
-    var signs = List[Float64](capacity=len(perms))
+        positions.append(i)
+    var a_faces = combinations(positions, k + 1)
+    var b_faces = combinations(positions, l + 1)
+    var na = len(a_faces)
+    var nb = len(b_faces)
+    var coef = List[Float64](length=na * nb, fill=0)
     var scale: Float64 = 1
     for i in range(2, m + 1):
         scale *= Float64(i)
-    for ref p in perms:
-        signs.append(-1.0 if permutation_parity(p) == 1 else 1.0)
+    for ref p in permutations(positions):
+        var sign: Float64 = -1.0 if permutation_parity(p) == 1 else 1.0
+        var x = _face_of(a_faces, p, 0, k + 1)
+        var y = _face_of(b_faces, p, k, l + 1)
+        sign *= x[1] * y[1]
+        coef[x[0] * nb + y[0]] += sign / scale
     ref target = sc[k + l]
+    ref a_level = sc[k]
+    ref b_level = sc[l]
+    var a_vals = List[Float64](length=na, fill=0)
+    var b_vals = List[Float64](length=nb, fill=0)
+    var verts = List[Int](length=m, fill=0)
+    var key = List[Int]()
     var out = real_vector(target.num_simplices)
     for r in range(target.num_simplices):
-        var verts = row_list(target.simplices, r)
+        for i in range(m):
+            verts.unsafe_set(i, Int(target.simplices.unsafe_get(r * m + i)))
+        for x in range(na):
+            a_vals.unsafe_set(
+                x, _face_value(a, a_level, a_faces[x], verts, r, m, key)
+            )
+        for y in range(nb):
+            b_vals.unsafe_set(
+                y, _face_value(b, b_level, b_faces[y], verts, r, m, key)
+            )
         var total: Float64 = 0
-        for t in range(len(perms)):
-            ref p = perms[t]
-            var av = List[Int](capacity=k + 1)
-            for i in range(k + 1):
-                av.append(verts[p[i]])
-            var bv = List[Int](capacity=l + 1)
-            for i in range(k, m):
-                bv.append(verts[p[i]])
-            total += signs[t] * a[Simplex(av)] * b[Simplex(bv)]
+        for x in range(na):
+            var ax = a_vals.unsafe_get(x)
+            if ax == 0:
+                continue
+            for y in range(nb):
+                total += coef.unsafe_get(x * nb + y) * ax * b_vals.unsafe_get(y)
         # values refer to each simplex's stored orientation, which for top
         # simplices is the mesh's rather than the sorted vertex order
         if Int(target.simplex_parity.unsafe_get(r)) == 1:
             total = -total
-        out.unsafe_set(r, total / scale)
+        out.unsafe_set(r, total)
     return Cochain(sc, k + l, Primality.PRIMAL, out^)
+
+
+def _face_of(
+    faces: List[List[Int]], p: List[Int], start: Int, size: Int
+) -> Tuple[Int, Float64]:
+    """The face `p[start:start + size]` picks, as an index into `faces`
+    (sorted combinations), and the sign of `p`'s order on it."""
+    var inversions = 0
+    for i in range(start, start + size):
+        for j in range(i + 1, start + size):
+            if p[i] > p[j]:
+                inversions += 1
+    var sorted_face = List[Int](capacity=size)
+    for i in range(start, start + size):
+        sorted_face.append(p[i])
+    sort(sorted_face)
+    var index = 0
+    for f in range(len(faces)):
+        if faces[f] == sorted_face:
+            index = f
+    return (index, -1.0 if inversions % 2 == 1 else 1.0)
+
+
+def _face_value(
+    c: Cochain,
+    level: SimplexLevel,
+    face: List[Int],
+    verts: List[Int],
+    r: Int,
+    m: Int,
+    mut key: List[Int],
+) raises -> Float64:
+    """The value of `c` on the face of target simplex `r` (vertices `verts`,
+    sorted) at local positions `face`, in sorted vertex order."""
+    var index = r
+    if len(face) < m:
+        key.clear()
+        for i in face:
+            key.append(verts.unsafe_get(i))
+        index = level.find_vertices(key)
+        if index < 0:
+            raise Error("wedge: a face is missing from the complex")
+    var v = c.v.unsafe_get(index)
+    # stored in the opposite orientation (only top simplices can be)
+    if Int(level.simplex_parity.unsafe_get(index)) == 1:
+        return -v
+    return v

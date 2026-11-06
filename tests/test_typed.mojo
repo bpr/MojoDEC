@@ -10,20 +10,28 @@ from mojodec import (
     Primality,
     CSRMatrix,
     DUAL,
+    DiagonalOp,
     MatrixOp,
     PRIMAL,
     SimplicialComplex,
     TypedCochain,
     TypedComplex,
+    TypedComplexVisitor,
     TypedSubset,
+    cg,
     d,
     delta,
+    eigh_generalized,
+    laplace_beltrami,
     laplace_derham,
+    lsqr,
     simplicial_grid_2d,
     spsolve,
     star,
+    visit_typed,
+    whitney_innerproduct,
 )
-from mojodec.core.utils import fget, fset
+from mojodec.core.utils import fget, fset, real_vector
 from mojodec.routines.io.meshio import read_mesh
 
 
@@ -64,6 +72,10 @@ def _check_level[n: Int, k: Int, primal: Bool](tc: TypedComplex[n]) raises:
         assert_equal(_diff(tc.d[k, primal]().mat, d(basis).v), 0.0)
     comptime if k > 0:
         assert_equal(_diff(tc.delta[k, primal]().mat, delta(basis).v), 0.0)
+    comptime if k < n:
+        var LB = tc.laplace_beltrami[k, primal]()
+        var LBref = laplace_beltrami(basis).v.copy()
+        assert_true(_diff(LB.mat, LBref) <= 1e-9 * LBref.max_abs())
     var L = tc.laplacian[k, primal]()
     var Lref = laplace_derham(basis).v.copy()
     assert_true(_diff(L.mat, Lref) <= 1e-9 * Lref.max_abs())
@@ -138,9 +150,172 @@ def test_dirichlet_poisson() raises:
         g[i] = 1.0 + fget(V, i, 0) - 2.0 * fget(V, i, 1)
     var b = tc.cochain[0, PRIMAL]()
     b.overwrite(fixed, g)
-    var u = tc.cochain[0, PRIMAL](spsolve(A.mat, b.v))
+    var u: TypedCochain[2, 0, PRIMAL] = spsolve(A, b)
     for i in range(len(u)):
         assert_almost_equal(u[i], g[i], atol=1e-12)
+
+
+def _stiffness(tc: TypedComplex[2]) raises -> MatrixOp[2, 0, PRIMAL, 2, DUAL]:
+    """`d0^T *1 d0`, from primal 0-cochains to dual 2-cochains."""
+    var d0 = tc.d[0, PRIMAL]()
+    return d0.T() @ tc.star[1, PRIMAL]() @ d0
+
+
+def test_transpose() raises:
+    var tc = _grid(4)
+    # d[k, PRIMAL]^T = (-1)^(n-k-1) d[n-k-1, DUAL], the dual kinds swapped
+    var d0t: MatrixOp[2, 1, DUAL, 2, DUAL] = tc.d[0, PRIMAL]().T()
+    assert_equal(_diff(d0t.mat, -tc.d[1, DUAL]().mat), 0.0)
+    var d1t: MatrixOp[2, 0, DUAL, 1, DUAL] = tc.d[1, PRIMAL]().transpose()
+    assert_equal(_diff(d1t.mat, tc.d[0, DUAL]().mat), 0.0)
+    var t = _torus()
+    var e1t: MatrixOp[3, 1, DUAL, 2, DUAL] = t.d[1, PRIMAL]().T()
+    assert_equal(_diff(e1t.mat, -t.d[1, DUAL]().mat), 0.0)
+    # transposing twice gives back the operator and its kind
+    var back: MatrixOp[2, 0, PRIMAL, 1, PRIMAL] = d0t.T()
+    assert_equal(_diff(back.mat, tc.d[0, PRIMAL]().mat), 0.0)
+    # a Hodge star is its own transpose, kind included
+    var S = tc.star[1, PRIMAL]()
+    var St: DiagonalOp[2, 1, PRIMAL, 1, DUAL] = S.T()
+    for i in range(len(S.diag)):
+        assert_equal(St.diag[i], S.diag[i])
+    # the stiffness matrix is symmetric, and keeps its complex
+    var A = _stiffness(tc)
+    assert_equal(_diff(A.mat, A.T().mat), 0.0)
+    with assert_raises(contains="different complexes"):
+        _ = A @ _grid(4).cochain[0, PRIMAL]()
+
+
+def test_dual_diagonal() raises:
+    var tc = _grid(4)
+    var S = tc.star[1, PRIMAL]()
+    var w = List[Float64]()
+    for i in range(len(S.diag)):
+        w.append(S.diag[i])
+    var W: DiagonalOp[2, 1, PRIMAL, 1, DUAL] = tc.dual_diagonal[1, PRIMAL](w^)
+    for i in range(len(W.diag)):
+        assert_equal(W.diag[i], S.diag[i])
+    # Dirichlet rows on the boundary vertices of d0^T *1 d0, whose
+    # equations are dual 2-cochains
+    var fixed = tc.boundary_cells[0]()
+    var N0 = tc.num_cells[0, PRIMAL]()
+    var A = _stiffness(tc).exclude_subset(fixed.dual()) + tc.dual_diagonal[
+        0, PRIMAL
+    ](List[Float64](length=N0, fill=1.0)).restrict_to_subset(fixed.dual())
+    var g = tc.cochain[0, PRIMAL]()
+    ref V = tc.sc.vertices()
+    for i in range(N0):
+        g[i] = 2.0 * fget(V, i, 0) + fget(V, i, 1)
+    var b = tc.cochain[2, DUAL]()
+    for i in fixed.indices():
+        b[i] = g[i]
+    var u = spsolve(A, b)  # a linear function is discretely harmonic
+    for i in range(N0):
+        assert_almost_equal(u[i], g[i], atol=1e-12)
+    with assert_raises(contains="wrong number"):
+        _ = tc.dual_diagonal[0, DUAL](List[Float64]())
+
+
+def test_solvers() raises:
+    var tc = _grid(6)
+    var A = _stiffness(tc)
+    # a consistent right-hand side: the image of a known potential
+    var f = tc.cochain[0, PRIMAL]()
+    for i in range(len(f)):
+        f[i] = Float64((i * 5) % 7) - 3.0
+    var b = A @ f  # TypedCochain[2, 2, DUAL]
+    var res = cg(A, b, rtol=1e-12)
+    assert_true(res.converged())
+    var u: TypedCochain[2, 0, PRIMAL] = res^.take_x()
+    var r = A @ u - b
+    for i in range(len(r)):
+        assert_almost_equal(r[i], 0.0, atol=1e-9)
+    # the same iterates as the untyped solver
+    var raw = cg(A.mat, b.v, rtol=1e-12).take_x()
+    for i in range(len(u)):
+        assert_equal(u[i], raw.unsafe_get(i))
+    # least squares: a potential of the gradient of f
+    var w = tc.d[0, PRIMAL]() @ f
+    var ls = lsqr(tc.d[0, PRIMAL](), w, atol=1e-12, btol=1e-12)
+    var g: TypedCochain[2, 0, PRIMAL] = ls^.take_x()
+    var dg = tc.d[0, PRIMAL]() @ g - w
+    for i in range(len(dg)):
+        assert_almost_equal(dg[i], 0.0, atol=1e-9)
+    # operands from another complex are refused
+    var other = _grid(6)
+    with assert_raises(contains="different complexes"):
+        _ = cg(A, other.cochain[2, DUAL]())
+    with assert_raises(contains="different complexes"):
+        _ = spsolve(A, other.cochain[2, DUAL]())
+    # cg(A, f) does not compile: f is primal 0, A gives dual 2
+
+
+def test_whitney_and_eigenproblems() raises:
+    var tc = _grid(4)
+    var M1 = whitney_innerproduct[1](tc)  # MatrixOp[2, 1, PRIMAL, 1, DUAL]
+    assert_equal(_diff(M1.mat, whitney_innerproduct(tc.sc, 1)), 0.0)
+    # the resonant cavity: curl-curl against the Whitney 1-form mass matrix
+    var K = tc.d[0, DUAL]() @ whitney_innerproduct[2](tc) @ tc.d[1, PRIMAL]()
+    var eig = eigh_generalized(K, M1)
+    var ref_ = eigh_generalized(K.mat.todense(), M1.mat.todense())
+    assert_equal(len(eig), ref_.values.size)
+    for i in range(len(eig)):
+        assert_equal(eig.values.unsafe_get(i), ref_.values.unsafe_get(i))
+    # each mode solves K x = lambda M x
+    var last = len(eig) - 1
+    var x: TypedCochain[2, 1, PRIMAL] = eig.mode(last)
+    var lhs = K @ x
+    var rhs = (M1 @ x) * eig.values.unsafe_get(last)
+    var scale = eig.values.unsafe_get(last)
+    for i in range(len(lhs)):
+        assert_almost_equal(lhs[i], rhs[i], atol=1e-9 * scale)
+    # with the diagonal Hodge star as the mass matrix
+    var S = tc.star[0, PRIMAL]()
+    var eig0 = eigh_generalized(S @ tc.laplacian[0, PRIMAL](), S)
+    var ref0 = eigh_generalized(
+        (S @ tc.laplacian[0, PRIMAL]()).mat.todense(), S.diag
+    )
+    for i in range(len(eig0)):
+        assert_equal(eig0.values.unsafe_get(i), ref0.values.unsafe_get(i))
+    assert_almost_equal(eig0.values.unsafe_get(0), 0.0, atol=1e-10)
+    with assert_raises(contains="index out of range"):
+        _ = eig0.mode(len(eig0))
+    with assert_raises(contains="different complexes"):
+        _ = eigh_generalized(K, whitney_innerproduct[1](_grid(4)))
+
+
+struct _Census(TypedComplexVisitor):
+    var dims: List[Int]
+    var top: List[Int]
+
+    def __init__(out self):
+        self.dims = List[Int]()
+        self.top = List[Int]()
+
+    def visit[n: Int](mut self, tc: TypedComplex[n]) raises:
+        self.dims.append(n)
+        self.top.append(tc.num_cells[n, PRIMAL]())
+        # code generic over n: the top-degree Laplacian
+        _ = tc.laplacian[n, PRIMAL]()
+
+
+def test_visit_typed() raises:
+    var census = _Census()
+    visit_typed(_grid(2).sc, census)
+    var mesh = read_mesh("tests/meshes/torus_tet.xml")
+    var torus = SimplicialComplex(mesh)
+    visit_typed(torus, census)
+    assert_equal(census.dims, [2, 3])
+    assert_equal(census.top[0], 8)
+    assert_equal(census.top[1], torus[3].num_simplices)
+    # outside the compiled range
+    with assert_raises(contains="outside 1..2"):
+        visit_typed[max_n=2](torus, census)
+    # a TypedComplex straight from a mesh
+    var tc = TypedComplex[3](mesh)
+    assert_equal(tc.num_cells[0, PRIMAL](), torus[0].num_simplices)
+    with assert_raises():
+        _ = TypedComplex[2](mesh)
 
 
 def test_typed_subset() raises:
