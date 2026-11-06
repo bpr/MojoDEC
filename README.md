@@ -4,8 +4,8 @@ MojoDEC is a Mojo port of [PyDEC](https://github.com/hirani/pydec),
 implementing Discrete Exterior Calculus (DEC) and lowest order finite element
 exterior calculus (FEEC), i.e., Whitney forms. It runs on Mojo 1.3, with
 [NuMojo](https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo) arrays
-in place of NumPy and its own `CSRMatrix` in place of `scipy.sparse`. The
-main functionality, as in PyDEC:
+in place of PyDEC's NumPy arrays and its own `CSRMatrix` in place of
+PyDEC's `scipy.sparse` matrices. The main functionality, as in PyDEC:
 - simplicial complexes of dimension n embedded in dimension N >= n
 - abstract simplicial complexes (no embedding needed), and Rips complexes
 - cubical complexes in all dimensions
@@ -92,7 +92,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 
 | MojoDEC | PyDEC |
 |---|---|
-| `mojodec/core/sparse.mojo` — `CSRMatrix` | `scipy.sparse.csr_matrix` |
+| `mojodec/core/sparse.mojo` — `CSRMatrix` | `scipy.sparse.csr_matrix` (PyDEC's sparse matrices) |
 | `mojodec/core/diagonal.mojo` — `DiagonalOperator` | (new; PyDEC uses `scipy.sparse` diagonal matrices) |
 | `mojodec/core/subset.mojo` — `Subset` | (new) |
 | `mojodec/core/typed.mojo` — `TypedComplex`, `TypedCochain`, `MatrixOp`, `DiagonalOp` | (new) |
@@ -111,8 +111,8 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/combinatorial.mojo` | `math/combinatorial.py`, `math/parity.py` |
 | `mojodec/routines/innerproduct.mojo` | `fem/innerproduct.py` |
 | `mojodec/routines/mesh_generation.mojo` | `mesh/generation.py`, `mesh/subdivision.py` |
-| `mojodec/routines/linalg.mojo` — `cg`, `lsqr`, `spsolve`, `eigh_generalized` | `scipy.sparse.linalg`, `scipy.linalg.eig` |
-| `mojodec/routines/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh` | `numpy.linalg` |
+| `mojodec/routines/linalg.mojo` — `cg`, `lsqr`, `spsolve`, `eigh_generalized` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
+| `mojodec/routines/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh` | `numpy.linalg` (called by PyDEC) |
 | `mojodec/routines/io/` — `read_array`, `write_array`, `read_mesh`, `write_mesh`, `loadtxt` | `io/arrayio.py`, `io/meshio.py` |
 | `mojodec/routines/io/vtk.mojo` — `write_vtu`, `write_vtu_cubes`, `VTKField` | (new) |
 | `mojodec/routines/io/ply.mojo` — `read_ply`, `write_ply` | (new) |
@@ -121,6 +121,8 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/musical.mojo` — `flat`, `dual_edge_pieces` | (new) |
 | `mojodec/routines/curvature.mojo` — `angle_defect`, `gaussian_curvature`, `mean_curvature`, `mean_curvature_normal` | (new) |
 | `mojodec/routines/quality.mojo` — `well_centeredness`, `well_centered_fraction`, `shape_regularity` | (new) |
+| `mojodec/core/chain_complex.mojo` — `ChainComplex` | the lists of `chain_complex()`, `cochain_complex()` |
+| `mojodec/core/cell_set.mojo` — `CellSet`, `CellComplex` | (new) |
 | `mojodec/routines/topology.mojo` — `star_of`, `closure_of`, `link_of`, `boundary_of`, `interior_of` | (new) |
 | `mojodec/vis/draw.mojo` — `triplot`, `lineplot`, `lineplot2`, `simplex_quivers`, `cube_quivers` | `vis/draw.py` |
 
@@ -138,9 +140,9 @@ from mojodec.vis import pyplot, show_requested, simplex_quivers, triplot
 
 var plt = pyplot(interactive=show_requested())  # Agg unless run with --show
 _ = triplot(sc.vertices(), sc.simplices())
-var bd = simplex_quivers(sc, h)
-var b = bd[0].to_numpy()
-var v = bd[1].to_numpy()
+var q = simplex_quivers(sc, h)
+var b = q.bases.to_numpy()
+var v = q.vectors.to_numpy()
 plt.quiver(b.T[0], b.T[1], v.T[0], v.T[1])
 plt.savefig("h.png")
 if show_requested():
@@ -171,14 +173,14 @@ write_vtu(
     sc.vertices(),
     sc[1].simplices,
     cell_data=[VTKField("h", h)],
-    format="appended",
+    format=.APPENDED,
 )
 ```
 
-`format` is `"ascii"` (the default), `"binary"` (base64 inside the XML), or
-`"appended"` (raw bytes after the XML). All three hold the same values
-exactly. Binary output is fixed-size and faster to read, but it is not
-compressed: `"appended"` is about a quarter smaller than ASCII for
+`format` is a `VTKFormat`: `.ASCII` (the default), `.BINARY` (base64 inside
+the XML), or `.APPENDED` (raw bytes after the XML). All three hold the same
+values exactly. Binary output is fixed-size and faster to read, but it is
+not compressed: `.APPENDED` is about a quarter smaller than ASCII for
 floating-point fields, while connectivity of small meshes, whose indices are
 short in ASCII, can come out larger.
 
@@ -211,17 +213,23 @@ the published mathematics:
 - **`euler_characteristic()`** on `SimplicialComplex`,
   `AbstractSimplicialComplex`, and `RegularCubeComplex`.
 - **Neighborhoods**: `star`, `closure`, and `link` methods on every
-  complex type, simplicial or cubical, for a set of cells given as
-  indices per dimension (`sc.link([[v]])`) or, on a `SimplicialComplex`,
-  a `Simplex` (`sc.link(Simplex([v]))`); `simplices_in` turns the result
-  back into simplices. The link of an interior vertex is a circle on a
-  surface and a sphere in a tetrahedral mesh, which the tests check.
-  `boundary` and `interior` do the same for a pure set of cells, and
-  `boundary_cells()` and `interior_cells()` for the whole complex: the
-  boundary subcomplex, and every cell not on it.
+  complex type, simplicial or cubical, for a `CellSet` (cells of every
+  dimension, one `Subset` bitset per dimension) or, on a
+  `SimplicialComplex`, a `Simplex` (`sc.link(Simplex([v]))`).
+  `CellSet.from_lists(sc, [[], [e]])`, `from_indices`, `from_simplices`,
+  and `from_subset` build sets; `cells[k]` is the `Subset` of k-cells,
+  sets support `|`, `&`, `-`, and `==`, and `euler_characteristic()`
+  and `simplices(sc)` read them. Each query walks only the incidence of
+  the cells it reaches, so a vertex's link costs microseconds on any
+  mesh. The link of an interior vertex is a circle on a surface and a
+  sphere in a tetrahedral mesh, which the tests check. `boundary` and
+  `interior` do the same for a pure set of cells, and `boundary_cells()`
+  and `interior_cells()` for the whole complex: the boundary subcomplex,
+  and every cell not on it. The free functions `star_of`, `link_of`,
+  etc. take any `CellComplex`, a `ChainComplex` included.
 - **Subsets** (`Subset`): a set of primal k-simplices or dual k-cells,
   stored as a bitset over their indices, for boundary conditions and
-  regions with their own parameters. `sc.boundary_subset(k)` gives the
+  regions with their own parameters. `sc.boundary_cells()[k]` gives the
   k-simplices on the mesh boundary; `Subset.from_indices`, `from_mask`,
   `from_simplices`, `full`, and `empty` build others. Subsets support
   `|`, `&`, `-`, `~`, `dual()`, `boundary(sc)`, `coboundary(sc)`,
@@ -233,7 +241,7 @@ the published mathematics:
   conditions for `L u = f`:
 
   ```mojo
-  var fixed = sc.boundary_subset(0)
+  var fixed = sc.boundary_cells()[0].copy()
   var I = DiagonalOperator.identity(N).restrict_to_subset(fixed)
   var A = L.exclude_subset(fixed) + I.to_csr()
   f.overwrite(fixed, g)                  # boundary rows read u = g
@@ -257,14 +265,21 @@ the published mathematics:
   # tc.d[0, PRIMAL]() @ tc.star[1, PRIMAL]()   # error: no matching __matmul__
   ```
 
-  Diagonal products stay diagonal, `inverse()` swaps the input and output
-  kinds, and `exclude_subset` / `restrict_to_subset` check that the subset
-  is of the output cells. `complex()`, `untyped()`, `.mat`, and `.diag`
+  Diagonal products stay diagonal, and `inverse()` swaps the input and
+  output kinds. `TypedSubset[n, k, primal]` is a set of cells with its kind
+  in its type: `tc.boundary_cells[k]()` and `tc.subset[k, primal](indices)`
+  build one, `dual()`, `boundary()`, and `coboundary()` type their
+  results, and `exclude_subset` / `restrict_to_subset` and
+  `TypedCochain.overwrite` accept only subsets of the cells they act on.
+  `wedge(a, b)` on typed primal cochains has degree `k + l` in its type
+  and does not compile past the complex dimension, and `flat(tc, X)`
+  returns a `TypedCochain[n, 1, PRIMAL]`. `complex()`, `untyped()`, `.mat`, and `.diag`
   lead back to the untyped API, and `TypedCochain(c)` checks an untyped
   cochain's kind at run time.
 - **`icosahedron` and `icosphere`**, closed surfaces to test on.
 - **`read_ply` and `write_ply`**, for meshes from MeshLab, Blender, and
-  scanners (ASCII and binary).
+  scanners (ASCII and binary, either byte order; `write_ply` takes
+  `format=.BINARY`).
 - **`read_gmsh`**, for triangle and tetrahedral meshes made by
   [Gmsh](https://gmsh.info), in `.msh` format 4.1 or 2.2, ASCII or binary.
   Gmsh's physical groups ("inlet", "walls", a material region) are kept,
@@ -282,7 +297,8 @@ the published mathematics:
   Once a `.geo` file defines physical groups, Gmsh saves only their
   elements, so tag the domain as well (or set `Mesh.SaveAll = 1`);
   `dim=2` makes a file without triangles an error rather than a mesh of
-  edges. 2D meshes come back with two coordinate columns.
+  edges. 2D meshes come back with two coordinate columns. Unnamed groups
+  are reached by tag: `msh.subset(sc, group_dim=1, tag=42, dim=0)`.
 - **The Sphere example**, a check of the Hodge-Laplacian spectrum against
   the spherical harmonics, for 0-, 1-, and 2-forms.
 - **The Neighborhoods and Neighborhoods3D examples**, which draw stars,
@@ -313,8 +329,8 @@ the published mathematics:
 - **Shared complexes.** A `SimplicialComplex` holds its data behind an
   `ArcPointer`, so copies and cochains share one complex, as Python
   references do.
-- **Operators.** `A @ B` and `A @ x` are matrix products (SciPy's `A * B`);
-  `A * s` scales.
+- **Operators.** `A @ B` and `A @ x` are matrix products (PyDEC's `A * B`, on
+  SciPy matrices); `A * s` scales.
 - **Hodge stars.** `sc[k].star` and `sc[k].star_inv` are
   `DiagonalOperator`s rather than sparse matrices. `D @ x` is elementwise,
   `D @ A` and `A @ D` scale the rows or columns of a `CSRMatrix`, and
@@ -325,9 +341,46 @@ the published mathematics:
   inconsistently oriented meshes still give positive-definite matrices.
 - **`AbstractSimplicialComplex`** maps `B1`'s rows to vertex ids, so vertex
   numberings with gaps work.
-- **Rips complexes without edges** are 0-dimensional: the chain complex is
-  just `B_0`, where PyDEC appends a zero `N_0 x 1` boundary matrix for an
-  edge that does not exist.
+- **Chain complexes.** PyDEC's `chain_complex()` and `cochain_complex()`
+  return lists padded with zero matrices (a `1 x N_0` `B_0` and a
+  `1 x N_n` `d_n`). Here `chain_complex()` returns a `ChainComplex`
+  holding both kinds without padding: `cc.boundary(k)` is `B_k` for
+  k = 1..n, `cc.coboundary(k)` is `d_k` for k = 0..n-1, and
+  `cc.num_cells(k)` is `N_k`. `sc[k].boundary` and `sc[k].d` still give
+  the operators of one level directly.
+- **File formats are types.** `write_array` and `write_mesh` take an
+  `ArrayFormat` (`.BASIC`, `.ASCII`, `.BINARY`), `write_sparse` a
+  `SparseFormat`, `write_ply` a `PlyFormat`, and `write_vtu` a
+  `VTKFormat`, in place of PyDEC's strings, so a misspelled format does not
+  compile. `read_array` converts binary data from the file's dtype
+  directly, so 64-bit integers keep all their digits, as in PyDEC.
+- **Primal or dual is a type.** PyDEC's `is_primal` flags are a
+  `Primality` here: `sc.get_cochain(1, .DUAL)`,
+  `Subset.empty(sc, 0, .DUAL)`, and `c.primality()`. `p.level(n, k)` is
+  the level holding the cells (`k`, or `n - k` for dual cells), and
+  `p.dual()` the other kind.
+- **Named results.** Functions that return several things return a
+  struct with named fields rather than a tuple:
+  - `simplicial_grid_2d`, `icosahedron`, `icosphere`, `triangulate_ncube`,
+    and `loop_subdivision` return a `SimplicialMesh`, so
+    `SimplicialComplex(simplicial_grid_2d(8))` works;
+  - `cube_grid` returns a `CubeGrid` (`vertices`, `corners`);
+  - `dense.eigh` and `eigh_generalized` return an `EighResult` (`values`,
+    `vectors`);
+  - `cg` and `lsqr` return a `SolveResult` whose `stop` is a `StopReason`
+    (`.CONVERGED`, `.MAX_ITER`, `.BREAKDOWN`), where SciPy's `info` cannot
+    tell a CG breakdown from the iteration limit. `residual_norm` is
+    `||b - A x||` for both, LSQR also reports `normal_residual_norm`
+    (`||A^T r||`), and `res^.take_x()` moves the solution out;
+  - `simplex_quivers` and `cube_quivers` return `Quivers` (`bases`,
+    `vectors`), `circumcenter` a `Circumsphere`,
+    `simplex_array_boundary` and `cube_array_boundary` a
+    `FacesAndBoundary`, `to_coo()` a `COOEntries`,
+    `massmatrix_rowcols` a `COOPattern`, and `dual_edge_pieces` a
+    `DualEdgePieces` that also records each piece's edge.
+- **Rips complexes without edges** are 0-dimensional: the chain complex
+  has no operators, where PyDEC appends a zero `N_0 x 1` boundary matrix
+  for an edge that does not exist.
 - **Python-3 breakage.** Code that no longer runs under current Python or
   NumPy works here: `simplicial_grid_2d`, `triangulate_ncube`, and
   `cube_array_boundary`.
@@ -335,7 +388,9 @@ the published mathematics:
   exchanges, which fails on DEC's saddle-point systems, and its Jacobi
   `eigh` is slow for a few hundred unknowns. MojoDEC has its own pivoted LU
   and Householder/QL `eigh` (`routines/dense.mojo`). `spsolve` and
-  `eigh_generalized` are dense, which suits the example sizes.
+  `eigh_generalized` are dense, which suits the example sizes;
+  `eigh_generalized(K, M)` also takes a diagonal `M` (a Hodge star) and
+  then only rescales `K`, with no Cholesky factorization.
 
 ## Examples
 
@@ -358,18 +413,19 @@ from your own program.
 | Ranking | matches PyDEC's ranking |
 | RipsComplex | same complex as PyDEC (300 / 2831 / 10955 simplices), harmonic chain with norm 7.6274 |
 | HodgeDecomposition | four harmonic 1-cochains with `|d h|, |δ h|` ≈ 0 (see below) |
-| DarcyFlow | pressures agree with the exact solution to 1.5e-12 |
+| DarcyFlow | pressures agree with the exact solution to 1e-14 |
 | HeatConduction | mesh and boundary pieces from a Gmsh file; the piecewise-linear temperature through two materials to 7e-15, and the heat in through the hot edge equals the heat out through the cold one and the exact 25/26 (not from PyDEC) |
 | ResonantCavity | eigenvalues 1, 1, 2, 4, 4, 5, 5, 8, 9, 9, 10, 10, 13, 13, … (the exact m²+n²) |
-| Sphere | Hodge-Laplacian spectra near n(n+1) for 0-, 1-, and 2-forms; the 1-form spectrum is the 0- and 2-form spectra merged (to 7e-10); Gauss-Bonnet exact; Gaussian and mean curvature 1.02 and 1.0001 (not from PyDEC) |
+| Sphere | Hodge-Laplacian spectra near n(n+1) for 0-, 1-, and 2-forms; the 1-form spectrum is the 0- and 2-form spectra merged (to 2e-12); Gauss-Bonnet exact; Gaussian and mean curvature 1.02 and 1.0001 (not from PyDEC) |
 | Neighborhoods | interior links are hexagons (χ = 0), boundary links paths (χ = 1); Bd(Cl(St(v))) = Lk(v); every ring boundary has χ = 0; the square's boundary has 4n edges and an empty boundary (not from PyDEC) |
 | Neighborhoods3D | interior vertex links are spheres (χ = 2), boundary links disks (χ = 1); growing rings are balls (χ = 1) until they meet themselves around the hole (one pinched step), then the solid torus (χ = 0) bounded by a torus; χ(Bd R) = 2 χ(R) whenever Bd R is a surface (not from PyDEC) |
 | MakeMesh | writes a mesh and reads it back; matches `ExpectedOutput/` |
 
 **HodgeDecomposition.** The mesh is not well-centered, so `d(δ(·))` on
 2-cochains is nonsymmetric and indefinite. PyDEC's CG solve of that system
-does not converge (SciPy returns `info > 0`), and the resulting "harmonic"
-forms are not harmonic. This port solves that system with LSQR.
+does not converge (PyDEC's call to SciPy's `cg` returns `info > 0`), and
+the resulting "harmonic" forms are not harmonic. This port solves that
+system with LSQR.
 
 **ResonantCavity.** The original PyDEC driver no longer runs on current
 NumPy: `whitney_innerproduct` assigns a 1×1 array to a scalar.
