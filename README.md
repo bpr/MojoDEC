@@ -493,4 +493,4 @@ zero eigenvalues, which the report skips with the gradients' ones.
 
 ## License
 
-BSD 3-Clause, as PyDEC.
+The MIT License (MIT)
