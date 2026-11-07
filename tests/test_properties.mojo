@@ -239,13 +239,12 @@ def test_combinations_count_and_are_distinct_sorted_subsets() raises:
 
 def test_volume_is_invariant_under_translation_and_reordering() raises:
     def prop(pts: List[List[Float64]], shift: Int, rotate: Int) raises:
+        # Degenerate simplices are included. This test found that the old
+        # sqrt(|det(Gram)|) / M! formula turned a ~1e-16 rounding error into
+        # an order-dependent ~1e-8 volume for four coplanar points
+        # [[0,0,-2],[0,0,0],[0,1,0],[0,0,1]]; M-simplices in M-space now use
+        # |det(edges)| / M! directly.
         var V = unsigned_volume(real_array_from_rows(pts))
-        # Degenerate simplices are excluded: unsigned_volume is
-        # sqrt(|det(Gram)|) / M!, so a ~1e-16 rounding error in the
-        # determinant of a singular Gram matrix becomes a ~1e-8 "volume"
-        # that depends on the vertex order (found by this test, e.g. four
-        # coplanar points [[0,0,-2],[0,0,0],[0,1,0],[0,0,1]]).
-        assume(V > 1e-6)
         var moved = List[List[Float64]]()
         var n = len(pts)
         for i in range(n):

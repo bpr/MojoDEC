@@ -37,6 +37,17 @@ def test_unsigned_volume() raises:
     assert_almost_equal(unsigned_volume(A("[[0,0,0],[0,0,1],[0,1,0]]")), 0.5)
 
 
+def test_unsigned_volume_of_degenerate_simplices() raises:
+    # Coplanar points have zero volume in every vertex order; the Gram
+    # determinant formula used to give ~7e-9 for the second order.
+    assert_true(
+        unsigned_volume(A("[[0,0,-2],[0,0,0],[0,1,0],[0,0,1]]")) < 1e-12
+    )
+    assert_true(
+        unsigned_volume(A("[[0,0,0],[0,1,0],[0,0,1],[0,0,-2]]")) < 1e-12
+    )
+
+
 def test_signed_volume() raises:
     assert_almost_equal(signed_volume(A("[[1],[2]]")), 1.0)
     assert_almost_equal(signed_volume(A("[[5.5],[-10]]")), -15.5)

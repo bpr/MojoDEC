@@ -39,8 +39,12 @@ def unsigned_volume(pts: RealArray) raises -> Float64:
         pts: `(M+1) x N` vertex coordinates.
 
     Returns:
-        The M-dimensional volume, `sqrt(det(G)) / M!` for the Gram matrix
-        `G` of the edge vectors from the first vertex.
+        The M-dimensional volume. With `A` the `M x N` edge vectors from
+        the first vertex, it is `|det(A)| / M!` when `M == N` and
+        `sqrt(det(A A^T)) / M!` (the Gram determinant) when `M < N`. The
+        Gram form loses precision near degeneracy (a rounding error of
+        `eps` in `det(A A^T)` becomes `sqrt(eps)` in the volume), so the
+        full-dimensional case avoids it.
 
     Raises:
         If `M < 0` or `M > N`.
@@ -52,6 +56,8 @@ def unsigned_volume(pts: RealArray) raises -> Float64:
     if M == 0:
         return 1.0
     var A = _edge_vectors(pts)
+    if M == N:
+        return abs(_det(A)) / factorial(M)
     var gram = real_array(M, M)
     for i in range(M):
         for j in range(M):
