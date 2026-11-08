@@ -42,7 +42,7 @@ def unsigned_volume(pts: RealArray) raises -> Float64:
         The M-dimensional volume. With `A` the `M x N` edge vectors from
         the first vertex, it is `|det(A)| / M!` when `M == N`; when
         `M < N` it is `prod |R_ii| / M!` from a Householder QR
-        factorisation `A^T = Q R`, which equals `sqrt(det(A A^T)) / M!`
+        factorization `A^T = Q R`, which equals `sqrt(det(A A^T)) / M!`
         (the Gram determinant) without the Gram form's loss of precision
         near degeneracy (a rounding error of `eps` in `det(A A^T)` becomes
         `sqrt(eps)` in the volume).
@@ -262,7 +262,7 @@ def _edge_vectors(pts: RealArray) raises -> RealArray:
 
 
 def _qr_abs_det(A: RealArray) -> Float64:
-    """`prod |R_ii|` for the Householder QR factorisation `A^T = Q R` of an
+    """`prod |R_ii|` for the Householder QR factorization `A^T = Q R` of an
     `M x N` array `A` with `M <= N`: the M-volume of the parallelotope its
     rows span, `sqrt(det(A A^T))`."""
     var M = rows_of(A)

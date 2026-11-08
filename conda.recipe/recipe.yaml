@@ -1,0 +1,103 @@
+# rattler-build recipe for MojoDEC. See docs/publishing.md.
+#
+# Local build (from the repository root; builds the working tree):
+#
+#   rattler-build build --recipe conda.recipe/recipe.yaml \
+#     -c conda-forge -c https://conda.modular.com/max-nightly
+#
+# NuMojo: with `numojo: vendored` (the default here) the package is built
+# against third_party/numojo and also installs its numojo.mojoc, because no
+# published numojo package supports Mojo 1.3 yet. That is for local builds
+# only. The copy submitted to modular-community (recipes/mojodec/recipe.yaml)
+# uses `numojo: package`, depending on the numojo package instead; it also
+# replaces `source` with the GitHub repository at a full commit SHA and pins
+# stable versions (modular-community builds only against the stable
+# https://conda.modular.com/max channel).
+
+context:
+  version: "0.1.0"
+  # A precompiled .mojoc only loads in the compiler that built it, so the
+  # compiler, and MAX (whose max.mojoc MojoDEC imports), are pinned exactly.
+  mojo_version: "1.3.0.dev2026110305"
+  max_version: "26.8.0.dev2026110305"
+  # "vendored" (third_party/numojo) or "package" (the numojo conda package)
+  numojo: vendored
+  # placeholder: set to the first NuMojo release that supports Mojo 1.3
+  numojo_version: "0.13.0"
+
+package:
+  name: mojodec
+  version: ${{ version }}
+
+source:
+  - path: ..
+    use_gitignore: true
+
+build:
+  number: 0
+  script:
+    - mkdir -p build ${{ PREFIX }}/lib/mojo
+    - if: numojo == "vendored"
+      then:
+        - mojo precompile third_party/numojo -o build/numojo.mojoc
+        - cp build/numojo.mojoc ${{ PREFIX }}/lib/mojo/numojo.mojoc
+        - mojo precompile -I build mojodec -o ${{ PREFIX }}/lib/mojo/mojodec.mojoc
+      else:
+        - mojo precompile mojodec -o ${{ PREFIX }}/lib/mojo/mojodec.mojoc
+
+requirements:
+  # the compiler finds imported .mojoc files in its own environment, so
+  # what mojodec imports (max, numojo) is in build as well as host
+  build:
+    - mojo-compiler ==${{ mojo_version }}
+    - max-core ==${{ max_version }}
+    - if: numojo == "package"
+      then:
+        - numojo ==${{ numojo_version }}
+  host:
+    - mojo-compiler ==${{ mojo_version }}
+    - max-core ==${{ max_version }}
+    - if: numojo == "package"
+      then:
+        - numojo ==${{ numojo_version }}
+  run:
+    - mojo-compiler ==${{ mojo_version }}
+    - max-core ==${{ max_version }}
+    - if: numojo == "package"
+      then:
+        - numojo ==${{ numojo_version }}
+    # mojodec.vis plots with matplotlib through Python interop
+    - python >=3.12,<3.14
+    - numpy >=2,<3
+    - matplotlib-base >=3.8,<4
+
+tests:
+  - script:
+      - if: unix
+        then:
+          - mojo run test_package.mojo
+    files:
+      recipe:
+        - test_package.mojo
+  - package_contents:
+      files:
+        - lib/mojo/mojodec.mojoc
+
+about:
+  homepage: https://github.com/bpr/MojoDEC
+  repository: https://github.com/bpr/MojoDEC
+  documentation: https://github.com/bpr/MojoDEC#readme
+  license: MIT
+  license_file: LICENSE
+  summary: Discrete exterior calculus for Mojo, a port of PyDEC
+  description: |
+    MojoDEC implements Discrete Exterior Calculus (DEC) and lowest order
+    finite element exterior calculus (Whitney forms) on simplicial, abstract
+    simplicial, Rips and cubical complexes: boundary operators, exterior
+    derivatives, Hodge stars, FEEC mass matrices, wedge products, typed
+    cochains, mesh I/O (PyDEC, PLY, Gmsh, VTK), and sparse and dense solvers.
+    It uses NuMojo arrays.
+
+extra:
+  maintainers:
+    - bpr

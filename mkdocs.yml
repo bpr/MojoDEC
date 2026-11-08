@@ -7,6 +7,8 @@ site_dir: build/site
 exclude_docs: |
   *.py
   *.txt
+  publishing.md
+  community-edition.md
 theme:
   name: material
   features:

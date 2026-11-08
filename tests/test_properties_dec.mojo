@@ -294,7 +294,7 @@ def test_rigid_motions_preserve_volumes_and_stars() raises:
     )
 
 
-def test_relabelling_vertices_preserves_volumes_and_stars() raises:
+def test_relabeling_vertices_preserves_volumes_and_stars() raises:
     def prop(spec: MeshSpec, seed: Int) raises:
         var mesh = spec.mesh()
         var nv = rows_of(mesh.vertices)
@@ -316,13 +316,13 @@ def test_relabelling_vertices_preserves_volumes_and_stars() raises:
             for j in range(cols_of(T)):
                 iset(T, t, j, perm[iget(mesh.elements, t, j)])
         var sc = SimplicialComplex(mesh.copy())
-        var relabelled = SimplicialComplex(V, T)
+        var relabeled = SimplicialComplex(V, T)
         assert_equal(
-            sc.euler_characteristic(), relabelled.euler_characteristic()
+            sc.euler_characteristic(), relabeled.euler_characteristic()
         )
         for k in range(sc.complex_dimension() + 1):
             var n = sc[k].num_simplices
-            assert_equal(n, relabelled[k].num_simplices)
+            assert_equal(n, relabeled[k].num_simplices)
             # the same quantities, gathered in the original order
             var primal = real_vector(n)
             var dual = real_vector(n)
@@ -332,13 +332,13 @@ def test_relabelling_vertices_preserves_volumes_and_stars() raises:
                 var w = List[Int]()
                 for v in s.vertices:
                     w.append(perm[v])
-                var j = relabelled[k].simplex_to_index(Simplex(w))
+                var j = relabeled[k].simplex_to_index(Simplex(w))
                 # top simplices may change orientation
                 primal.unsafe_set(
-                    i, abs(relabelled[k].primal_volume.unsafe_get(j))
+                    i, abs(relabeled[k].primal_volume.unsafe_get(j))
                 )
-                dual.unsafe_set(i, relabelled[k].dual_volume.unsafe_get(j))
-                star.unsafe_set(i, relabelled[k].star[j])
+                dual.unsafe_set(i, relabeled[k].dual_volume.unsafe_get(j))
+                star.unsafe_set(i, relabeled[k].star[j])
             var p0 = real_vector(n)
             for i in range(n):
                 p0.unsafe_set(i, abs(sc[k].primal_volume.unsafe_get(i)))

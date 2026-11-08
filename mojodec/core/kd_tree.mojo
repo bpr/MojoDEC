@@ -6,7 +6,7 @@
 K-d trees (`mojodec.core.kd_tree`).
 ===================================
 Port of `pydec.math.kd_tree`: a k-d tree over the rows of a point array,
-answering nearest-neighbour and fixed-radius queries. Each point carries an
+answering nearest-neighbor and fixed-radius queries. Each point carries an
 integer value, by default its row index.
 """
 

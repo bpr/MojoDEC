@@ -86,10 +86,13 @@ Notes about installation:
 - To use MojoDEC from another project, put both `build/numojo.mojoc` and
   `build/mojodec.mojoc` (or `-I /path/to/MojoDEC -I /path/to/MojoDEC/build`)
   on the import path.
+- There is also a conda recipe (`conda.recipe/`); MojoDEC will go on the
+  modular-community channel once Mojo 1.3 is released and NuMojo supports
+  it (see `docs/publishing.md`).
 
 ## Layout
 
-Modelled on NuMojo (`core` for data structures, `routines` for algorithms)
+Modeled on NuMojo (`core` for data structures, `routines` for algorithms)
 rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 
 | MojoDEC | PyDEC |

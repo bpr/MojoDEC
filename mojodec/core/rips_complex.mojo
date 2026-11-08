@@ -394,7 +394,7 @@ def rips_simplices(
     for n in range(1, k):
         if rows_of(k_faces) == 0:
             break
-        # FA[f, j] == n+1 iff every vertex of face f precedes and neighbours j
+        # FA[f, j] == n+1 iff every vertex of face f precedes and neighbors j
         var nf = rows_of(k_faces)
         var fr = List[Int]()
         var fc = List[Int]()

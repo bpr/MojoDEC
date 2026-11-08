@@ -14,3 +14,5 @@ examples/*/*.vtu
 examples/*/spectrum.txt
 # proptest example database (tests/test_properties.mojo)
 .proptest/
+# rattler-build output
+output/
