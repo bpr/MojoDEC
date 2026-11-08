@@ -44,7 +44,7 @@ from std.sys import size_of
 from mojodec.core.regular_cube_complex import RegularCubeComplex
 from mojodec.core.utils import IntArray, RealArray, cols_of, int_array, rows_of
 from mojodec.routines.cube_array import cube_array_search
-from mojodec.routines.io.scan import append_le
+from mojodec.routines.io.scan import append_le, write_float
 
 
 struct VTKFormat(Equatable, ImplicitlyCopyable, Writable):
@@ -315,7 +315,8 @@ struct _Encoder(Movable):
                 if c < cols:
                     x = values.unsafe_get(r * cols + c)
                 if self.format == VTKFormat.ASCII:
-                    self.xml.write(x, "\n" if c == components - 1 else " ")
+                    write_float(self.xml, x)
+                    self.xml.write("\n" if c == components - 1 else " ")
                 else:
                     append_le(block, x)
         self._close(block^)

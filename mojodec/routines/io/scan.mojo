@@ -356,6 +356,30 @@ struct ByteReader(Movable):
         return self.big_endian != (Endian.native() == .big)
 
 
+def write_float(mut s: String, x: Float64):
+    """Append `x` as text that reads back as exactly `x`.
+
+    Mojo's `String(Float64)` drops a digit for about one in five
+    consecutive integral doubles between about 1.8e16 and 1e23 (e.g. the
+    double after 3e16 prints as `3.000000000000001e+16`, which is the
+    double before it); those values are written as exact integers.
+
+    Args:
+        s: The destination.
+        x: The value.
+    """
+    var text = String(x)
+    var a = abs(x)
+    if a >= 9007199254740992.0 and a < 1.0e38:  # 2^53: integral from here
+        try:
+            if atof(text) != x:
+                s.write(Int128(x))
+                return
+        except:
+            pass
+    s.write(text)
+
+
 def native_little_endian() -> Bool:
     """Whether this machine is little-endian.
 

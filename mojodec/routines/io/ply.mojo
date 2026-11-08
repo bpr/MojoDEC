@@ -34,6 +34,7 @@ from mojodec.routines.io.scan import (
     ByteReader,
     append_le,
     native_little_endian,
+    write_float,
 )
 
 
@@ -182,7 +183,8 @@ def write_ply(
                     var x: Float64 = (
                         vertices.unsafe_get(v * E + k) if k < E else 0.0
                     )
-                    text.write(x, "\n" if k == 2 else " ")
+                    write_float(text, x)
+                    text.write("\n" if k == 2 else " ")
             for t in range(nt):
                 text.write(
                     "3 ",

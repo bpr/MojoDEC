@@ -808,7 +808,8 @@ struct SimplicialComplex(
         `c (a + b - c)` over their sum, with `a`, `b`, `c` the squared lengths
         of the edges opposite each vertex. Higher dimensions solve PyDEC's
         system `[[2 P P^T, 1], [1^T, 0]] [b; mu] = [|p_i|^2; 1]` per simplex,
-        in place. Simplices are handled in parallel chunks.
+        in place, with `P` the positions relative to the first vertex (PyDEC
+        uses absolute positions, which loses precision far from the origin). Simplices are handled in parallel chunks.
 
         Args:
             dim: The dimension of the simplices.
@@ -873,15 +874,19 @@ struct SimplicialComplex(
                     bp[unsafe_offset=3 * i + 1] = w1 / total
                     bp[unsafe_offset=3 * i + 2] = w2 / total
                 else:
+                    # positions relative to vertex 0, which leaves the
+                    # barycentric solution unchanged and keeps the system
+                    # well conditioned far from the origin
+                    var v0 = Int(Sp[unsafe_offset=i * w]) * E
                     for r in range(w):
                         var vr = Int(Sp[unsafe_offset=i * w + r]) * E
                         for c in range(w):
                             var vc = Int(Sp[unsafe_offset=i * w + c]) * E
                             var s: Float64 = 0
                             for k in range(E):
-                                s += (
-                                    Vp[unsafe_offset=vr + k]
-                                    * Vp[unsafe_offset=vc + k]
+                                var x0 = Vp[unsafe_offset=v0 + k]
+                                s += (Vp[unsafe_offset=vr + k] - x0) * (
+                                    Vp[unsafe_offset=vc + k] - x0
                                 )
                             A.unsafe_set(r * m + c, 2 * s)
                             if r == c:
@@ -895,18 +900,26 @@ struct SimplicialComplex(
                         return
                     for r in range(w):
                         bp[unsafe_offset=i * w + r] = b.unsafe_get(r)
+                # sum_r b_r p_r; past triangles, as p_0 + sum_r b_r (p_r -
+                # p_0), since the solved weights sum to 1 only to rounding
+                var u0 = Int(Sp[unsafe_offset=i * w]) * E
                 for k in range(E):
+                    var x0: Float64 = 0
+                    var first = 0
+                    if dim > 2:
+                        x0 = Vp[unsafe_offset=u0 + k]
+                        first = 1
                     var x: Float64 = 0
-                    for r in range(w):
-                        x += (
-                            bp[unsafe_offset=i * w + r]
-                            * Vp[
+                    for r in range(first, w):
+                        x += bp[unsafe_offset=i * w + r] * (
+                            Vp[
                                 unsafe_offset=Int(Sp[unsafe_offset=i * w + r])
                                 * E
                                 + k
                             ]
+                            - x0
                         )
-                    op[unsafe_offset=i * E + k] = x
+                    op[unsafe_offset=i * E + k] = x0 + x
 
         parallel_ranges(N, SERIAL_BELOW, simplices)
         for bad in degenerate:

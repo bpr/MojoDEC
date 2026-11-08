@@ -218,6 +218,40 @@ def test_sparse_roundtrip() raises:
         assert_equal((A - B).max_abs(), 0.0)
 
 
+def test_empty_sparse_roundtrip() raises:
+    # an ASCII array with no values has no data line; the reader used to
+    # skip a line anyway and swallow the next array's header
+    var A = CSRMatrix(2, 3)
+    var formats: List[SparseFormat] = [.BINARY, .ASCII]
+    for fmt in formats:
+        write_sparse(TMP, A, fmt)
+        var B = read_sparse(TMP)
+        assert_equal(B.nrows, 2)
+        assert_equal(B.ncols, 3)
+        assert_equal(B.nnz(), 0)
+
+
+def test_text_floats_roundtrip_exactly() raises:
+    # Mojo prints these integral doubles with a digit too few (the first as
+    # 6.793834373838986e+16, which is the double before it)
+    var values: List[Float64] = [
+        67938343738389864.0,
+        -30000000000000004.0,
+        1.000000000000064e19 + 2048.0,
+        0.1,
+        -2.5e-300,
+    ]
+    var a = nm.zeros[f64](Shape(len(values)))
+    for i in range(len(values)):
+        a.unsafe_set(i, values[i])
+    var formats: List[ArrayFormat] = [.ASCII, .BASIC]
+    for fmt in formats:
+        write_array(TMP, a, fmt)
+        var b = read_array(TMP)
+        for i in range(len(values)):
+            assert_equal(b.unsafe_get(i), values[i])
+
+
 def test_mesh_roundtrip() raises:
     var mesh = read_mesh("tests/meshes/sphere3.xml")
     write_mesh("/tmp/mojodec_mesh_test.xml", mesh, .BASIC)

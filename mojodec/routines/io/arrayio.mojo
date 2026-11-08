@@ -26,7 +26,7 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.sparse import CSRMatrix
-from mojodec.routines.io.scan import ByteReader, append_le_array
+from mojodec.routines.io.scan import ByteReader, append_le_array, write_float
 
 
 struct ArrayFormat(Equatable, ImplicitlyCopyable, Writable):
@@ -327,7 +327,10 @@ def _read_dense[
             if not reader.more():
                 raise Error("arrayio: too few values in text array")
             out.unsafe_set(i, reader.number[dtype]())
-        reader.skip_line()
+        # PyDEC (and write_array) end a text array with a newline only if
+        # it has values
+        if count > 0:
+            reader.skip_line()
         return out^
     var name = _get(header, "dtype")
     if name == "float64":
@@ -485,6 +488,8 @@ def _write_dense[
 def _write_value[dtype: DType](mut s: String, x: Scalar[dtype]):
     comptime if dtype.is_integral():
         s.write(Int(x))
+    elif dtype == DType.float64:
+        write_float(s, rebind[Float64](x))
     else:
         s.write(x)
 

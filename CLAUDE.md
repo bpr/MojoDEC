@@ -29,6 +29,12 @@ pixi run docs                         # API reference -> docs/api/ (Markdown, no
 pixi run docs-site                    # MkDocs site -> build/site (pixi's `docs` env)
 ```
 
+`tests/test_properties.mojo` (combinatorics, simplex geometry, sparse
+kernels against a dense model, complexes) and `tests/test_properties_dec.mojo`
+(rigid-motion and relabelling invariance, volume identities, Whitney,
+wedge, flat, I/O round trips) are property tests using proptest, the
+sibling `../proptest` checkout (`PROPTEST_PATH` overrides it).
+
 Run a single test file from the repo root (after `pixi run numojo`):
 
 ```sh
@@ -62,6 +68,13 @@ mesh fixtures live in `tests/meshes/`. Examples run from their own directory
   DEC systems; use MojoDEC's own `routines/dense.mojo` (pivoted LU,
   Householder/QL `eigh`) and `routines/linalg.mojo` (`cg`, `lsqr`, dense
   `spsolve`, `eigh_generalized`).
+- Write floats as text with `io/scan.mojo`'s `write_float`, not
+  `String(x)`: Mojo prints about one in five integral doubles between
+  ~1.8e16 and 1e23 with a digit too few, so they don't read back.
+- `nm.fromstring` reads `1e4` as 14 (it drops the `e`); write test
+  literals without exponents or use `real_array_from_rows`.
+- `assert_almost_equal` has a default `rtol=1e-5` on top of `atol`; pass
+  `rtol=0` when a test checks a tight absolute tolerance.
 - Write `sqrt(x)` (`std.math`), never `x ** 0.5`: Mojo's `**` with a
   fractional exponent is off by up to ~5e-12 relative, which Cholesky and
   Gram-matrix solves amplify (it cost DarcyFlow two digits and Sphere's
@@ -87,7 +100,9 @@ Key design points that span several files:
   `__getattr__`; `compute_geometry=False` skips it for degenerate meshes.
   `simplex_array_boundary` builds `d` directly (k+1 entries per row) and
   `boundary` is its transpose. Circumcenters are closed-form up to
-  triangles. Dual volumes come from one walk down the chains of
+  triangles; higher dimensions solve PyDEC's system with positions
+  relative to the first vertex (absolute positions lost ~|p|²/edge² of
+  precision far from the origin). Dual volumes come from one walk down the chains of
   circumcenters (`_add_dual_pieces`); `dual_edge_piece_values` runs the
   same walk to keep the edge pieces per top simplex, which `flat` and
   `dual_edge_pieces` use. In loops, look faces up with

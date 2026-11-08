@@ -458,6 +458,221 @@ def test_matrix_vector_products_associate() raises:
     )
 
 
+comptime Triplets = Tuple[Int, Int, List[Int], List[Int], List[Float64]]
+
+
+def _csr(t: Triplets) raises -> CSRMatrix:
+    return CSRMatrix.from_coo(t[0], t[1], t[2], t[3], t[4])
+
+
+def _reshaped(t: Triplets, nrows: Int, ncols: Int) raises -> CSRMatrix:
+    """The triplets of `t` folded into an `nrows x ncols` matrix."""
+    var rows = List[Int]()
+    var cols = List[Int]()
+    for r in t[2]:
+        rows.append(r % nrows)
+    for c in t[3]:
+        cols.append(c % ncols)
+    return CSRMatrix.from_coo(nrows, ncols, rows, cols, t[4])
+
+
+def _assert_matches(A: CSRMatrix, D: List[List[Float64]], what: String) raises:
+    """A equals the dense matrix D (integer data, so exactly)."""
+    assert_equal(A.nrows, len(D), String(what, ": rows"))
+    for i in range(A.nrows):
+        assert_equal(A.ncols, len(D[i]), String(what, ": columns"))
+        for j in range(A.ncols):
+            if A[i, j] != D[i][j]:
+                fail(
+                    String(
+                        what,
+                        "[",
+                        i,
+                        ", ",
+                        j,
+                        "] = ",
+                        A[i, j],
+                        ", not ",
+                        D[i][j],
+                    )
+                )
+
+
+def _dense_of(A: CSRMatrix) raises -> List[List[Float64]]:
+    var out = List[List[Float64]]()
+    for i in range(A.nrows):
+        var row = List[Float64]()
+        for j in range(A.ncols):
+            row.append(A[i, j])
+        out.append(row^)
+    return out^
+
+
+def test_sums_and_scalings_match_dense() raises:
+    def prop(a: Triplets, b: Triplets, s: Int) raises:
+        var A = _csr(a)
+        var B = _reshaped(b, a[0], a[1])
+        var DA = _dense_of(A)
+        var DB = _dense_of(B)
+        var sum = List[List[Float64]]()
+        var diff = List[List[Float64]]()
+        var scaled = List[List[Float64]]()
+        var neg = List[List[Float64]]()
+        for i in range(a[0]):
+            sum.append(List[Float64]())
+            diff.append(List[Float64]())
+            scaled.append(List[Float64]())
+            neg.append(List[Float64]())
+            for j in range(a[1]):
+                sum[i].append(DA[i][j] + DB[i][j])
+                diff[i].append(DA[i][j] - DB[i][j])
+                scaled[i].append(DA[i][j] * Float64(s))
+                neg[i].append(-DA[i][j])
+        _assert_matches(A + B, sum, "A + B")
+        _assert_matches(A - B, diff, "A - B")
+        _assert_matches(A * Float64(s), scaled, "A * s")
+        _assert_matches(Float64(s) * A, scaled, "s * A")
+        _assert_matches(-A, neg, "-A")
+
+    given(
+        composite(_sparse_triplets),
+        composite(_sparse_triplets),
+        integers(-5, 5),
+        prop,
+        quick(),
+    )
+
+
+def test_products_match_dense() raises:
+    def prop(a: Triplets, b: Triplets, xs: List[Int]) raises:
+        var A = _csr(a)
+        var B = _reshaped(b, a[1], b[1])
+        var DA = _dense_of(A)
+        var DB = _dense_of(B)
+        var prod = List[List[Float64]]()
+        for i in range(a[0]):
+            var row = List[Float64](length=b[1], fill=0.0)
+            for k in range(a[1]):
+                for j in range(b[1]):
+                    row[j] += DA[i][k] * DB[k][j]
+            prod.append(row^)
+        _assert_matches(A @ B, prod, "A @ B")
+        var x = List[Float64]()
+        for j in range(a[1]):
+            x.append(Float64(xs[j % len(xs)]))
+        var y = A @ real_vector_from_list(x)
+        for i in range(a[0]):
+            var s = 0.0
+            for j in range(a[1]):
+                s += DA[i][j] * x[j]
+            assert_equal(y.unsafe_get(i), s, String("(A x)[", i, "]"))
+
+    given(
+        composite(_sparse_triplets),
+        composite(_sparse_triplets),
+        lists(integers(-9, 9), min_size=1, max_size=6),
+        prop,
+        quick(),
+    )
+
+
+def test_select_matches_dense() raises:
+    def prop(a: Triplets, row_picks: List[Int], col_picks: List[Int]) raises:
+        var A = _csr(a)
+        var D = _dense_of(A)
+        # rows may repeat; columns must be distinct
+        var rows = List[Int]()
+        for r in row_picks:
+            rows.append(r % a[0])
+        var cols = List[Int]()
+        for c in col_picks:
+            var j = c % a[1]
+            if j not in cols:
+                cols.append(j)
+        var expected = List[List[Float64]]()
+        for i in rows:
+            var row = List[Float64]()
+            for j in cols:
+                row.append(D[i][j])
+            expected.append(row^)
+        _assert_matches(A.select(rows, cols), expected, "A.select")
+
+    given(
+        composite(_sparse_triplets),
+        lists(integers(0, 20), max_size=6),
+        lists(integers(0, 20), max_size=6),
+        prop,
+        quick(),
+    )
+
+
+def test_bmat_matches_dense() raises:
+    def prop(a: Triplets, b: Triplets, c: Triplets, zero: Int) raises:
+        # [[A, B], [C, Z]] with A: r1 x c1, B: r1 x c2, C: r2 x c1, and
+        # one of the four blocks (chosen by `zero`) left out
+        var r1 = a[0]
+        var c1 = a[1]
+        var c2 = b[1]
+        var r2 = c[0]
+        var blocks = List[CSRMatrix]()
+        blocks.append(_csr(a))
+        blocks.append(_reshaped(b, r1, c2))
+        blocks.append(_reshaped(c, r2, c1))
+        blocks.append(_reshaped(a, r2, c2))
+        var grid = List[List[Optional[CSRMatrix]]]()
+        for bi in range(2):
+            var row = List[Optional[CSRMatrix]]()
+            for bj in range(2):
+                var k = 2 * bi + bj
+                if k == zero:
+                    row.append(None)
+                else:
+                    row.append(blocks[k].copy())
+            grid.append(row^)
+        var expected = List[List[Float64]]()
+        for i in range(r1 + r2):
+            var row = List[Float64]()
+            for j in range(c1 + c2):
+                var bi = 0 if i < r1 else 1
+                var bj = 0 if j < c1 else 1
+                var k = 2 * bi + bj
+                var ii = i if bi == 0 else i - r1
+                var jj = j if bj == 0 else j - c1
+                row.append(0.0 if k == zero else blocks[k][ii, jj])
+            expected.append(row^)
+        _assert_matches(CSRMatrix.bmat(grid), expected, "bmat")
+
+    given(
+        composite(_sparse_triplets),
+        composite(_sparse_triplets),
+        composite(_sparse_triplets),
+        integers(0, 3),
+        prop,
+        quick(),
+    )
+
+
+def test_dense_and_coo_round_trips() raises:
+    def prop(a: Triplets) raises:
+        var A = _csr(a)
+        _assert_zero(
+            CSRMatrix.from_dense(A.todense()) - A, "from_dense(todense)"
+        )
+        var coo = A.to_coo()
+        _assert_zero(
+            CSRMatrix.from_coo(A.nrows, A.ncols, coo.rows, coo.cols, coo.values)
+            - A,
+            "from_coo(to_coo)",
+        )
+        var diag = A.diagonal()
+        assert_equal(diag.size, min(A.nrows, A.ncols))
+        for i in range(diag.size):
+            assert_equal(diag.unsafe_get(i), A[i, i])
+        _assert_zero(CSRMatrix.identity(A.nrows) @ A - A, "I @ A - A")
+
+    given(composite(_sparse_triplets), prop, quick())
+
+
 # ===----------------------------------------------------------------------=== #
 # Complexes
 # ===----------------------------------------------------------------------=== #

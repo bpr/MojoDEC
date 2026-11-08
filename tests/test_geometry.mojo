@@ -10,7 +10,8 @@ from std.testing import (
 import numojo as nm
 from numojo.prelude import *
 
-from mojodec.core.utils import fget, real_vector
+from mojodec.core.simplicial_complex import SimplicialComplex
+from mojodec.core.utils import fget, real_array_from_rows, real_vector
 from mojodec.routines.geometry import (
     unsigned_volume,
     signed_volume,
@@ -60,20 +61,22 @@ def test_unsigned_volume_of_embedded_simplices() raises:
     # a right triangle with legs 3 and 4, and a unit tetrahedron, tilted
     # out of their coordinate planes
     assert_almost_equal(
-        unsigned_volume(A("[[0,0,0],[3,0,0],[0,4,0]]")), 6.0, atol=1e-15
+        unsigned_volume(A("[[0,0,0],[3,0,0],[0,4,0]]")), 6.0, atol=1e-15, rtol=0
     )
     assert_almost_equal(
-        unsigned_volume(A("[[1,1,1],[1,4,1],[1,1,5]]")), 6.0, atol=1e-15
+        unsigned_volume(A("[[1,1,1],[1,4,1],[1,1,5]]")), 6.0, atol=1e-15, rtol=0
     )
     assert_almost_equal(
         unsigned_volume(A("[[0,0,0],[1,1,0],[0,1,1]]")),
         0.5 * sqrt(3.0),
         atol=1e-15,
+        rtol=0,
     )
     assert_almost_equal(
         unsigned_volume(A("[[0,0,0,7],[1,0,0,7],[0,1,0,7],[0,0,1,7]]")),
         1.0 / 6.0,
         atol=1e-15,
+        rtol=0,
     )
 
 
@@ -113,6 +116,47 @@ def test_circumcenter_examples() raises:
     assert_almost_equal(cr.center.unsafe_get(0), 0.5)
     assert_almost_equal(cr.center.unsafe_get(1), 0.5)
     assert_almost_equal(cr.radius, 0.5**0.5)
+
+
+def test_circumcenters_far_from_the_origin() raises:
+    # Barycentric circumcenters don't change under translation. Solving
+    # PyDEC's system with absolute positions lost about |p|^2 / edge^2 of
+    # precision (an error of 6e-8 for this tetrahedron of size 0.1 at
+    # distance 1000, 3e-5 at distance 3333 and size 0.01); positions
+    # relative to the first vertex keep it to the rounding of the input
+    # coordinates (~1e-12 at this size and distance).
+    var near: List[List[Float64]] = [
+        [0.0, 0.03, -0.02],
+        [0.1, 0.01, 0.0],
+        [0.02, 0.1, 0.005],
+        [0.0, 0.03, 0.1],
+    ]
+    var far = List[List[Float64]]()
+    for p in near:
+        far.append([p[0] + 1000, p[1] + 1000, p[2] + 1000])
+    var b0 = circumcenter_barycentric(real_array_from_rows(near))
+    var b1 = circumcenter_barycentric(real_array_from_rows(far))
+    var c0 = circumcenter(real_array_from_rows(near))
+    var c1 = circumcenter(real_array_from_rows(far))
+    var sc = SimplicialComplex(
+        real_array_from_rows(far), nm.fromstring[DType.int]("[[0,1,2,3]]")
+    )
+    for i in range(4):
+        assert_almost_equal(
+            b1.unsafe_get(i), b0.unsafe_get(i), atol=2e-12, rtol=0
+        )
+        assert_almost_equal(
+            fget(sc[3].bary_circumcenter, 0, i),
+            b0.unsafe_get(i),
+            atol=2e-12,
+            rtol=0,
+        )
+    for k in range(3):
+        var x = c0.center.unsafe_get(k) + 1000
+        assert_almost_equal(c1.center.unsafe_get(k), x, atol=1e-11, rtol=0)
+        assert_almost_equal(
+            fget(sc[3].circumcenter, 0, k), x, atol=1e-11, rtol=0
+        )
 
 
 def test_circumcenter_random() raises:

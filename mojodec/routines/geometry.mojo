@@ -108,7 +108,9 @@ def circumcenter_barycentric(pts: RealArray) raises -> RealArray:
     var cols = cols_of(pts)
     if rows > cols + 1:
         raise Error("circumcenter_barycentric: too many points")
-    # [[2 P P^T, 1], [1^T, 0]] [x; mu] = [|p_i|^2; 1]
+    # [[2 P P^T, 1], [1^T, 0]] [x; mu] = [|p_i|^2; 1], with P the positions
+    # relative to the first vertex: the barycentric solution is the same,
+    # and the system stays well conditioned far from the origin
     var n = rows + 1
     var A = real_array(n, n)
     var b = real_array(n, 1)
@@ -116,7 +118,10 @@ def circumcenter_barycentric(pts: RealArray) raises -> RealArray:
         for j in range(rows):
             var s: Float64 = 0
             for k in range(cols):
-                s += pts.unsafe_get(i * cols + k) * pts.unsafe_get(j * cols + k)
+                var x0 = pts.unsafe_get(k)
+                s += (pts.unsafe_get(i * cols + k) - x0) * (
+                    pts.unsafe_get(j * cols + k) - x0
+                )
             A.unsafe_set(i * n + j, 2 * s)
             if i == j:
                 b.unsafe_set(i, s)
@@ -171,10 +176,12 @@ def circumcenter(pts: RealArray) raises -> Circumsphere:
     var cols = cols_of(pts)
     var center = real_vector(cols)
     for k in range(cols):
+        # p_0 + sum_i b_i (p_i - p_0)
+        var x0 = pts.unsafe_get(k)
         var s: Float64 = 0
-        for i in range(rows):
-            s += bary.unsafe_get(i) * pts.unsafe_get(i * cols + k)
-        center.unsafe_set(k, s)
+        for i in range(1, rows):
+            s += bary.unsafe_get(i) * (pts.unsafe_get(i * cols + k) - x0)
+        center.unsafe_set(k, x0 + s)
     var r2: Float64 = 0
     for k in range(cols):
         var d = pts.unsafe_get(k) - center.unsafe_get(k)
