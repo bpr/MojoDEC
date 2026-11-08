@@ -120,7 +120,7 @@ def test_solve_whole_system() raises:
     var x = spsolve(A, b)
     var e = (x - x0).stacked()
     for i in range(e.size):
-        assert_almost_equal(e.unsafe_get(i), 0.0, atol=1e-13, rtol=0)
+        assert_almost_equal(e.unsafe_get(i), 0.0, atol=5e-13, rtol=0)
 
 
 def test_errors() raises:

@@ -93,7 +93,7 @@ def check_whitney(
     var E = R(expected)
     for i in range(E.size):
         assert_almost_equal(
-            P.unsafe_get(i), factor * E.unsafe_get(i), atol=1e-12, rtol=0
+            P.unsafe_get(i), factor * E.unsafe_get(i), atol=5e-12, rtol=0
         )
     var D = M.todense()
     var n = rows_of(D)

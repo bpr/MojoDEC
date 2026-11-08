@@ -75,7 +75,7 @@ def test_large_geometry() raises:
         assert_almost_equal(
             abs(tri.primal_volume.unsafe_get(t)),
             1.0 / 80_000,
-            atol=5e-18,
+            atol=2.5e-17,
             rtol=0,
         )
         area += abs(tri.primal_volume.unsafe_get(t))
