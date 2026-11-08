@@ -1,6 +1,6 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Gmsh meshes (`mojodec.routines.io.gmsh`).

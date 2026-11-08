@@ -1,13 +1,13 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Oriented n-cubes (`mojodec.core.ncube`).
 ========================================
-Port of `pydec.mesh.ncube.nCube`: an n-cube is given by its `2^n` vertex
-indices arranged in an array of shape `(2, ..., 2)`. Its orientation is that
-of its corner simplex: the smallest vertex followed by its neighbors along
+Largely inspired by `pydec.mesh.ncube.nCube`: an n-cube is given by its `2^n`
+vertex indices arranged in an array of shape `(2, ..., 2)`. Its orientation is
+that of its corner simplex: the smallest vertex followed by its neighbors along
 each axis, with parity flipped when that vertex sits at an odd corner.
 """
 

@@ -1,14 +1,15 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Simplicial complexes (`mojodec.core.simplicial_complex`).
 =========================================================
-Port of `pydec.dec.simplicial_complex`. A `SimplicialComplex` is built from a
-`SimplicialMesh`; `sc[k]` is the `SimplexLevel` holding the k-simplices with
-their boundary and coboundary operators and, for complexes with geometry,
-their circumcenters, primal and dual volumes, and diagonal Hodge stars.
+Largely inspired by `pydec.dec.simplicial_complex`. A `SimplicialComplex` is
+built from a `SimplicialMesh`; `sc[k]` is the `SimplexLevel` holding the
+k-simplices with their boundary and coboundary operators and, for complexes
+with geometry, their circumcenters, primal and dual volumes, and diagonal Hodge
+stars.
 
 PyDEC computes geometric data lazily on first attribute access. Mojo has no
 `__getattr__` hook, so MojoDEC computes it when the complex is built (pass

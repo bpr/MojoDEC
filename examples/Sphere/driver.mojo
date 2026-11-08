@@ -10,8 +10,6 @@
 # sphere). The 1-form spectrum is also exactly the 0-form and 2-form
 # spectra merged, without their zeros: the discrete Hodge decomposition.
 #
-# The spectral check follows the one in Dxtr (https://gitlab.inria.fr/oali/dxtr).
-#
 # Run from the repository root:  pixi run examples Sphere [--show] [--subdivisions N]
 # or from this directory:  pixi run mojo run -I ../.. -I ../../build driver.mojo [--show]
 # --show also opens the figures in windows (see examples/README.md).

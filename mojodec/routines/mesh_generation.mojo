@@ -1,11 +1,11 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Mesh generation and subdivision (`mojodec.routines.mesh_generation`).
 =====================================================================
-Ports of `pydec.mesh.generation` and `pydec.mesh.subdivision`, plus
+Largely inspired by `pydec.mesh.generation` and `pydec.mesh.subdivision`, plus
 `icosahedron` and `icosphere`, closed surfaces for testing on curved
 domains.
 """

@@ -1,13 +1,13 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Abstract simplicial complexes (`mojodec.core.abstract_simplicial_complex`).
 ===========================================================================
-Port of `pydec.dec.abstract_simplicial_complex`: a purely combinatorial
-complex (no vertex coordinates) built from its maximal simplices of each
-dimension, e.g. the graph used for least-squares ranking.
+Largely inspired by `pydec.dec.abstract_simplicial_complex`: a purely
+combinatorial complex (no vertex coordinates) built from its maximal simplices
+of each dimension, e.g. the graph used for least-squares ranking.
 """
 
 from mojodec.core.sparse import CSRMatrix

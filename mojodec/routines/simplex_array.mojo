@@ -1,12 +1,12 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Simplex arrays (`mojodec.routines.simplex_array`).
 ==================================================
-Port of `pydec.dec.simplex_array`. A simplex array is an `N x (k+1)` integer
-array whose rows are the vertex lists of `N` k-simplices.
+Largely inspired by `pydec.dec.simplex_array`. A simplex array is an
+`N x (k+1)` integer array whose rows are the vertex lists of `N` k-simplices.
 """
 
 from mojodec.core.sparse import CSRMatrix

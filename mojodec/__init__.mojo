@@ -1,13 +1,13 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 MojoDEC Top-Level Package (`mojodec`).
 ======================================
-Discrete exterior calculus on simplicial and cubical complexes: a Mojo port
-of PyDEC, with NuMojo arrays in place of NumPy and `CSRMatrix` in place of
-`scipy.sparse`.
+Discrete exterior calculus on simplicial and cubical complexes, largely
+inspired by PyDEC, with NuMojo arrays in place of NumPy and `CSRMatrix` in
+place of `scipy.sparse`.
 
 ```mojo
 import numojo as nm

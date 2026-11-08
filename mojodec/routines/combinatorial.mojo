@@ -1,11 +1,11 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Combinatorics and permutation parity (`mojodec.routines.combinatorial`).
 ========================================================================
-Ports of `pydec.math.combinatorial` and `pydec.math.parity`. PyDEC's
+Largely inspired by `pydec.math.combinatorial` and `pydec.math.parity`. PyDEC's
 generators become functions returning lists, in the same order.
 """
 

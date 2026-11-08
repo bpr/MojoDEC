@@ -1,12 +1,12 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Mesh files (`mojodec.routines.io.meshio`).
 ==========================================
-Port of `pydec.io.meshio`: a mesh is an XML file naming one array file per
-mesh field, e.g.
+Largely inspired by `pydec.io.meshio`: a mesh is an XML file naming one array
+file per mesh field, e.g.
 
 ```xml
 <mesh type="simplicial_mesh">

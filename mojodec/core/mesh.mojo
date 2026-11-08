@@ -1,11 +1,11 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Meshes (`mojodec.core.mesh`).
 =============================
-Ports of `pydec.mesh.simplex.simplicial_mesh` and
+Largely inspired by `pydec.mesh.simplex.simplicial_mesh` and
 `pydec.mesh.regular_cube.regular_cube_mesh`.
 """
 

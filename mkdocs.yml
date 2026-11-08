@@ -1,7 +1,7 @@
 # `pixi run docs-site` builds the site into build/site;
 # `pixi run docs-serve` serves it at http://127.0.0.1:8000 while you edit.
 site_name: MojoDEC
-site_description: Discrete exterior calculus in Mojo, ported from PyDEC
+site_description: Discrete exterior calculus in Mojo, largely inspired by PyDEC
 docs_dir: docs
 site_dir: build/site
 exclude_docs: |

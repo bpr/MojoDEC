@@ -1,7 +1,7 @@
 # MojoDEC examples
 
-Ports of PyDEC's six example programs, plus `Sphere`, a spectral check
-taken from [Dxtr](https://gitlab.inria.fr/oali/dxtr), `Neighborhoods`
+Versions of PyDEC's six example programs, plus `Sphere`, a check of the
+Hodge Laplacian's spectrum on the sphere, `Neighborhoods`
 and `Neighborhoods3D`, tours of stars, links, and boundaries in 2D and 3D,
 and `HeatConduction`, which solves a problem set up in Gmsh. Each one computes
 something on a complex, prints a summary, writes its

@@ -1,7 +1,7 @@
 # MojoDEC
 
-Discrete exterior calculus on simplicial and cubical complexes in Mojo: a
-port of [PyDEC](https://github.com/hirani/pydec), with NuMojo arrays in
+Discrete exterior calculus on simplicial and cubical complexes in Mojo,
+largely inspired by [PyDEC](https://github.com/hirani/pydec), with NuMojo arrays in
 place of NumPy and its own sparse matrices in place of `scipy.sparse`.
 
 - **[API reference](api/index.md)**: every public module, struct, and

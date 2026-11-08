@@ -1,11 +1,11 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Regular cube complexes (`mojodec.core.regular_cube_complex`).
 =============================================================
-Port of `pydec.dec.regular_cube_complex`: the cubical complex of a
+Largely inspired by `pydec.dec.regular_cube_complex`: the cubical complex of a
 `RegularCubeMesh`, with the cube arrays and boundary operators of every
 dimension.
 """

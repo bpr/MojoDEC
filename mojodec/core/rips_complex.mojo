@@ -1,13 +1,13 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Rips complexes (`mojodec.core.rips_complex`).
 =============================================
-Port of `pydec.dec.rips_complex`. The Rips complex of a point set at radius
-`delta` has an edge between every two points closer than `delta`, and a
-k-simplex for every (k+1)-clique of that graph, up to the dimension of the
+Largely inspired by `pydec.dec.rips_complex`. The Rips complex of a point set
+at radius `delta` has an edge between every two points closer than `delta`, and
+a k-simplex for every (k+1)-clique of that graph, up to the dimension of the
 embedding space.
 """
 

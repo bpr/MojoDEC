@@ -1,13 +1,13 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Oriented simplices (`mojodec.core.simplex`).
 ============================================
-Port of `pydec.mesh.simplex.simplex`: a simplex is stored as its sorted
-vertex list plus a parity bit giving its orientation relative to that sorted
-order. Equality and hashing ignore the parity (as PyDEC's tuple subclass
+Largely inspired by `pydec.mesh.simplex.simplex`: a simplex is stored as its
+sorted vertex list plus a parity bit giving its orientation relative to that
+sorted order. Equality and hashing ignore the parity (as PyDEC's tuple subclass
 does), so oppositely oriented copies of a simplex find the same dictionary
 entry.
 """

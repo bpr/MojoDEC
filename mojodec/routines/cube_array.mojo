@@ -1,13 +1,13 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Cube arrays (`mojodec.routines.cube_array`).
 ============================================
-Port of `pydec.dec.cube_array`. In an N-dimensional regular grid a k-cube is
-a row `[c_0, ..., c_{N-1}, a_0, ..., a_{k-1}]`: its lowest grid corner
-followed by the (increasing) axes it spans.
+Largely inspired by `pydec.dec.cube_array`. In an N-dimensional regular grid a
+k-cube is a row `[c_0, ..., c_{N-1}, a_0, ..., a_{k-1}]`: its lowest grid
+corner followed by the (increasing) axes it spans.
 """
 
 from mojodec.core.sparse import CSRMatrix

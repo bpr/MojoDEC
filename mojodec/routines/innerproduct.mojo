@@ -1,14 +1,14 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Finite element inner products (`mojodec.routines.innerproduct`).
 ================================================================
-Port of `pydec.fem.innerproduct`: mass matrices of Whitney k-forms on a
-simplicial complex, and of the analogous tensor-product elements on a regular
-cube complex. `whitney_innerproduct[k](tc)` gives the Whitney mass matrix as
-a typed operator from primal k-cochains to dual (n-k)-cochains.
+Largely inspired by `pydec.fem.innerproduct`: mass matrices of Whitney k-forms
+on a simplicial complex, and of the analogous tensor-product elements on a
+regular cube complex. `whitney_innerproduct[k](tc)` gives the Whitney mass
+matrix as a typed operator from primal k-cochains to dual (n-k)-cochains.
 """
 
 

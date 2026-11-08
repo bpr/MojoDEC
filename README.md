@@ -1,7 +1,7 @@
 ## **MojoDEC: A Mojo Library for Discretizations of Exterior Calculus.**
 
-MojoDEC is a Mojo port of [PyDEC](https://github.com/hirani/pydec),
-implementing Discrete Exterior Calculus (DEC) and lowest order finite element
+MojoDEC is largely inspired by [PyDEC](https://github.com/hirani/pydec).
+It implements Discrete Exterior Calculus (DEC) and lowest order finite element
 exterior calculus (FEEC), i.e., Whitney forms. It runs on Mojo 1.3, with
 [NuMojo](https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo) arrays
 in place of PyDEC's NumPy arrays and its own `CSRMatrix` in place of
@@ -514,7 +514,7 @@ from your own program.
 **HodgeDecomposition.** The mesh is not well-centered, so `d(δ(·))` on
 2-cochains is nonsymmetric and indefinite. PyDEC's CG solve of that system
 does not converge (PyDEC's call to SciPy's `cg` returns `info > 0`), and
-the resulting "harmonic" forms are not harmonic. This port solves that
+the resulting "harmonic" forms are not harmonic. MojoDEC solves that
 system with LSQR.
 
 **DarcyFlow, HeatConduction, and ResonantCavity** are written with the
@@ -530,3 +530,6 @@ zero eigenvalues, which the report skips with the gradients' ones.
 ## License
 
 The MIT License (MIT)
+
+PyDEC, which MojoDEC is largely inspired by, is under its own license; see
+[NOTICE](NOTICE).

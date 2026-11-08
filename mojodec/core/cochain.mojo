@@ -1,14 +1,14 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Cochains and the DEC operators (`mojodec.core.cochain`).
 ========================================================
-Port of `pydec.dec.cochain`. PyDEC's `cochain.v` holds either a vector of
-values or, for the basis returned by `get_cochain_basis`, a sparse identity
-whose columns are the basis cochains; applying operators to a basis composes
-their matrices. Mojo's static types split these into two structs.
+Largely inspired by `pydec.dec.cochain`. PyDEC's `cochain.v` holds either a
+vector of values or, for the basis returned by `get_cochain_basis`, a sparse
+identity whose columns are the basis cochains; applying operators to a basis
+composes their matrices. Mojo's static types split these into two structs.
 
 - `Cochain`: values in a 1-D NuMojo array.
 - `CochainBasis`: values in the columns of a `CSRMatrix`.

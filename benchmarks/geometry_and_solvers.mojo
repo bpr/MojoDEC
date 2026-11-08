@@ -1,6 +1,6 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """Timings of the parallel loops: building a complex with its geometry,
 Whitney mass matrices, sparse matrix-vector products and `cg`.

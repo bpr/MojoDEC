@@ -88,8 +88,10 @@ about:
   repository: https://github.com/bpr/MojoDEC
   documentation: https://github.com/bpr/MojoDEC#readme
   license: MIT
-  license_file: LICENSE
-  summary: Discrete exterior calculus for Mojo, a port of PyDEC
+  license_file:
+    - LICENSE
+    - NOTICE
+  summary: Discrete exterior calculus for Mojo, largely inspired by PyDEC
   description: |
     MojoDEC implements Discrete Exterior Calculus (DEC) and lowest order
     finite element exterior calculus (Whitney forms) on simplicial, abstract

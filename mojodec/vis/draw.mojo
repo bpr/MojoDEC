@@ -1,15 +1,15 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 Drawing (`mojodec.vis.draw`).
 =============================
-Port of `pydec.vis.draw`. `triplot`, `lineplot`, and `lineplot2` draw 2D
-meshes and line segments with matplotlib, through Mojo's Python interop;
-like PyDEC's, they add to the current axes (`pyplot.gca()`) and return the
-matplotlib collection they added. They need a Python environment with
-NumPy and matplotlib, which is loaded on first use.
+Largely inspired by `pydec.vis.draw`. `triplot`, `lineplot`, and `lineplot2`
+draw 2D meshes and line segments with matplotlib, through Mojo's Python
+interop; like PyDEC's, they add to the current axes (`pyplot.gca()`) and return
+the matplotlib collection they added. They need a Python environment with NumPy
+and matplotlib, which is loaded on first use.
 
 `simplex_quivers` and `cube_quivers` are pure Mojo: they sample a 1-cochain
 as a vector field, ready for `quiver`. `pyplot` and `show_requested` set

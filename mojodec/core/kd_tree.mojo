@@ -1,13 +1,13 @@
 # ===----------------------------------------------------------------------=== #
 # MojoDEC: Discrete Exterior Calculus in Mojo.
-# A port of PyDEC (https://github.com/hirani/pydec), BSD 3-Clause License.
+# Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
 """
 K-d trees (`mojodec.core.kd_tree`).
 ===================================
-Port of `pydec.math.kd_tree`: a k-d tree over the rows of a point array,
-answering nearest-neighbor and fixed-radius queries. Each point carries an
-integer value, by default its row index.
+Largely inspired by `pydec.math.kd_tree`: a k-d tree over the rows of a point
+array, answering nearest-neighbor and fixed-radius queries. Each point carries
+an integer value, by default its row index.
 """
 
 from std.math import sqrt

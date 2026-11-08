@@ -6,7 +6,8 @@ CLAUDE.md.
 
 ## What this is
 
-MojoDEC is a port of PyDEC (Discrete Exterior Calculus) to Mojo 1.3, using
+MojoDEC is largely inspired by PyDEC (Discrete Exterior Calculus). It runs
+on Mojo 1.3, using
 NuMojo arrays in place of PyDEC's NumPy arrays and its own `CSRMatrix` in
 place of PyDEC's `scipy.sparse` matrices. README.md has the full MojoDEC ↔
 PyDEC file mapping, the list of deliberate differences from PyDEC, and the
@@ -237,9 +238,9 @@ uses meshes past every threshold; the other tests' meshes run serially.
 - Public symbols get Google-style doc strings (`Args:`, `Parameters:`,
   `Returns:`, `Raises:`; see `docs/writing-docs.md`). The doc-check
   warning count must not get worse than `docs/docstring-baseline.txt`.
-- Features taken from Dxtr (wedge, flat, curvature, quality, etc.) are
-  implemented from the published mathematics, not Dxtr's GPL code — keep it
-  that way.
+- Features beyond PyDEC (wedge, flat, curvature, quality, etc.) are
+  implemented from the published mathematics, never from GPL-licensed
+  code — keep it that way, and don't name GPL projects as sources.
 
 ## Testing
 
