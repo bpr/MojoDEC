@@ -1,3 +1,5 @@
+from std.math import sqrt
+
 from std.testing import (
     TestSuite,
     assert_almost_equal,
@@ -45,6 +47,33 @@ def test_unsigned_volume_of_degenerate_simplices() raises:
     )
     assert_true(
         unsigned_volume(A("[[0,0,0],[0,1,0],[0,0,1],[0,0,-2]]")) < 1e-12
+    )
+    # The same holds for a flat simplex embedded in more dimensions; the
+    # Gram determinant formula gave 3.7e-9 for this flat tetrahedron in 4-D.
+    assert_true(
+        unsigned_volume(A("[[0,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,3,0]]")) < 1e-12
+    )
+    assert_true(unsigned_volume(A("[[1,2,3],[2,4,6],[4,8,12]]")) < 1e-12)
+
+
+def test_unsigned_volume_of_embedded_simplices() raises:
+    # a right triangle with legs 3 and 4, and a unit tetrahedron, tilted
+    # out of their coordinate planes
+    assert_almost_equal(
+        unsigned_volume(A("[[0,0,0],[3,0,0],[0,4,0]]")), 6.0, atol=1e-15
+    )
+    assert_almost_equal(
+        unsigned_volume(A("[[1,1,1],[1,4,1],[1,1,5]]")), 6.0, atol=1e-15
+    )
+    assert_almost_equal(
+        unsigned_volume(A("[[0,0,0],[1,1,0],[0,1,1]]")),
+        0.5 * sqrt(3.0),
+        atol=1e-15,
+    )
+    assert_almost_equal(
+        unsigned_volume(A("[[0,0,0,7],[1,0,0,7],[0,1,0,7],[0,0,1,7]]")),
+        1.0 / 6.0,
+        atol=1e-15,
     )
 
 

@@ -101,6 +101,50 @@ def _simplex_points(mut data: ConjectureData) raises -> List[List[Float64]]:
     return pts^
 
 
+def _embedded_simplex(
+    mut data: ConjectureData,
+) raises -> Tuple[List[List[Float64]], List[List[Float64]]]:
+    """An M-simplex in M-space (M = 2 or 3) and the same simplex embedded in
+    N-space (N = M+1 or M+2): the extra coordinates are constant, and the
+    coordinates are then permuted. Half the time the last vertex is an
+    integer combination of the others' edges, so the simplex is flat."""
+    var m = data.draw(integers(2, 3), "M")
+    var pts = List[List[Float64]]()
+    for _ in range(m + 1):
+        var row = List[Float64]()
+        for _ in range(m):
+            row.append(Float64(data.draw(integers(-5, 5))))
+        pts.append(row^)
+    if data.draw(booleans(), "flat"):
+        # last = p0 + sum_i c_i (p_i - p0) over i = 1..m-1
+        for j in range(m):
+            var x = pts[0][j]
+            pts[m][j] = x
+        for i in range(1, m):
+            var c = Float64(data.draw(integers(-3, 3)))
+            for j in range(m):
+                pts[m][j] += c * (pts[i][j] - pts[0][j])
+    var extra = data.draw(integers(1, 2), "extra dimensions")
+    var n = m + extra
+    var fill = List[Float64]()
+    for _ in range(extra):
+        fill.append(Float64(data.draw(integers(-5, 5))))
+    var base = List[Int]()
+    for i in range(n):
+        base.append(i)
+    var perm = data.draw(permutations(base^), "coordinate order")
+    var embedded = List[List[Float64]]()
+    for p in pts:
+        var full = p.copy()
+        for f in fill:
+            full.append(f)
+        var row = List[Float64]()
+        for j in range(n):
+            row.append(full[perm[j]])
+        embedded.append(row^)
+    return (pts^, embedded^)
+
+
 def _sparse_triplets(
     mut data: ConjectureData,
 ) raises -> Tuple[Int, Int, List[Int], List[Int], List[Float64]]:
@@ -154,7 +198,11 @@ def _close(a: Float64, b: Float64, tol: Float64 = 1e-9) -> Bool:
 
 
 def _dense(
-    nrows: Int, ncols: Int, rows: List[Int], cols: List[Int], vals: List[Float64]
+    nrows: Int,
+    ncols: Int,
+    rows: List[Int],
+    cols: List[Int],
+    vals: List[Float64],
 ) -> List[List[Float64]]:
     var out = List[List[Float64]]()
     for _ in range(nrows):
@@ -256,7 +304,26 @@ def test_volume_is_invariant_under_translation_and_reordering() raises:
         var W = unsigned_volume(real_array_from_rows(moved))
         assert_true(_close(V, W), String(V, " != ", W))
 
-    given(composite(_simplex_points), integers(-100, 100), integers(0, 3), prop, quick())
+    given(
+        composite(_simplex_points),
+        integers(-100, 100),
+        integers(0, 3),
+        prop,
+        quick(),
+    )
+
+
+def test_volume_is_invariant_under_embedding() raises:
+    # Embedding an M-simplex in more dimensions (constant extra coordinates,
+    # coordinates permuted) must not change its M-volume. In N > M dimensions
+    # unsigned_volume uses the Gram determinant, so flat simplices are the
+    # interesting inputs.
+    def prop(t: Tuple[List[List[Float64]], List[List[Float64]]]) raises:
+        var V = unsigned_volume(real_array_from_rows(t[0]))
+        var W = unsigned_volume(real_array_from_rows(t[1]))
+        assert_true(_close(V, W), String(V, " != ", W))
+
+    given(composite(_embedded_simplex), prop, quick())
 
 
 def test_signed_volume_changes_sign_with_odd_reorderings() raises:
@@ -325,9 +392,7 @@ def test_barycentric_gradients_sum_to_zero() raises:
 
 
 def test_from_coo_sums_duplicates_like_a_dense_matrix() raises:
-    def prop(
-        t: Tuple[Int, Int, List[Int], List[Int], List[Float64]]
-    ) raises:
+    def prop(t: Tuple[Int, Int, List[Int], List[Int], List[Float64]]) raises:
         var A = CSRMatrix.from_coo(t[0], t[1], t[2], t[3], t[4])
         var D = _dense(t[0], t[1], t[2], t[3], t[4])
         for i in range(t[0]):
@@ -338,9 +403,7 @@ def test_from_coo_sums_duplicates_like_a_dense_matrix() raises:
 
 
 def test_transpose_is_an_involution() raises:
-    def prop(
-        t: Tuple[Int, Int, List[Int], List[Int], List[Float64]]
-    ) raises:
+    def prop(t: Tuple[Int, Int, List[Int], List[Int], List[Float64]]) raises:
         var A = CSRMatrix.from_coo(t[0], t[1], t[2], t[3], t[4])
         _assert_zero(A.T().T() - A, "A.T().T() - A")
 
@@ -360,7 +423,9 @@ def test_transpose_of_a_product() raises:
         var B = CSRMatrix.from_coo(a[1], b[1], brows, b[3], b[4])
         _assert_zero((A @ B).T() - B.T() @ A.T(), "(A B)^T - B^T A^T")
 
-    given(composite(_sparse_triplets), composite(_sparse_triplets), prop, quick())
+    given(
+        composite(_sparse_triplets), composite(_sparse_triplets), prop, quick()
+    )
 
 
 def test_matrix_vector_products_associate() raises:
@@ -403,7 +468,8 @@ def _check_chain_complex(sc: SimplicialComplex) raises:
     var n = sc.complex_dimension()
     for k in range(n):
         _assert_zero(
-            sc[k].d.T() - sc[k + 1].boundary, String("d", k, "^T - boundary", k + 1)
+            sc[k].d.T() - sc[k + 1].boundary,
+            String("d", k, "^T - boundary", k + 1),
         )
     for k in range(n - 1):
         _assert_zero(sc[k + 1].d @ sc[k].d, String("d", k + 1, " d", k))
