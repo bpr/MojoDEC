@@ -457,47 +457,42 @@ def read_gmsh(
         if b.dim == top:
             tagged.extend(Span(b.nodes))
     var rows = _unique_rows(tagged, w)
-    # number the nodes of the top elements in tag order
-    var max_tag = 0
-    for t in raw.node_tags:
-        max_tag = max(max_tag, t)
-    var slot = List[Int](length=max_tag + 1, fill=-1)
-    for i in range(len(raw.node_tags)):
-        var t = raw.node_tags.unsafe_get(i)
-        if t < 0:
-            raise Error(String("read_gmsh: negative node tag ", t))
-        slot.unsafe_set(t, i)
-    # every index into slot and index below is a checked tag in 0..max_tag
-    var index = List[Int](length=max_tag + 1, fill=-1)
+    # number the nodes of the top elements in tag order; tags can be large
+    # and sparse, so they are sorted and searched, not used as indices
+    var nodes = _TagIndex(raw.node_tags)
     for r in rows:
         for j in range(w):
             var t = tagged.unsafe_get(r * w + j)
-            if t < 0 or t > max_tag or slot.unsafe_get(t) < 0:
+            var at = nodes.find(t)
+            if at < 0:
                 raise Error(String("read_gmsh: element uses unknown node ", t))
-            index.unsafe_set(t, 0)
+            nodes.vertex.unsafe_set(at, 0)
     var node_tags = List[Int]()
-    for t in range(max_tag + 1):
-        if index.unsafe_get(t) == 0:
-            index.unsafe_set(t, len(node_tags))
-            node_tags.append(t)
+    for at in range(len(nodes.tags)):
+        if nodes.vertex.unsafe_get(at) == 0:
+            nodes.vertex.unsafe_set(at, len(node_tags))
+            node_tags.append(nodes.tags.unsafe_get(at))
     var elements = int_array(len(rows), w)
     for i in range(len(rows)):
         var r = rows.unsafe_get(i)
         for j in range(w):
-            var t = tagged.unsafe_get(r * w + j)
+            var at = nodes.find(tagged.unsafe_get(r * w + j))
             elements.unsafe_set(
-                i * w + j, Scalar[DType.int](index.unsafe_get(t))
+                i * w + j, Scalar[DType.int](nodes.vertex.unsafe_get(at))
             )
-    # coordinates
-    var flat = True
+    # coordinates, from the first node with each tag
+    var slots = List[Int](capacity=len(node_tags))
     for t in node_tags:
-        if raw.coords.unsafe_get(3 * slot.unsafe_get(t) + 2) != 0:
+        slots.append(nodes.slot.unsafe_get(nodes.find(t)))
+    var flat = True
+    for at in slots:
+        if raw.coords.unsafe_get(3 * at + 2) != 0:
             flat = False
             break
     var e = 2 if drop_z and top <= 2 and flat else 3
     var vertices = real_array(len(node_tags), e)
     for i in range(len(node_tags)):
-        var at = 3 * slot.unsafe_get(node_tags.unsafe_get(i))
+        var at = 3 * slots.unsafe_get(i)
         for c in range(e):
             vertices.unsafe_set(i * e + c, raw.coords.unsafe_get(at + c))
     # physical groups, ordered by dimension and tag
@@ -519,7 +514,9 @@ def read_gmsh(
                 if b.dim == d and p in b.physical:
                     cells.reserve(len(cells) + len(b.nodes))
                     for t in b.nodes:
-                        if t < 0 or t > max_tag or index.unsafe_get(t) < 0:
+                        var at = nodes.find(t)
+                        var v = nodes.vertex.unsafe_get(at) if at >= 0 else -1
+                        if v < 0:
                             raise Error(
                                 String(
                                     "read_gmsh: physical group ",
@@ -531,7 +528,7 @@ def read_gmsh(
                                     "-simplex has",
                                 )
                             )
-                        cells.append(index.unsafe_get(t))
+                        cells.append(v)
             var array = int_array(len(cells) // (d + 1), d + 1)
             for i in range(len(cells)):
                 array.unsafe_set(i, Scalar[DType.int](cells.unsafe_get(i)))
@@ -597,6 +594,45 @@ struct _Name(Copyable, Movable):
         self.dim = dim
         self.tag = tag
         self.name = name
+
+
+struct _TagIndex(Movable):
+    """The node tags of a file in increasing order, searched by bisection."""
+
+    var tags: List[Int]
+    """The tags, sorted (stably, so a repeated tag finds its first node)."""
+    var slot: List[Int]
+    """The position of each tag's node in the file."""
+    var vertex: List[Int]
+    """Per tag: its vertex number, 0 while marked used, or -1."""
+
+    def __init__(out self, file_tags: List[Int]) raises:
+        var n = len(file_tags)
+        var column = int_array(n, 1)
+        for i in range(n):
+            var t = file_tags.unsafe_get(i)
+            if t < 0:
+                raise Error(String("read_gmsh: negative node tag ", t))
+            column.unsafe_set(i, Scalar[DType.int](t))
+        self.slot = lexsort_rows(column)
+        self.tags = List[Int](capacity=n)
+        for i in self.slot:
+            self.tags.append(file_tags.unsafe_get(i))
+        self.vertex = List[Int](length=n, fill=-1)
+
+    def find(self, t: Int) -> Int:
+        """The first position of tag `t`, or -1."""
+        var lo = 0
+        var hi = len(self.tags)
+        while lo < hi:
+            var mid = (lo + hi) // 2
+            if self.tags.unsafe_get(mid) < t:
+                lo = mid + 1
+            else:
+                hi = mid
+        if lo < len(self.tags) and self.tags.unsafe_get(lo) == t:
+            return lo
+        return -1
 
 
 struct _Raw(Movable):
@@ -712,13 +748,13 @@ def _read_nodes_v4(mut cur: _Cursor, mut raw: _Raw) raises:
         var n = cur.size_t()
         if cur.binary:
             # the tags, then the coordinates, as contiguous blocks
-            cur.r.require(8 * n)
+            cur.r.require_items(n, 8)
             var tags = nm.zeros[DType.uint64](Shape(n))
             cur.r.binary_into(tags, 0, n)
             for i in range(n):
                 raw.node_tags.append(Int(tags.unsafe_get(i)))
             if parametric == 0:
-                cur.r.require(24 * n)
+                cur.r.require_items(n, 24)
                 var xyz = nm.zeros[DType.float64](Shape(3 * n))
                 cur.r.binary_into(xyz, 0, 3 * n)
                 raw.coords.reserve(len(raw.coords) + 3 * n)
@@ -771,7 +807,7 @@ def _read_elements_v4(
             raise cur.err("element type does not match its entity")
         var nn = _nodes_per_element(type)
         if cur.binary:
-            cur.r.require(8 * n * (nn + 1))
+            cur.r.require_items(n, 8 * (nn + 1))
         block.nodes.reserve(min(n, len(cur.r.data)) * nn)
         if cur.binary:
             # each element is its tag and its nodes, all size_t
@@ -801,8 +837,10 @@ def _read_elements_v2(mut cur: _Cursor, mut raw: _Raw) raises:
             var num_tags = cur.i32()
             var nn = _nodes_per_element(type)
             # each element is its number, its tags, and its nodes, all int32
+            if count < 0 or num_tags < 0:
+                raise cur.err("negative element count")
             var width = 1 + num_tags + nn
-            cur.r.require(4 * count * width)
+            cur.r.require_items(count, 4 * width)
             if count < 16:
                 for _ in range(count):
                     _ = cur.i32()

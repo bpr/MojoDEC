@@ -6,6 +6,7 @@ from std.testing import (
     assert_true,
 )
 
+from std.memory import bitcast
 import numojo as nm
 from numojo.prelude import *
 
@@ -22,6 +23,7 @@ from mojodec.routines.io.arrayio import (
     write_sparse,
 )
 from mojodec.routines.io.meshio import read_mesh, write_mesh
+from mojodec.routines.io.text import loadtxt
 
 
 def meshes() -> List[String]:
@@ -260,6 +262,38 @@ def test_mesh_roundtrip() raises:
         assert_equal(mesh.elements.unsafe_get(j), back.elements.unsafe_get(j))
     for j in range(mesh.vertices.size):
         assert_equal(mesh.vertices.unsafe_get(j), back.vertices.unsafe_get(j))
+
+
+def test_hostile_dims_and_narrow_types() raises:
+    # dims whose product overflows Int (to 0) once passed the size check
+    with open(TMP, "w") as f:
+        f.write(
+            "5\ntype=ndarray\nformat=binary\ndtype=float64\nrank=3\n",
+            "dims=4294967296,4294967296,1\n",
+        )
+    with assert_raises(contains="too little data"):
+        _ = read_array(TMP)
+    with open(TMP, "w") as f:
+        f.write(
+            "5\ntype=ndarray\nformat=binary\ndtype=float64\nrank=2\n",
+            "dims=-1,2\n",
+        )
+    with assert_raises(contains="negative dims"):
+        _ = read_array(TMP)
+    # a float32 that Mojo prints with a digit too few
+    var A = nm.zeros[DType.float32](Shape(1, 1))
+    A.unsafe_set(0, bitcast[DType.float32](UInt32(4274181095)))
+    var formats: List[ArrayFormat] = [.ASCII, .BASIC]
+    for fmt in formats:
+        write_array(TMP, A, fmt)
+        var B = read_array[DType.float32](TMP)
+        assert_equal(bitcast[DType.uint32](B.unsafe_get(0)), UInt32(4274181095))
+    # integers past 2^53 through loadtxt
+    with open(TMP, "w") as f:
+        f.write("9007199254740993\n-9007199254740995\n")
+    var C = loadtxt[DType.int](TMP)
+    assert_equal(Int(C.unsafe_get(0)), 9007199254740993)
+    assert_equal(Int(C.unsafe_get(1)), -9007199254740995)
 
 
 def main() raises:

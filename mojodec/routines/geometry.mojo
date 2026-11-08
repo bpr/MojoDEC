@@ -20,6 +20,7 @@ from mojodec.core.utils import (
     real_array,
     real_vector,
     factorial,
+    parallelotope_volume,
     rows_of,
     cols_of,
 )
@@ -59,7 +60,10 @@ def unsigned_volume(pts: RealArray) raises -> Float64:
     var A = _edge_vectors(pts)
     if M == N:
         return abs(_det(A)) / factorial(M)
-    return _qr_abs_det(A) / factorial(M)
+    var a = List[Float64](capacity=M * N)
+    for i in range(M * N):
+        a.append(A.unsafe_get(i))
+    return parallelotope_volume(a, M, N) / factorial(M)
 
 
 def signed_volume(pts: RealArray) raises -> Float64:
@@ -259,47 +263,6 @@ def _edge_vectors(pts: RealArray) raises -> RealArray:
                 i * N + k, pts.unsafe_get((i + 1) * N + k) - pts.unsafe_get(k)
             )
     return A^
-
-
-def _qr_abs_det(A: RealArray) -> Float64:
-    """`prod |R_ii|` for the Householder QR factorization `A^T = Q R` of an
-    `M x N` array `A` with `M <= N`: the M-volume of the parallelotope its
-    rows span, `sqrt(det(A A^T))`."""
-    var M = rows_of(A)
-    var N = cols_of(A)
-    # the columns of A^T are the rows of A, so keep them as rows
-    var a = List[Float64](capacity=M * N)
-    for i in range(M * N):
-        a.append(A.unsafe_get(i))
-    var v = List[Float64](length=N, fill=0.0)
-    var product: Float64 = 1
-    for j in range(M):
-        var norm2: Float64 = 0
-        for k in range(j, N):
-            norm2 += a[j * N + k] * a[j * N + k]
-        var norm = sqrt(norm2)
-        if norm == 0:
-            return 0
-        product *= norm
-        # reflect row j onto -sign(x0) |x| e_j, and every later row with it
-        var x0 = a[j * N + j]
-        var alpha = -norm if x0 >= 0 else norm
-        for k in range(j, N):
-            v[k] = a[j * N + k]
-        v[j] -= alpha
-        var vv: Float64 = 0
-        for k in range(j, N):
-            vv += v[k] * v[k]
-        if vv == 0:
-            continue
-        for l in range(j + 1, M):
-            var dot: Float64 = 0
-            for k in range(j, N):
-                dot += v[k] * a[l * N + k]
-            var f = 2 * dot / vv
-            for k in range(j, N):
-                a[l * N + k] -= f * v[k]
-    return product
 
 
 def _det(A: RealArray) raises -> Float64:

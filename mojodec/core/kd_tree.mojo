@@ -45,8 +45,7 @@ struct KDTree(Copyable, Movable, Writable):
             points: `N x k` point coordinates.
 
         Raises:
-            Never in practice; the delegated constructor raises only on a
-            length mismatch.
+            If the points have no coordinates.
         """
         var values = List[Int](capacity=rows_of(points))
         for i in range(rows_of(points)):
@@ -61,10 +60,13 @@ struct KDTree(Copyable, Movable, Writable):
             values: `N` values, returned by queries in place of row indices.
 
         Raises:
-            If `values` does not have one entry per row of `points`.
+            If `values` does not have one entry per row of `points`, or the
+            points have no coordinates.
         """
         if len(values) != rows_of(points):
             raise Error("KDTree: points and values must have the same lengths")
+        if cols_of(points) == 0 and rows_of(points) > 0:
+            raise Error("KDTree: points need at least one coordinate")
         self.k = cols_of(points)
         self.num_points = rows_of(points)
         self._points = List[List[Float64]](capacity=self.num_points)
@@ -107,7 +109,7 @@ struct KDTree(Copyable, Movable, Writable):
         """Values of all points strictly closer than `radius`, nearest first.
 
         Args:
-            point: The centre of the sphere, `k` coordinates.
+            point: The center of the sphere, `k` coordinates.
             radius: The sphere's radius.
             max_points: Return at most this many values.
 
@@ -123,7 +125,7 @@ struct KDTree(Copyable, Movable, Writable):
 
         Args:
             point: The query point, `k` coordinates.
-            n: The maximum number of values to return.
+            n: The maximum number of values to return (none if `n <= 0`).
             max_dist: Only points strictly closer than this are considered.
 
         Returns:
@@ -131,6 +133,8 @@ struct KDTree(Copyable, Movable, Writable):
         """
         var dists = List[Float64]()
         var ids = List[Int]()
+        if n <= 0:
+            return List[Int]()
         _ = self._nearest_n(point, n, max_dist, self._root, dists, ids)
         var out = List[Int](capacity=len(ids))
         for i in ids:

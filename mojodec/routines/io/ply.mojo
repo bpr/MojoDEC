@@ -96,8 +96,9 @@ def read_ply(path: String) raises -> SimplicialMesh:
 
     Raises:
         If the file cannot be opened; does not start with `ply` or has no
-        `end_header`; has an unsupported format or property type, a
-        `property` line before any `element`, or truncated data; has no
+        `end_header`; has a malformed header line, an unsupported format
+        or property type, a negative element count, a `property` line
+        before any `element`, or truncated data; has no
         vertices, or vertices without `x` and `y`; has no `face` element,
         faces without a `vertex_indices` list, or a face with fewer than 3
         vertices or an out-of-range index; or `SimplicialMesh` rejects
@@ -117,7 +118,7 @@ def read_ply(path: String) raises -> SimplicialMesh:
         elif element.name == "face":
             _read_faces(reader, ascii, element, triangles)
             have_faces = True
-        else:
+        elif len(element.properties) > 0:  # no properties: nothing to skip
             for _ in range(element.count):
                 for ref prop in element.properties:
                     _skip(reader, ascii, prop)
@@ -283,10 +284,21 @@ struct _Header(Movable):
             if len(words) == 0:
                 continue
             var key = words[0]
+            # words a header line needs, past which it is malformed
+            var need = 2 if key == "format" else 3
+            if key == "property" and len(words) > 1 and words[1] == "list":
+                need = 5
+            if (
+                key == "format" or key == "element" or key == "property"
+            ) and len(words) < need:
+                raise Error("read_ply: malformed header line [" + line + "]")
             if key == "format":
                 format = String(words[1])
             elif key == "element":
-                self.elements.append(_Element(String(words[1]), atol(words[2])))
+                var count = atol(words[2])
+                if count < 0:
+                    raise Error("read_ply: negative element count")
+                self.elements.append(_Element(String(words[1]), count))
             elif key == "property":
                 if len(self.elements) == 0:
                     raise Error("read_ply: property before any element")
@@ -388,7 +400,9 @@ def _skip(mut r: ByteReader, ascii: Bool, prop: _Property) raises:
         for _ in range(n):
             _ = r.float_()
     else:
-        r.skip(n * _type_size(prop.type))
+        var size = _type_size(prop.type)
+        r.require_items(n, size)
+        r.skip(n * size)
 
 
 def _read_vertices(

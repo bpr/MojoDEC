@@ -45,6 +45,7 @@ from mojodec.core.utils import (
     RealArray,
     compare_rows,
     factorial,
+    parallelotope_volume,
     int_vector,
     lexsort_rows,
     real_array,
@@ -805,11 +806,15 @@ struct SimplicialComplex(
 
         Vertices are their own circumcenters and edges have their midpoints.
         A triangle's barycentric weights are `a (b + c - a)`, `b (c + a - b)`,
-        `c (a + b - c)` over their sum, with `a`, `b`, `c` the squared lengths
-        of the edges opposite each vertex. Higher dimensions solve PyDEC's
+        `c (a + b - c)` over `16 area^2`, with `a`, `b`, `c` the squared
+        lengths of the edges opposite each vertex; the factors in
+        parentheses are computed as dot products of edges and the area by
+        Householder QR, since the weights' own sum cancels for slivers. Higher dimensions solve PyDEC's
         system `[[2 P P^T, 1], [1^T, 0]] [b; mu] = [|p_i|^2; 1]` per simplex,
         in place, with `P` the positions relative to the first vertex (PyDEC
-        uses absolute positions, which loses precision far from the origin). Simplices are handled in parallel chunks.
+        uses absolute positions, which loses precision far from the origin).
+        From triangles up, the Cartesian center is `p_0 + sum_r b_r (p_r -
+        p_0)` for the same reason. Simplices are handled in parallel chunks.
 
         Args:
             dim: The dimension of the simplices.
@@ -842,6 +847,7 @@ struct SimplicialComplex(
         ) {dim, E, w, m, Vp, Sp, op, bp, badp}:
             var A = List[Float64](length=m * m, fill=0)
             var b = List[Float64](length=m, fill=0)
+            var edges = List[Float64](length=2 * E, fill=0)
             for i in range(lo, hi):
                 if dim == 0:
                     bp[unsafe_offset=i] = 1.0
@@ -852,27 +858,40 @@ struct SimplicialComplex(
                     var v0 = Int(Sp[unsafe_offset=3 * i]) * E
                     var v1 = Int(Sp[unsafe_offset=3 * i + 1]) * E
                     var v2 = Int(Sp[unsafe_offset=3 * i + 2]) * E
-                    # squared lengths of the edges opposite vertices 0, 1, 2
-                    var a2: Float64 = 0
-                    var b2: Float64 = 0
-                    var c2: Float64 = 0
+                    # u = p1 - p0, w = p2 - p0, z = p2 - p1; the weight of
+                    # each vertex is the squared length of the opposite
+                    # edge times the dot product of the edges at the vertex
+                    var uu: Float64 = 0
+                    var ww: Float64 = 0
+                    var zz: Float64 = 0
+                    var uw: Float64 = 0
+                    var uz: Float64 = 0
+                    var wz: Float64 = 0
                     for k in range(E):
                         var x0 = Vp[unsafe_offset=v0 + k]
-                        var x1 = Vp[unsafe_offset=v1 + k]
-                        var x2 = Vp[unsafe_offset=v2 + k]
-                        a2 += (x1 - x2) * (x1 - x2)
-                        b2 += (x0 - x2) * (x0 - x2)
-                        c2 += (x0 - x1) * (x0 - x1)
-                    var w0 = a2 * (b2 + c2 - a2)
-                    var w1 = b2 * (c2 + a2 - b2)
-                    var w2 = c2 * (a2 + b2 - c2)
-                    var total = w0 + w1 + w2
+                        var u = Vp[unsafe_offset=v1 + k] - x0
+                        var w = Vp[unsafe_offset=v2 + k] - x0
+                        var z = (
+                            Vp[unsafe_offset=v2 + k] - Vp[unsafe_offset=v1 + k]
+                        )
+                        uu += u * u
+                        ww += w * w
+                        zz += z * z
+                        uw += u * w
+                        uz += u * z
+                        wz += w * z
+                        edges.unsafe_set(k, u)
+                        edges.unsafe_set(E + k, w)
+                    # the weights add up to 2 |u ^ w|^2; summing them
+                    # cancels for slivers, so take |u ^ w| from QR
+                    var area2 = parallelotope_volume(edges, 2, E)
+                    var total = 2 * area2 * area2
                     if total == 0:
                         badp[unsafe_offset=chunk] = True
                         return
-                    bp[unsafe_offset=3 * i] = w0 / total
-                    bp[unsafe_offset=3 * i + 1] = w1 / total
-                    bp[unsafe_offset=3 * i + 2] = w2 / total
+                    bp[unsafe_offset=3 * i] = zz * uw / total
+                    bp[unsafe_offset=3 * i + 1] = -ww * uz / total
+                    bp[unsafe_offset=3 * i + 2] = uu * wz / total
                 else:
                     # positions relative to vertex 0, which leaves the
                     # barycentric solution unchanged and keeps the system
@@ -900,13 +919,13 @@ struct SimplicialComplex(
                         return
                     for r in range(w):
                         bp[unsafe_offset=i * w + r] = b.unsafe_get(r)
-                # sum_r b_r p_r; past triangles, as p_0 + sum_r b_r (p_r -
-                # p_0), since the solved weights sum to 1 only to rounding
+                # sum_r b_r p_r; from triangles up, as p_0 + sum_r b_r (p_r -
+                # p_0), which loses no precision far from the origin
                 var u0 = Int(Sp[unsafe_offset=i * w]) * E
                 for k in range(E):
                     var x0: Float64 = 0
                     var first = 0
-                    if dim > 2:
+                    if dim >= 2:
                         x0 = Vp[unsafe_offset=u0 + k]
                         first = 1
                     var x: Float64 = 0
@@ -1325,8 +1344,8 @@ def _simplex_volumes(
     """Volumes of the `dim`-simplices in the rows of `S` into `out`.
 
     Signed: the determinant of the edge vectors over `dim!` (needs
-    `dim` equal to the embedding dimension). Unsigned: the square root of
-    the determinant of their Gram matrix over `dim!`. Runs in parallel
+    `dim` equal to the embedding dimension). Unsigned: the volume of the
+    parallelotope they span (by Householder QR) over `dim!`. Runs in parallel
     chunks, each with its own buffers.
     """
     var E = cols_of(V)
@@ -1355,14 +1374,8 @@ def _simplex_volumes(
                     M.unsafe_set(r, edges.unsafe_get(r))
                 op[unsafe_offset=i] = _det_in_place(M, dim) / scale
             else:
-                for r in range(dim):
-                    for c in range(dim):
-                        var g: Float64 = 0
-                        for k in range(E):
-                            g += edges.unsafe_get(r * E + k) * edges.unsafe_get(
-                                c * E + k
-                            )
-                        M.unsafe_set(r * dim + c, g)
-                op[unsafe_offset=i] = sqrt(abs(_det_in_place(M, dim))) / scale
+                op[unsafe_offset=i] = (
+                    parallelotope_volume(edges, dim, E) / scale
+                )
 
     parallel_ranges(rows_of(S), 50_000, simplices)

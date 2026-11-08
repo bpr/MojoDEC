@@ -210,5 +210,21 @@ def test_malformed() raises:
     assert_equal(len(m.groups), 0)
 
 
+def test_large_node_tags() raises:
+    # tags are sorted and searched: tags near 1e14 once allocated tables of
+    # that many entries
+    _write(
+        "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Nodes\n3\n"
+        "100000000000002 0 1 0\n100000000000000 0 0 0\n"
+        "100000000000001 1 0 0\n$EndNodes\n$Elements\n1\n"
+        "1 2 0 100000000000000 100000000000001 100000000000002\n"
+        "$EndElements\n"
+    )
+    var m = read_gmsh(TMP)
+    assert_equal(len(m.node_tags), 3)
+    assert_equal(m.node_tags[0], 100000000000000)
+    assert_equal(fget(m.vertices, 2, 1), 1.0)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

@@ -168,7 +168,7 @@ def main() raises:
 
     # the two vertex links inside the transparent torus surface
     var ax = fig.add_subplot(1, 2, 1, projection="3d")
-    _surface(ax, sc, surface[2], "grey", 0.08)
+    _surface(ax, sc, surface[2], "gray", 0.08)
     _surface(ax, sc, lk_in[2], "tab:red", 0.9)
     _surface(ax, sc, lk_out[2], "tab:blue", 0.9)
     var p = sc.vertices().to_numpy()

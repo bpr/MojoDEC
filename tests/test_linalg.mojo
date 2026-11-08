@@ -6,12 +6,13 @@ from std.testing import (
     assert_true,
 )
 
+from std.utils.numerics import nan
 import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.diagonal import DiagonalOperator
 from mojodec.core.sparse import CSRMatrix
-from mojodec.core.utils import fget, real_vector, norm2
+from mojodec.core.utils import fget, fset, real_array, real_vector, norm2
 from mojodec.routines.linalg import (
     StopReason,
     cg,
@@ -169,6 +170,33 @@ def test_dense_eigh() raises:
             assert_almost_equal(
                 s, wv.values.unsafe_get(j) * fget(wv.vectors, i, j), atol=1e-10
             )
+
+
+def test_empty_and_mismatched_eigenproblems() raises:
+    var e = dense.eigh(real_array(0, 0))  # once crashed
+    assert_equal(e.values.size, 0)
+    var K = real_array(3, 3)
+    var M = real_array(2, 2)
+    for i in range(3):
+        fset(K, i, i, 2.0)
+    for i in range(2):
+        fset(M, i, i, 4.0)
+    with assert_raises(contains="n x n"):
+        _ = eigh_generalized(K, M)
+    with assert_raises(contains="square"):
+        _ = dense.cholesky(real_array(2, 3))
+
+
+def test_cg_reports_nan_as_breakdown() raises:
+    # a NaN p^T A p once passed the `<= 0` test and ran to maxiter
+    var A = CSRMatrix.from_coo(
+        2, 2, [0, 1], [0, 1], [1.0, nan[DType.float64]()]
+    )
+    var b = real_vector(2)
+    b.unsafe_set(0, 1.0)
+    b.unsafe_set(1, 1.0)
+    var res = cg(A, b)
+    assert_true(res.stop == StopReason.BREAKDOWN)
 
 
 def main() raises:

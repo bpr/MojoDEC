@@ -3,6 +3,7 @@ from std.testing import (
     assert_equal,
     assert_true,
     assert_almost_equal,
+    assert_raises,
 )
 from std.collections import Set
 
@@ -25,6 +26,8 @@ from mojodec.core.utils import (
     cols_of,
     real_row_list,
     fget,
+    int_array,
+    lexsort_rows,
 )
 
 
@@ -221,6 +224,20 @@ def test_kd_tree() raises:
                     var got = tree.nearest_n(sample, n)
                     for t in range(min(n, num_pts)):
                         assert_equal(got[t], order[t])
+
+
+def test_kd_tree_and_sort_edge_cases() raises:
+    var tree = KDTree(nm.array[f64]("[[0], [0.1], [0.2]]"))
+    assert_equal(len(tree.in_sphere([0.05], 1.0, 0)), 0)  # once crashed
+    assert_equal(len(tree.nearest_n([0.05], -1)), 0)
+    with assert_raises(contains="coordinate"):
+        _ = KDTree(nm.zeros[DType.float64](Shape(3, 0)))
+    # entries 1.2e19 apart once overflowed the radix sort's span
+    var a = int_array(3, 1)
+    a.unsafe_set(0, Scalar[DType.int](-6_000_000_000_000_000_000))
+    a.unsafe_set(1, Scalar[DType.int](6_000_000_000_000_000_000))
+    var perm = lexsort_rows(a)
+    assert_equal(perm, [0, 2, 1])
 
 
 def main() raises:

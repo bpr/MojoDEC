@@ -378,6 +378,15 @@ the published mathematics:
   lazily via `__getattr__`. `SimplicialComplex` computes them at
   construction; pass `compute_geometry=False` to skip that, e.g. for
   degenerate meshes.
+- **Precise geometry.** The results agree with PyDEC's to rounding, but
+  are computed so as not to lose digits that PyDEC loses. Volumes of
+  simplices below the embedding dimension come from a Householder QR
+  factorization rather than the Gram determinant, which cannot tell a
+  very thin simplex from a flat one. Circumcenters are solved for with
+  positions relative to a vertex, not absolute positions, which keeps
+  their precision on meshes far from the origin; triangles use a closed
+  form whose denominator, the squared area, also comes from QR, so even
+  slivers get their circumcenters.
 - **Simplex lookup.** PyDEC's `simplex_to_index` dict and
   `index_to_simplex` list are methods here: `sc[k].simplex_to_index(s)`
   binary-searches the sorted simplex rows and `sc[k].index_to_simplex(i)`

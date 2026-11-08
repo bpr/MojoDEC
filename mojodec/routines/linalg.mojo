@@ -178,7 +178,7 @@ def cg(
     Stops when `||b - A x|| <= max(rtol * ||b||, atol)`, as SciPy's `cg`
     does. Singular but consistent systems (e.g. Laplacians with constant
     kernels) converge to a solution. The iteration starts from zero and
-    stops early with `StopReason.BREAKDOWN` if `p^T A p <= 0`.
+    stops early with `StopReason.BREAKDOWN` if `p^T A p` is not positive (or is NaN).
 
     Args:
         A: An `n x n` symmetric positive semidefinite matrix.
@@ -215,7 +215,7 @@ def cg(
         it += 1
         A.matvec_into(p, Ap)
         var pAp = dot(p, Ap)
-        if pAp <= 0:
+        if not pAp > 0:  # also NaN, from a NaN or infinite entry
             return SolveResult(x^, StopReason.BREAKDOWN, it, sqrt(rr))
         var alpha = rr / pAp
         axpy(alpha, p, x)
@@ -358,9 +358,12 @@ def eigh_generalized(K: RealArray, M: RealArray) raises -> EighResult:
         eigenvectors as columns.
 
     Raises:
-        If `M` is not positive definite, or the eigenvalue iteration does
-            not converge.
+        If `K` and `M` are not both `n x n`, `M` is not positive definite,
+            or the eigenvalue iteration does not converge.
     """
+    var n = rows_of(M)
+    if cols_of(M) != n or rows_of(K) != n or cols_of(K) != n:
+        raise Error("eigh_generalized: K and M must both be n x n")
     var L = dense.cholesky(M)
     # C = L^-1 K L^-T, by two triangular solves
     var Y = _forward(L, K)

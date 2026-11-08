@@ -125,12 +125,20 @@ struct CSRMatrix(Copyable, Movable, Writable):
             data: Value of each entry.
 
         Raises:
-            If `indptr` does not have `nrows + 1` entries, `indices` and `data`
+            If a dimension is negative, `indptr` does not have `nrows + 1`
+            entries, does not start at 0 or decreases, `indices` and `data`
             differ in length or from `indptr[nrows]`, or a column index is
             outside `[0, ncols)`.
         """
+        if nrows < 0 or ncols < 0:
+            raise Error("CSRMatrix: negative dimension")
         if len(indptr) != nrows + 1:
             raise Error("CSRMatrix: indptr must have nrows + 1 entries")
+        if indptr[0] != 0:
+            raise Error("CSRMatrix: indptr must start at 0")
+        for i in range(nrows):
+            if indptr[i + 1] < indptr[i]:
+                raise Error("CSRMatrix: indptr must not decrease")
         if len(indices) != len(data) or indptr[nrows] != len(data):
             raise Error("CSRMatrix: inconsistent indices/data lengths")
         for c in indices:
@@ -329,10 +337,12 @@ struct CSRMatrix(Copyable, Movable, Writable):
 
         Raises:
             If the block rows differ in length, two blocks in a block row
-            (column) differ in height (width), or a block row or column has
-            no blocks.
+            (column) differ in height (width), there are no block rows, or a
+            block row or column has no blocks.
         """
         var nbr = len(blocks)
+        if nbr == 0:
+            raise Error("bmat: no block rows")
         var nbc = len(blocks[0])
         var heights = List[Int](length=nbr, fill=-1)
         var widths = List[Int](length=nbc, fill=-1)

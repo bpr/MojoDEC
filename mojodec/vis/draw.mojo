@@ -88,7 +88,7 @@ def show_requested() -> Bool:
 def triplot(
     vertices: RealArray, indices: IntArray, labels: Bool = False
 ) raises -> PythonObject:
-    """Draw a 2D triangle mesh as grey, half-transparent triangles.
+    """Draw a 2D triangle mesh as gray, half-transparent triangles.
 
     The edges are drawn in black: PyDEC relied on matplotlib's pre-2.0
     default edge color, and current matplotlib draws no edges.
@@ -112,7 +112,7 @@ def triplot(
     # [triangle][vertex][x/y]
     var triangles = vertices.to_numpy()[indices.to_numpy()]
     var col = collections.PolyCollection(triangles)
-    col.set_facecolor("grey")
+    col.set_facecolor("gray")
     col.set_edgecolor("k")
     col.set_alpha(0.5)
     col.set_linewidth(1)

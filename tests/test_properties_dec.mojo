@@ -8,12 +8,13 @@
 # 2-D grids, icospheres, the fixtures in tests/meshes) and its parameters, so
 # a counterexample prints as a recipe rather than as arrays.
 
-from std.math import cos, pi, sin
+from std.math import cos, isnan, pi, sin
 from std.testing import TestSuite, assert_equal, assert_true
 
 from proptest import (
     ConjectureData,
     Settings,
+    assume,
     booleans,
     composite,
     fail,
@@ -24,7 +25,7 @@ from proptest import (
     permutations,
 )
 
-from mojodec.core.cochain import Cochain, d
+from mojodec.core.cochain import Cochain, d, delta
 from mojodec.core.mesh import SimplicialMesh
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
@@ -36,10 +37,19 @@ from mojodec.core.utils import (
     fset,
     iget,
     iset,
+    int_array,
     real_array,
     real_vector,
+    row_list,
     rows_of,
+    take_rows,
 )
+from mojodec.routines.curvature import (
+    angle_defect,
+    gaussian_curvature,
+    mean_curvature_normal,
+)
+from mojodec.routines.geometry import unsigned_volume
 from mojodec.routines.innerproduct import whitney_innerproduct
 from mojodec.routines.io.arrayio import (
     ArrayFormat,
@@ -359,7 +369,7 @@ def test_relabeling_vertices_preserves_volumes_and_stars() raises:
 def test_primal_dual_volume_identity() raises:
     # A k-simplex and its circumcentric dual cell are orthogonal, and the
     # convex hulls of the pairs ("diamonds") tile the mesh (with signs, for
-    # meshes that are not well centred). A diamond's volume is
+    # meshes that are not well centered). A diamond's volume is
     # |s| |*s| / C(n, k), so the sum of |s| |*s| over the k-simplices is
     # C(n, k) times the volume of the mesh. In terms of the stars, the sum
     # over k-simplices of |s|^2 star_k[s] is C(n, k) |M|.
@@ -528,6 +538,265 @@ def test_flat_of_a_constant_field_is_exact() raises:
         lists(integers(-5, 5), min_size=3, max_size=3),
         prop,
         meshes(),
+    )
+
+
+# ===----------------------------------------------------------------------=== #
+# Precision: thin simplices, far translations, codifferential
+# ===----------------------------------------------------------------------=== #
+
+
+def test_level_volumes_match_unsigned_volume() raises:
+    # Every level's volumes, entry by entry, against `unsigned_volume` of
+    # the simplex's own vertices (the levels below the embedding dimension
+    # once used a Gram determinant, which `unsigned_volume` had dropped).
+    def prop(spec: MeshSpec) raises:
+        var sc = SimplicialComplex(spec.mesh())
+        ref V = sc.vertices()
+        for k in range(1, sc.complex_dimension() + 1):
+            ref level = sc[k]
+            for i in range(level.num_simplices):
+                var got = abs(level.primal_volume.unsafe_get(i))
+                var want = unsigned_volume(
+                    take_rows(V, row_list(level.simplices, i))
+                )
+                if abs(got - want) > 1e-13 * want:
+                    fail(
+                        String("k=", k, " simplex ", i, ": ", got, " != ", want)
+                    )
+
+    given(composite(_any_mesh), prop, meshes())
+
+
+def test_thin_triangles_in_3d_have_exact_areas() raises:
+    # (0,0,0), (a,0,0), (b,h,0) with h down to 1e-12, its axes permuted: the
+    # area is a h / 2 to within the problem's own conditioning, a relative
+    # eps L / h for edges of length L (the Gram determinant was eps L^2 / h^2,
+    # which lost thin triangles entirely).
+    def prop(a: Int, b: Int, e: Int, axes: List[Int]) raises:
+        var h = 1.0
+        for _ in range(e):
+            h /= 10
+        var P: List[List[Float64]] = [
+            [0.0, 0.0, 0.0],
+            [Float64(a), 0.0, 0.0],
+            [Float64(b), h, 0.0],
+        ]
+        var V = real_array(3, 3)
+        for i in range(3):
+            for j in range(3):
+                fset(V, i, axes[j], P[i][j])
+        var T = int_array(1, 3)
+        for j in range(3):
+            T.unsafe_set(j, Scalar[DType.int](j))
+        var sc = SimplicialComplex(V, T)
+        var want = Float64(a) * h / 2
+        var tol = 16 * 2.220446049250313e-16 * Float64(a + abs(b) + 1) / h
+        var got = sc[2].primal_volume.unsafe_get(0)
+        if abs(got - want) > tol * want:
+            fail(String("complex: ", got, " != ", want))
+        got = unsigned_volume(V)
+        if abs(got - want) > tol * want:
+            fail(String("unsigned_volume: ", got, " != ", want))
+
+    given(
+        integers(1, 10),
+        integers(-5, 15),
+        integers(0, 12),
+        permutations([0, 1, 2]),
+        prop,
+        Settings(max_examples=200, deadline=None),
+    )
+
+
+def test_far_translations_move_circumcenters_exactly() raises:
+    # Grids have integer coordinates, so a translation by 10^j is exact, and
+    # the circumcenters must follow it to within the rounding of their own
+    # coordinates (a few ulps of the shift), not lose digits to it.
+    def prop(spec: MeshSpec, j: Int) raises:
+        var mesh = spec.mesh()
+        var shift = 1.0
+        for _ in range(j):
+            shift *= 10
+        var W = mesh.vertices.copy()
+        for i in range(W.size):
+            W.unsafe_set(i, W.unsafe_get(i) + shift)
+        var sc = SimplicialComplex(mesh)
+        var far = SimplicialComplex(W, mesh.elements)
+        var tol = 4 * 2.220446049250313e-16 * (shift + 64)
+        for k in range(1, sc.complex_dimension() + 1):
+            ref c = sc[k].circumcenter
+            ref f = far[k].circumcenter
+            for i in range(c.size):
+                var err = f.unsafe_get(i) - shift - c.unsafe_get(i)
+                if abs(err) > tol:
+                    fail(String("k=", k, " entry ", i, " off by ", err))
+
+    given(composite(_grid_spec), integers(0, 12), prop, meshes())
+
+
+def test_codifferential_is_adjoint_to_d_with_pydecs_sign() raises:
+    # With the stars as (signed) inner products on primal cochains,
+    #   <a, delta b>_k = (-1)^n <d a, b>_(k+1).
+    # The (-1)^n is PyDEC's convention, which MojoDEC keeps: its dual d
+    # carries (-1)^k, so delta is the adjoint of d only in even dimensions
+    # (in 1-D and 3-D, delta d is negative semidefinite).
+    def prop(spec: MeshSpec, seed: Int) raises:
+        var sc = SimplicialComplex(spec.mesh())
+        var n = sc.complex_dimension()
+        var sign = -1.0 if n % 2 == 1 else 1.0
+        for k in range(n):
+            var S = _star_values(sc, k)
+            var T = _star_values(sc, k + 1)
+            # a zero dual volume makes star_inv infinite (right triangles
+            # of unjittered grids); delta is not defined there
+            var finite = True
+            for i in range(S.size):
+                finite = finite and S.unsafe_get(i) != 0
+            assume(finite)
+            var a = _cochain(sc, k, seed)
+            var b = _cochain(sc, k + 1, seed + 1)
+            var db = delta(b)
+            var da = d(a)
+            var lhs = 0.0
+            var size = 0.0
+            for i in range(S.size):
+                var t = a.v.unsafe_get(i) * S.unsafe_get(i) * db.v.unsafe_get(i)
+                lhs += t
+                size += abs(t)
+            var rhs = 0.0
+            for i in range(T.size):
+                var t = da.v.unsafe_get(i) * T.unsafe_get(i) * b.v.unsafe_get(i)
+                rhs += t
+                size += abs(t)
+            if abs(lhs - sign * rhs) > 1e-11 * max(1.0, size):
+                fail(String("k=", k, ": ", lhs, " != ", sign, " * ", rhs))
+
+    given(composite(_any_mesh), integers(0, 10000), prop, meshes())
+
+
+# ===----------------------------------------------------------------------=== #
+# Curvature
+# ===----------------------------------------------------------------------=== #
+
+
+def _surface(mut data: ConjectureData) raises -> MeshSpec:
+    """A 2-complex: a 2-D grid, an icosphere, the sphere or the cube."""
+    var kind = data.draw(integers(0, 2), "kind")
+    if kind == ICOSPHERE:
+        return MeshSpec(ICOSPHERE, [data.draw(integers(0, 1))], 0)
+    if kind == FIXTURE:
+        return MeshSpec(FIXTURE, [data.draw(integers(0, 1))], 0)
+    var dims = data.draw(lists(integers(1, 4), min_size=2, max_size=2), "dims")
+    return MeshSpec(GRID, dims^, data.draw(integers(0, 1000), "jitter"))
+
+
+def test_curvature_ignores_unused_vertices() raises:
+    # Inserting vertices that no triangle uses changes nothing at the others
+    # (curvature once read level-0 rows as vertex ids); the unused ones get
+    # NaN, and the angle defects still add up to 2 pi chi.
+    def prop(spec: MeshSpec, slots: List[Int]) raises:
+        var mesh = spec.mesh()
+        var nv = rows_of(mesh.vertices)
+        var E = cols_of(mesh.vertices)
+        # where each old vertex goes, with an unused one before slot s
+        var extra = List[Int](length=nv + 1, fill=0)
+        for s in slots:
+            extra[s % (nv + 1)] += 1
+        var new_id = List[Int]()
+        var used = List[Bool]()
+        for v in range(nv + 1):
+            for _ in range(extra[v]):
+                used.append(False)
+            if v < nv:
+                new_id.append(len(used))
+                used.append(True)
+        var W = real_array(len(used), E)
+        for i in range(len(used)):
+            for j in range(E):
+                fset(W, i, j, 100.0 + Float64(i))
+        for v in range(nv):
+            for j in range(E):
+                fset(W, new_id[v], j, fget(mesh.vertices, v, j))
+        var T = mesh.elements.copy()
+        for i in range(T.size):
+            T.unsafe_set(i, Scalar[DType.int](new_id[Int(T.unsafe_get(i))]))
+        var sc = SimplicialComplex(mesh)
+        var big = SimplicialComplex(W, T)
+
+        var defect = angle_defect(big)
+        var total = 0.0
+        for i in range(defect.size):
+            total += defect.unsafe_get(i)
+        var chi = 2 * pi * Float64(big.euler_characteristic())
+        if abs(total - chi) > 1e-12 * Float64(nv):
+            fail(String("Gauss-Bonnet: ", total, " != ", chi))
+
+        var K = gaussian_curvature(sc)
+        var K2 = gaussian_curvature(big)
+        var H = mean_curvature_normal(sc)
+        var H2 = mean_curvature_normal(big)
+        for i in range(len(used)):
+            if not used[i]:
+                assert_true(isnan(K2.unsafe_get(i)), "K at an unused vertex")
+                assert_true(isnan(fget(H2, i, 0)), "Hn at an unused vertex")
+        for v in range(nv):
+            var x = K.unsafe_get(v)
+            var y = K2.unsafe_get(new_id[v])
+            if abs(x - y) > 1e-12 * max(1.0, abs(x)):
+                fail(String("K at vertex ", v, ": ", x, " != ", y))
+            for j in range(E):
+                x = fget(H, v, j)
+                y = fget(H2, new_id[v], j)
+                if abs(x - y) > 1e-9 * max(1.0, abs(x)):
+                    fail(String("Hn at vertex ", v, ": ", x, " != ", y))
+
+    given(
+        composite(_surface),
+        lists(integers(0, 1000), max_size=4),
+        prop,
+        meshes(),
+    )
+
+
+def test_flat_fans_have_no_angle_defect() raises:
+    # A planar fan of triangles around the origin, one of them a sliver with
+    # an angle of 10^-e there: the defect at the center is 0 to rounding
+    # (the angle formula once lost angles below ~1e-8 entirely). Weights of
+    # 2 or 3 on 3 or more other gaps keep every gap below pi.
+    def prop(weights: List[Int], e: Int) raises:
+        var m = len(weights)
+        var sliver = 1.0
+        for _ in range(e):
+            sliver /= 10
+        var total = 0
+        for w in weights:
+            total += w
+        var V = real_array(m + 1, 2)
+        var theta = 0.0
+        for i in range(m):
+            var r = 1.0 + Float64(i % 2)
+            fset(V, i + 1, 0, r * cos(theta))
+            fset(V, i + 1, 1, r * sin(theta))
+            # the gap after ring vertex i; the last one closes the fan
+            theta += sliver if i == 0 else (2 * pi - sliver) * Float64(
+                weights[i]
+            ) / Float64(total - weights[0])
+        var T = int_array(m, 3)
+        for i in range(m):
+            iset(T, i, 0, 0)
+            iset(T, i, 1, i + 1)
+            iset(T, i, 2, (i + 1) % m + 1)
+        var sc = SimplicialComplex(V, T)
+        var defect = angle_defect(sc).unsafe_get(0)
+        if abs(defect) > 1e-14 * Float64(m):
+            fail(String("defect at the center: ", defect))
+
+    given(
+        lists(integers(2, 3), min_size=4, max_size=8),
+        integers(3, 12),
+        prop,
+        Settings(max_examples=100, deadline=None),
     )
 
 

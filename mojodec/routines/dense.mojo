@@ -242,9 +242,12 @@ def cholesky(A: RealArray) raises -> RealArray:
         The `n x n` Cholesky factor `L`.
 
     Raises:
-        If `A` is not positive definite (a non-positive pivot).
+        If `A` is not square or not positive definite (a non-positive
+            pivot).
     """
     var n = rows_of(A)
+    if n != cols_of(A):
+        raise Error("cholesky: expected a square matrix")
     var L = real_array(n, n)
     for j in range(n):
         var s = A.unsafe_get(j * n + j) - _dot_at(L, j * n, L, j * n, j)
@@ -285,6 +288,8 @@ def eigh(A: RealArray) raises -> EighResult:
     var n = rows_of(A)
     if n != cols_of(A):
         raise Error("eigh: expected a square matrix")
+    if n == 0:  # _tred2 and _tql2 assume n >= 1
+        return EighResult(real_vector(0), real_array(0, 0))
     # V holds the matrix, then the transposed accumulated transformations:
     # row i of V is eigenvector i, so the inner loops run over contiguous
     # memory. A is symmetric, so it is its own transpose to start.

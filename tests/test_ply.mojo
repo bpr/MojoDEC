@@ -152,5 +152,38 @@ def test_bad_files() raises:
         _ = read_ply(TMP)
 
 
+def test_hostile_headers_and_counts() raises:
+    # a header line without its count
+    with open(TMP, "w") as f:
+        f.write("ply\nformat ascii 1.0\nelement vertex\nend_header\n")
+    with assert_raises(contains="malformed header"):
+        _ = read_ply(TMP)
+    # an element without properties and an enormous count: skipped at
+    # once (it once looped 1e18 times)
+    with open(TMP, "w") as f:
+        f.write(
+            "ply\nformat ascii 1.0\nelement junk 1000000000000000000\n",
+            "element vertex 3\nproperty float x\nproperty float y\n",
+            "element face 1\nproperty list uchar int vertex_indices\n",
+            "end_header\n0 0\n1 0\n0 1\n3 0 1 2\n",
+        )
+    assert_equal(rows_of(read_ply(TMP).elements), 1)
+    # a negative list count in a skipped binary element once moved the
+    # reader before the start of the file
+    var bytes = List[Byte](
+        String(
+            "ply\nformat binary_little_endian 1.0\nelement junk 1\n",
+            "property list int int stuff\nelement vertex 3\n",
+            "property double x\nproperty double y\nelement face 1\n",
+            "property list uchar int vertex_indices\nend_header\n",
+        ).as_bytes()
+    )
+    append_le(bytes, Int32(-100000000))
+    with open(TMP, "w") as f:
+        f.write_bytes(Span(bytes))
+    with assert_raises(contains="ends early"):
+        _ = read_ply(TMP)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

@@ -11,7 +11,12 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.utils import fget, real_array_from_rows, real_vector
+from mojodec.core.utils import (
+    fget,
+    int_array,
+    real_array_from_rows,
+    real_vector,
+)
 from mojodec.routines.geometry import (
     unsigned_volume,
     signed_volume,
@@ -193,6 +198,37 @@ def test_combinatorial() raises:
     assert_equal(permutation_parity([0, 1, 3, 2]), 1)
     assert_equal(relative_parity([0, 1], [1, 0]), 1)
     assert_equal(relative_parity([0, 1, 2], [0, 2, 1]), 1)
+
+
+def test_negative_combination_sizes() raises:
+    # n < 0 once indexed past the end of L
+    assert_equal(len(combinations([1, 2], -1)), 1)
+    assert_equal(len(combinations([1, 2], -1)[0]), 0)
+
+
+def test_thin_and_sliver_triangles() raises:
+    # a triangle 1e-9 high in 3-D: the complex's own volumes once used the
+    # Gram determinant and got 0
+    var V = real_array_from_rows(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.3, 0.000000001, 0.0]]
+    )
+    var T = int_array(1, 3)
+    for j in range(3):
+        T.unsafe_set(j, Scalar[DType.int](j))
+    var sc = SimplicialComplex(V, T)
+    assert_almost_equal(
+        sc[2].primal_volume.unsafe_get(0), 5e-10, atol=0, rtol=1e-6
+    )
+    # an obtuse sliver 1e-8 high: its circumcenter weights' sum cancelled to
+    # 0, so it was rejected as degenerate
+    var W = real_array_from_rows([[0.0, 0.0], [1.0, 0.0], [-1.0, 0.00000001]])
+    var flat = SimplicialComplex(W, T)
+    ref c = flat[2].circumcenter
+    var r0 = sqrt(fget(c, 0, 0) ** 2 + fget(c, 0, 1) ** 2)
+    for i in range(1, 3):
+        var dx = fget(c, 0, 0) - fget(W, i, 0)
+        var dy = fget(c, 0, 1) - fget(W, i, 1)
+        assert_almost_equal(sqrt(dx * dx + dy * dy), r0, atol=0, rtol=1e-6)
 
 
 def main() raises:

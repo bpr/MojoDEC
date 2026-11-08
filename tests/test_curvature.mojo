@@ -1,4 +1,4 @@
-from std.math import pi, sqrt
+from std.math import cos, isnan, pi, sin, sqrt
 from std.testing import (
     TestSuite,
     assert_almost_equal,
@@ -213,6 +213,44 @@ def test_quality() raises:
     var reg = shape_regularity(ico)
     for t in range(reg.size):
         assert_almost_equal(reg.unsafe_get(t), 1.0, atol=1e-12)
+
+
+def test_unused_vertices_and_small_angles() raises:
+    # an unused vertex 0 ahead of the icosahedron: curvature once read
+    # level-0 rows as vertex ids
+    var ico = icosahedron()
+    var nv = rows_of(ico.vertices)
+    var V = nm.zeros[DType.float64](Shape(nv + 1, 3))
+    for v in range(nv):
+        for j in range(3):
+            V.unsafe_set((v + 1) * 3 + j, fget(ico.vertices, v, j))
+    var T = ico.elements.copy()
+    for i in range(T.size):
+        T.unsafe_set(i, T.unsafe_get(i) + 1)
+    var K = gaussian_curvature(SimplicialComplex(ico))
+    var shifted = SimplicialComplex(V, T)
+    var K2 = gaussian_curvature(shifted)
+    var Hn = mean_curvature_normal(shifted)
+    assert_true(isnan(K2.unsafe_get(0)))
+    assert_true(isnan(fget(Hn, 0, 0)))
+    for v in range(nv):
+        assert_almost_equal(
+            K2.unsafe_get(v + 1), K.unsafe_get(v), atol=0, rtol=1e-14
+        )
+    # a flat fan whose sliver has a 1e-8 angle at the center: the angle was
+    # computed as 0, leaving a defect of 1e-8
+    var t = 0.00000001
+    var W = nm.zeros[DType.float64](Shape(5, 2))
+    var angles: List[Float64] = [0.0, t, 2.0, 4.0]
+    for i in range(4):
+        W.unsafe_set((i + 1) * 2, cos(angles[i]))
+        W.unsafe_set((i + 1) * 2 + 1, sin(angles[i]))
+    var F = nm.zeros[DType.int](Shape(4, 3))
+    for i in range(4):
+        F.unsafe_set(i * 3 + 1, Scalar[DType.int](i + 1))
+        F.unsafe_set(i * 3 + 2, Scalar[DType.int]((i + 1) % 4 + 1))
+    var defect = angle_defect(SimplicialComplex(W, F))
+    assert_almost_equal(defect.unsafe_get(0), 0.0, atol=1e-15, rtol=0)
 
 
 def main() raises:

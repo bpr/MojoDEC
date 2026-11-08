@@ -310,12 +310,22 @@ def _read_dense[
     if format not in ("", "basic", "ascii", "binary"):
         raise Error("arrayio: unknown format [" + format + "]")
     var dims = _split_dims(_get(header, "dims"))
+    # a value takes at least one byte in any format: check before
+    # allocating, without letting the product overflow
+    var left = len(reader.data) - reader.pos
     var count = 1
     for x in dims:
-        count *= x
-    # a value takes at least one byte in any format: check before allocating
-    if count < 0 or count > len(reader.data) - reader.pos:
-        raise Error("arrayio: too little data for dims " + _get(header, "dims"))
+        if x < 0:
+            raise Error("arrayio: negative dims " + _get(header, "dims"))
+        if x == 0:
+            count = 0
+    if count != 0:
+        for x in dims:
+            if count > left // x:
+                raise Error(
+                    "arrayio: too little data for dims " + _get(header, "dims")
+                )
+            count *= x
     var shape = NDArrayShape(dims) if len(dims) > 0 else NDArrayShape(1)
     var out = nm.zeros[dtype](shape)
     if format == "basic" and len(dims) != 2:
@@ -488,10 +498,10 @@ def _write_dense[
 def _write_value[dtype: DType](mut s: String, x: Scalar[dtype]):
     comptime if dtype.is_integral():
         s.write(Int(x))
-    elif dtype == DType.float64:
-        write_float(s, rebind[Float64](x))
     else:
-        s.write(x)
+        # Float64 holds every narrower float exactly, and Mojo's own
+        # printing of Float32 is not round-trip either
+        write_float(s, Float64(x))
 
 
 def _write_file(path: String, bytes: List[Byte]) raises:

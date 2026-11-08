@@ -41,6 +41,8 @@ def loadtxt[
     with open(path, "r") as f:
         text = f.read()
     var values = List[Float64]()
+    # integers apart, so 64-bit ones do not lose digits through Float64
+    var ints = List[Int]()
     var rows = 0
     var cols = -1
     # split on "\n": Mojo 1.2's `splitlines()` also broke lines at tabs
@@ -51,7 +53,10 @@ def loadtxt[
             body = line[byte=:hash]
         var n = 0
         for tok in body.split():
-            values.append(atof(tok))
+            comptime if dtype.is_integral():
+                ints.append(_parse_int(tok))
+            else:
+                values.append(atof(tok))
             n += 1
         if n == 0:
             continue
@@ -70,9 +75,18 @@ def loadtxt[
         rows += 1
     var shape = NDArrayShape(rows, cols) if cols > 1 else NDArrayShape(rows)
     var out = nm.zeros[dtype](shape)
-    for i in range(len(values)):
-        comptime if dtype.is_integral():
-            out.unsafe_set(i, Scalar[dtype](Int(values[i])))
-        else:
+    comptime if dtype.is_integral():
+        for i in range(len(ints)):
+            out.unsafe_set(i, Scalar[dtype](ints[i]))
+    else:
+        for i in range(len(values)):
             out.unsafe_set(i, Scalar[dtype](values[i]))
     return out^
+
+
+def _parse_int(tok: StringSlice) raises -> Int:
+    """An integer token exactly, or a real one (`3.0`, `1e3`) truncated."""
+    try:
+        return atol(tok)
+    except:
+        return Int(atof(tok))

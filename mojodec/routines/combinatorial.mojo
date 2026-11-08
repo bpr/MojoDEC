@@ -13,7 +13,8 @@ generators become functions returning lists, in the same order.
 def combinations(L: List[Int], n: Int) -> List[List[Int]]:
     """All combinations of `n` elements of `L`, preserving element order.
 
-    As in PyDEC, `n == 0` or `n > len(L)` yields a single empty combination.
+    As in PyDEC, `n == 0` or `n > len(L)` yields a single empty
+    combination; so does a negative `n`.
 
     ```mojo
     combinations([1, 2, 3, 4], 2)
@@ -28,7 +29,7 @@ def combinations(L: List[Int], n: Int) -> List[List[Int]]:
         The combinations, in lexicographic order of positions in `L`.
     """
     var out = List[List[Int]]()
-    if n == 0 or n > len(L):
+    if n <= 0 or n > len(L):
         out.append(List[Int]())
         return out^
     var prefix = List[Int]()

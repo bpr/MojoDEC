@@ -385,7 +385,10 @@ def lexsort_rows(a: IntArray) -> List[Int]:
         var x = Int(a.unsafe_get(i))
         lo = min(lo, x)
         hi = max(hi, x)
-    if hi - lo <= 4 * n + 1024:
+    # hi - lo can overflow when lo < 0; lo + span cannot
+    var span = 4 * n + 1024
+    var narrow = hi - lo <= span if lo >= 0 else hi <= lo + span
+    if narrow:
         _radix_sort_rows(a, perm, lo, hi - lo + 1)
     else:
         var scratch = List[Int](length=n, fill=0)
@@ -582,6 +585,55 @@ def factorial(n: Int) -> Float64:
     for i in range(2, n + 1):
         f *= Float64(i)
     return f
+
+
+def parallelotope_volume(mut a: List[Float64], m: Int, n: Int) -> Float64:
+    """The m-volume of the parallelotope spanned by `m` vectors in n-space.
+
+    It is `prod |R_ii|` from a Householder QR factorization `A^T = Q R` of
+    the `m x n` matrix `A` whose rows are the vectors, which equals
+    `sqrt(det(A A^T))` without the Gram form's loss of precision near
+    degeneracy (a rounding error of `eps` in `det(A A^T)` becomes
+    `sqrt(eps)` in the volume).
+
+    Args:
+        a: The vectors, row after row (`m * n` entries); overwritten.
+        m: Number of vectors, at most `n`.
+        n: Their dimension.
+
+    Returns:
+        The volume (1 when `m == 0`).
+    """
+    var product: Float64 = 1
+    for j in range(m):
+        var r = j * n
+        var norm2: Float64 = 0
+        for k in range(j, n):
+            norm2 += a.unsafe_get(r + k) * a.unsafe_get(r + k)
+        var norm = sqrt(norm2)
+        if norm == 0:
+            return 0
+        product *= norm
+        # reflect row j onto -sign(x0) |x| e_j, and every later row with
+        # it; row j itself becomes the Householder vector (it is not needed
+        # again)
+        var x0 = a.unsafe_get(r + j)
+        a.unsafe_set(r + j, x0 - (-norm if x0 >= 0 else norm))
+        var vv: Float64 = 0
+        for k in range(j, n):
+            vv += a.unsafe_get(r + k) * a.unsafe_get(r + k)
+        if vv == 0:
+            continue
+        for l in range(j + 1, m):
+            var dot: Float64 = 0
+            for k in range(j, n):
+                dot += a.unsafe_get(r + k) * a.unsafe_get(l * n + k)
+            var f = 2 * dot / vv
+            for k in range(j, n):
+                a.unsafe_set(
+                    l * n + k, a.unsafe_get(l * n + k) - f * a.unsafe_get(r + k)
+                )
+    return product
 
 
 # ===----------------------------------------------------------------------=== #

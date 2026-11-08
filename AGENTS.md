@@ -85,7 +85,9 @@ there); `mojodec/prelude.mojo` is the small common subset.
 
 - Write floats as text with `io/scan.mojo`'s `write_float`, not
   `String(x)`: Mojo prints about one in five integral doubles between
-  ~1.8e16 and 1e23 with a digit too few, so they don't read back.
+  ~1.8e16 and 1e23 with a digit too few, so they don't read back, and
+  some Float32 values too (widen them to Float64 first). Parse integer
+  text with `atol`, not `atof`, which loses digits past 2^53.
 - `nm.fromstring` reads `1e4` as 14 (it drops the `e`); write test
   literals without exponents or use `real_array_from_rows`.
 - `assert_almost_equal` has a default `rtol=1e-5` on top of `atol`; pass
@@ -111,8 +113,10 @@ Key design points that span several files:
   `simplex_array_boundary` builds `d` directly (k+1 entries per row) and
   `boundary` is its transpose. Circumcenters are closed-form up to
   triangles; higher dimensions solve PyDEC's system with positions
-  relative to the first vertex (absolute positions lost ~|p|²/edge² of
-  precision far from the origin). Dual volumes come from one walk down the chains of
+  relative to the first vertex, and from triangles up the Cartesian center
+  is built relative to it too (absolute positions lose precision far from
+  the origin). Embedded volumes use Householder QR
+  (`parallelotope_volume`), never the Gram determinant. Dual volumes come from one walk down the chains of
   circumcenters (`_add_dual_pieces`); `dual_edge_piece_values` runs the
   same walk to keep the edge pieces per top simplex, which `flat` and
   `dual_edge_pieces` use. In loops, look faces up with
@@ -190,7 +194,10 @@ Key design points that span several files:
   `SparseFormat`, `PlyFormat`, `VTKFormat`), passed as `format=.BINARY`.
   Readers go through `io/scan.mojo`'s `ByteReader` (in-place number
   parsing, block copies of binary data); check a count read from a file
-  against the bytes left (`require`) before allocating for it.
+  against the bytes left before allocating for it, with
+  `require_items(count, size)` rather than `require(count * size)`, which
+  can overflow. Never index a table by a number read from a file (Gmsh
+  node tags are sorted and searched).
   The Gmsh fixtures in `tests/meshes/gmsh/` are generated from the `.geo`
   files there: `pixi exec --spec gmsh gmsh -2 square.geo -format msh41
   [-bin] -o square_v41[_bin].msh` (and `msh22`; `-3` for the cube).
@@ -234,8 +241,12 @@ uses meshes past every threshold; the other tests' meshes run serially.
 - `tests/test_properties.mojo` (combinatorics, simplex geometry, sparse
   kernels against a dense model, complexes) and
   `tests/test_properties_dec.mojo` (rigid-motion and relabeling
-  invariance, volume identities, Whitney, wedge, flat, I/O round trips)
-  are property tests using proptest, a sibling `../proptest` checkout.
+  invariance, volume identities, thin and far-away simplices, the
+  codifferential's sign, curvature, Whitney, wedge, flat, I/O round trips)
+  and `tests/test_properties_robust.mojo` (readers given truncated and
+  corrupted files, raw CSR input, kd-tree and eigensolver against brute
+  force or their definitions, every dtype through every format) are
+  property tests using proptest, a sibling `../proptest` checkout.
 - The examples double as regression checks against PyDEC; README.md's
   Examples table lists the expected results (e.g. DarcyFlow pressures to
   1e-14, ResonantCavity eigenvalues m²+n², MakeMesh matches

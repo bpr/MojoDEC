@@ -336,7 +336,23 @@ struct ByteReader(Movable):
         Raises:
             If fewer are left, or `count` is negative.
         """
-        if count < 0 or self.pos + count > len(self.data):
+        # pos + count could overflow for a count read from a file
+        if count < 0 or count > len(self.data) - self.pos:
+            raise self.err("file ends early")
+
+    def require_items(self, count: Int, size: Int) raises:
+        """Check that `count` items of `size` bytes each are left, without
+        computing `count * size`, which can overflow for a count read from
+        a file.
+
+        Args:
+            count: The number of items.
+            size: The size of each, in bytes (positive).
+
+        Raises:
+            If fewer are left, or `count` is negative.
+        """
+        if count < 0 or count > (len(self.data) - self.pos) // size:
             raise self.err("file ends early")
 
     def skip(mut self, count: Int) raises:
@@ -346,10 +362,9 @@ struct ByteReader(Movable):
             count: The number of bytes.
 
         Raises:
-            If fewer than `count` bytes are left.
+            If fewer than `count` bytes are left, or `count` is negative.
         """
-        if self.pos + count > len(self.data):
-            raise self.err("file ends early")
+        self.require(count)
         self.pos += count
 
     def _swapped(self) -> Bool:

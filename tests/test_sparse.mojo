@@ -63,5 +63,15 @@ def test_select_checks_indices() raises:
         _ = I.select_cols([1, 1])
 
 
+def test_raw_arrays_are_validated() raises:
+    # an indptr that does not start at 0 once dropped entries silently
+    with assert_raises(contains="start at 0"):
+        _ = CSRMatrix(1, 3, [1, 2], [0, 1], [5.0, 7.0])
+    with assert_raises(contains="decrease"):
+        _ = CSRMatrix(2, 3, [0, 3, 2], [2, 0], [5.0, 7.0])
+    with assert_raises(contains="no block rows"):
+        _ = CSRMatrix.bmat(List[List[Optional[CSRMatrix]]]())
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
