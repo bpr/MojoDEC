@@ -1,7 +1,9 @@
+from std.math import sqrt
 from std.testing import (
     TestSuite,
     assert_equal,
     assert_almost_equal,
+    assert_raises,
     assert_true,
 )
 
@@ -23,6 +25,18 @@ def R(s: String) raises -> NDArray[f64]:
 
 def idx(sc: SimplicialComplex, s: List[Int]) raises -> Int:
     return sc[len(s) - 1].simplex_to_index(Simplex(s))
+
+
+def test_duplicate_and_repeated_vertices_raise() raises:
+    # once accepted silently: [[0,1,2],[0,1,2]] had an empty boundary and
+    # doubled dual volumes
+    var V = R("[[0,0],[1,0],[0,1],[1,1]]")
+    with assert_raises(contains="have the same vertices"):
+        _ = SimplicialComplex(V, I("[[0,1,2],[1,3,2],[2,0,1]]"))
+    with assert_raises(contains="repeats vertex 1"):
+        _ = SimplicialComplex(V, I("[[0,1,1]]"), compute_geometry=False)
+    with assert_raises(contains="have the same vertices"):
+        _ = SimplicialComplex(R("[[0],[1]]"), I("[[0,1],[1,0]]"))
 
 
 def test_find_vertices() raises:
@@ -133,15 +147,15 @@ def test_dd_is_zero() raises:
 def check_star(sc: SimplicialComplex, s: List[Int], ratio: Float64) raises:
     ref data = sc[len(s) - 1]
     var i = data.simplex_to_index(Simplex(s))
-    assert_almost_equal(data.star[i, i], ratio)
+    assert_almost_equal(data.star[i, i], ratio, atol=1e-14, rtol=0)
 
 
 def test_hodge_star_regular() raises:
-    var r3 = 3.0**0.5
+    var r3 = sqrt(3.0)
     var sc = SimplicialComplex(R("[[0],[1]]"), I("[[0,1]]"))
     for i in range(2):
-        assert_almost_equal(sc[0].star[i, i], 0.5)
-    assert_almost_equal(sc[1].star[0, 0], 1.0)
+        assert_almost_equal(sc[0].star[i, i], 0.5, atol=1e-15, rtol=0)
+    assert_almost_equal(sc[1].star[0, 0], 1.0, atol=1e-15, rtol=0)
     var V = real_array(3, 2)
     fset(V, 1, 0, 1.0)
     fset(V, 2, 0, 0.5)
@@ -151,21 +165,25 @@ def test_hodge_star_regular() raises:
     var dual: List[Float64] = [r3 / 12, r3 / 6, 1.0]
     for dim in range(3):
         for i in range(sc[dim].num_simplices):
-            assert_almost_equal(sc[dim].star[i, i], dual[dim] / primal[dim])
+            assert_almost_equal(
+                sc[dim].star[i, i], dual[dim] / primal[dim], atol=1e-14, rtol=0
+            )
     sc = SimplicialComplex(
         R("[[0,0,0],[0,1,1],[1,0,1],[1,1,0]]"), I("[[0,1,2,3]]")
     )
-    primal = [1.0, 2.0**0.5, (3.0 / 4) ** 0.5, 1.0 / 3]
-    dual = [1.0 / 12, 2.0**0.5 / 12, (3.0 / 36) ** 0.5, 1.0]
+    primal = [1.0, sqrt(2.0), sqrt(3.0 / 4), 1.0 / 3]
+    dual = [1.0 / 12, sqrt(2.0) / 12, sqrt(3.0 / 36), 1.0]
     for dim in range(4):
         for i in range(sc[dim].num_simplices):
-            assert_almost_equal(sc[dim].star[i, i], dual[dim] / primal[dim])
+            assert_almost_equal(
+                sc[dim].star[i, i], dual[dim] / primal[dim], atol=1e-14, rtol=0
+            )
 
 
 def three_triangles(
     extra_dims: Int, shift: Float64
 ) raises -> SimplicialComplex:
-    var r3 = 3.0**0.5
+    var r3 = sqrt(3.0)
     var base: List[List[Float64]] = [
         [0, 0],
         [1, 0],
@@ -187,7 +205,7 @@ def test_hodge_star_multi() raises:
     check_star(sc, [1], 1.0)
     check_star(sc, [3], 0.5)
     check_star(sc, [2, 3], 1.0)
-    var r3 = 3.0**0.5
+    var r3 = sqrt(3.0)
     for c in range(2):
         sc = three_triangles(0, 0.0) if c == 0 else three_triangles(4, 0.37)
         check_star(sc, [0], r3 / 12)
@@ -211,7 +229,7 @@ def test_star_star_inv_sign() raises:
         var P = sc[k].star @ sc[k].star_inv
         var expected: Float64 = -1.0 if (k * (n - k)) % 2 == 1 else 1.0
         for i in range(len(P)):
-            assert_almost_equal(P[i], expected)
+            assert_almost_equal(P[i], expected, atol=1e-15, rtol=0)
 
 
 def test_boundary_faces() raises:

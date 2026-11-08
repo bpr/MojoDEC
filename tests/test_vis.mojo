@@ -26,7 +26,9 @@ def assert_rows(a: RealArray, s: String) raises:
     var b = nm.fromstring[f64](s)
     assert_equal(a.size, b.size)
     for i in range(a.size):
-        assert_almost_equal(a.unsafe_get(i), b.unsafe_get(i), atol=1e-12)
+        assert_almost_equal(
+            a.unsafe_get(i), b.unsafe_get(i), atol=1e-15, rtol=0
+        )
 
 
 def unit_triangle() raises -> SimplicialComplex:

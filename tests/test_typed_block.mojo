@@ -69,7 +69,9 @@ def test_apply_matches_assembled() raises:
     var ref_ = A.to_csr() @ x.stacked()
     var s = y.stacked()
     for i in range(s.size):
-        assert_almost_equal(s.unsafe_get(i), ref_.unsafe_get(i), atol=1e-13)
+        assert_almost_equal(
+            s.unsafe_get(i), ref_.unsafe_get(i), atol=1e-14, rtol=0
+        )
     # the blocks keep their kinds: the second equation is the divergence
     var div = tc.d[1, PRIMAL]() @ x.first
     for i in range(len(div)):
@@ -95,9 +97,9 @@ def test_solve_with_fixed_unknowns() raises:
     var r = A @ x - b
     for i in range(len(r.first)):
         if i not in boundary:
-            assert_almost_equal(r.first[i], 0.0, atol=1e-11)
+            assert_almost_equal(r.first[i], 0.0, atol=1e-13, rtol=0)
     for i in range(1, len(r.second)):
-        assert_almost_equal(r.second[i], 0.0, atol=1e-11)
+        assert_almost_equal(r.second[i], 0.0, atol=1e-13, rtol=0)
 
 
 def test_solve_whole_system() raises:
@@ -118,7 +120,7 @@ def test_solve_whole_system() raises:
     var x = spsolve(A, b)
     var e = (x - x0).stacked()
     for i in range(e.size):
-        assert_almost_equal(e.unsafe_get(i), 0.0, atol=1e-10)
+        assert_almost_equal(e.unsafe_get(i), 0.0, atol=1e-13, rtol=0)
 
 
 def test_errors() raises:

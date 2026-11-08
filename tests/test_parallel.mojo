@@ -59,7 +59,8 @@ def test_large_geometry() raises:
             var r = sqrt(dx * dx + dy * dy)
             if r0 < 0:
                 r0 = r
-            assert_almost_equal(r, r0, atol=1e-15)
+            # one ulp of a unit-square coordinate is 1.1e-16
+            assert_almost_equal(r, r0, atol=2e-15, rtol=0)
     # edges have their midpoints
     for e in range(sc[1].num_simplices):
         var a = iget(sc[1].simplices, e, 0)
@@ -72,10 +73,14 @@ def test_large_geometry() raises:
     var area: Float64 = 0
     for t in range(tri.num_simplices):
         assert_almost_equal(
-            abs(tri.primal_volume.unsafe_get(t)), 1.0 / 80_000, atol=1e-18
+            abs(tri.primal_volume.unsafe_get(t)),
+            1.0 / 80_000,
+            atol=5e-18,
+            rtol=0,
         )
         area += abs(tri.primal_volume.unsafe_get(t))
-    assert_almost_equal(area, 1.0, atol=1e-12)
+    # a sum of 80000 terms
+    assert_almost_equal(area, 1.0, atol=1e-11, rtol=0)
 
 
 def test_degenerate_triangle_in_large_mesh() raises:
@@ -102,7 +107,7 @@ def test_large_whitney() raises:
     var xx: Float64 = 0
     for i in range(x.size):
         xx += x.unsafe_get(i) * Mx.unsafe_get(i)
-    assert_almost_equal(xx, 1.0 / 3.0, atol=1e-13)  # integral of x^2
+    assert_almost_equal(xx, 1.0 / 3.0, atol=1e-14, rtol=0)  # integral of x^2
     var dx = real_vector(sc[1].num_simplices)
     for e in range(dx.size):
         var a = iget(sc[1].simplices, e, 0)
@@ -113,14 +118,14 @@ def test_large_whitney() raises:
     var dxdx: Float64 = 0
     for e in range(dx.size):
         dxdx += dx.unsafe_get(e) * Mdx.unsafe_get(e)
-    assert_almost_equal(dxdx, 1.0, atol=1e-12)  # integral of |dx|^2
+    assert_almost_equal(dxdx, 1.0, atol=1e-12, rtol=0)  # integral of |dx|^2
     var vol = sc[2].primal_volume.copy()
     var M2 = whitney_innerproduct(sc, 2)
     var Mv = M2 @ vol
     var one: Float64 = 0
     for t in range(vol.size):
         one += vol.unsafe_get(t) * Mv.unsafe_get(t)
-    assert_almost_equal(one, 1.0, atol=1e-12)  # integral of 1
+    assert_almost_equal(one, 1.0, atol=1e-12, rtol=0)  # integral of 1
 
 
 def test_large_matvec() raises:

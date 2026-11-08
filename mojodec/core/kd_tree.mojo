@@ -88,7 +88,7 @@ struct KDTree(Copyable, Movable, Writable):
 
     def nearest(
         self, point: List[Float64], max_dist: Float64 = Float64.MAX
-    ) -> Optional[Int]:
+    ) raises -> Optional[Int]:
         """The value of the nearest point, or `None` if none is within `max_dist`.
 
         Args:
@@ -97,6 +97,9 @@ struct KDTree(Copyable, Movable, Writable):
 
         Returns:
             The nearest point's value, or `None`.
+
+        Raises:
+            If `point` does not have `k` coordinates.
         """
         var x = self.nearest_n(point, 1, max_dist)
         if len(x) == 0:
@@ -105,7 +108,7 @@ struct KDTree(Copyable, Movable, Writable):
 
     def in_sphere(
         self, point: List[Float64], radius: Float64, max_points: Int = Int.MAX
-    ) -> List[Int]:
+    ) raises -> List[Int]:
         """Values of all points strictly closer than `radius`, nearest first.
 
         Args:
@@ -115,12 +118,15 @@ struct KDTree(Copyable, Movable, Writable):
 
         Returns:
             The values of the points in the sphere, nearest first.
+
+        Raises:
+            If `point` does not have `k` coordinates.
         """
         return self.nearest_n(point, max_points, radius)
 
     def nearest_n(
         self, point: List[Float64], n: Int, max_dist: Float64 = Float64.MAX
-    ) -> List[Int]:
+    ) raises -> List[Int]:
         """Values of the (at most) `n` nearest points within `max_dist`, nearest first.
 
         Args:
@@ -130,7 +136,19 @@ struct KDTree(Copyable, Movable, Writable):
 
         Returns:
             Up to `n` values, nearest first.
+
+        Raises:
+            If `point` does not have `k` coordinates.
         """
+        if len(point) != self.k:
+            raise Error(
+                String(
+                    "KDTree: query point has ",
+                    len(point),
+                    " coordinates, the tree's points ",
+                    self.k,
+                )
+            )
         var dists = List[Float64]()
         var ids = List[Int]()
         if n <= 0:

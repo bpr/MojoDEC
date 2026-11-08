@@ -52,7 +52,9 @@ def assert_cochains_equal(a: Cochain, b: Cochain, atol: Float64 = 1e-12) raises:
     assert_equal(a.k, b.k)
     assert_equal(a.v.size, b.v.size)
     for i in range(a.v.size):
-        assert_almost_equal(a.v.unsafe_get(i), b.v.unsafe_get(i), atol=atol)
+        assert_almost_equal(
+            a.v.unsafe_get(i), b.v.unsafe_get(i), atol=atol, rtol=0
+        )
 
 
 def test_dx_wedge_dy_is_signed_area() raises:
@@ -60,7 +62,9 @@ def test_dx_wedge_dy_is_signed_area() raises:
     var w = wedge(coordinate_form(sc, 0), coordinate_form(sc, 1))
     assert_equal(w.k, 2)
     for t in range(sc[2].num_simplices):
-        assert_almost_equal(w[t], sc[2].primal_volume.unsafe_get(t), atol=1e-14)
+        assert_almost_equal(
+            w[t], sc[2].primal_volume.unsafe_get(t), atol=1e-15, rtol=0
+        )
 
 
 def test_typed_wedge() raises:
@@ -71,7 +75,7 @@ def test_typed_wedge() raises:
     var area: TypedCochain[2, 2, PRIMAL] = wedge(dx, dy)
     for t in range(len(area)):
         assert_almost_equal(
-            area[t], sc[2].primal_volume.unsafe_get(t), atol=1e-14
+            area[t], sc[2].primal_volume.unsafe_get(t), atol=1e-15, rtol=0
         )
     # a 0-form times a 1-form is a 1-form; wedge(area, dx) does not compile
     var f = tc.cochain[0, PRIMAL]()
@@ -79,7 +83,7 @@ def test_typed_wedge() raises:
         f[i] = 2.0
     var two_dx: TypedCochain[2, 1, PRIMAL] = wedge(f, dx)
     for e in range(len(two_dx)):
-        assert_almost_equal(two_dx[e], 2.0 * dx[e], atol=1e-14)
+        assert_almost_equal(two_dx[e], 2.0 * dx[e], atol=1e-15, rtol=0)
 
 
 def test_functions() raises:
@@ -88,7 +92,7 @@ def test_functions() raises:
     var g = random_cochain(sc, 0, 2)
     var fg = wedge(f, g)
     for v in range(fg.v.size):
-        assert_almost_equal(fg[v], f[v] * g[v], atol=1e-15)
+        assert_almost_equal(fg[v], f[v] * g[v], atol=1e-15, rtol=0)
     # a 1-cochain times a function: scaled by the function's mean on the edge
     var a = random_cochain(sc, 1, 3)
     var af = wedge(a, f)
@@ -96,7 +100,7 @@ def test_functions() raises:
         var mean = (
             f[iget(sc[1].simplices, e, 0)] + f[iget(sc[1].simplices, e, 1)]
         ) / 2
-        assert_almost_equal(af[e], a[e] * mean, atol=1e-15)
+        assert_almost_equal(af[e], a[e] * mean, atol=1e-15, rtol=0)
 
 
 def test_graded_anticommutativity() raises:
@@ -110,7 +114,7 @@ def test_graded_anticommutativity() raises:
                 var ba = wedge(b, a)
                 var sign: Float64 = -1.0 if (k * l) % 2 == 1 else 1.0
                 for i in range(ab.v.size):
-                    assert_almost_equal(ab[i], sign * ba[i], atol=1e-13)
+                    assert_almost_equal(ab[i], sign * ba[i], atol=1e-14, rtol=0)
 
 
 def test_leibniz() raises:
@@ -125,7 +129,7 @@ def test_leibniz() raises:
                 var rhs = wedge(d(a), b)
                 var sign: Float64 = -1.0 if k % 2 == 1 else 1.0
                 rhs = rhs + wedge(a, d(b)).scaled(sign)
-                assert_cochains_equal(lhs, rhs, atol=1e-13)
+                assert_cochains_equal(lhs, rhs, atol=1e-14)
 
 
 def test_errors() raises:

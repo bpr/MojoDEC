@@ -216,7 +216,7 @@ struct TypedComplex[n: Int](ImplicitlyCopyable, Movable):
         k: Int, primal: Bool
     ](self) raises -> MatrixOp[Self.n, k, primal, k + 1, primal]:
         """The exterior derivative on k-cochains: `sc[k].d` on primal ones,
-        `(-1)^k sc[n-k].boundary` on dual ones (as `mojodec.d`).
+        `(-1)^(n-k) sc[n-k].boundary` on dual ones (as `mojodec.d`).
 
         Parameters:
             k: The degree, `0..n-1`.
@@ -235,7 +235,7 @@ struct TypedComplex[n: Int](ImplicitlyCopyable, Movable):
             )
         else:
             return MatrixOp[Self.n, k, primal, k + 1, primal](
-                self.sc[Self.n - k].boundary * _sign(k), self.sc
+                self.sc[Self.n - k].boundary * _sign(Self.n - k), self.sc
             )
 
     def star[
@@ -253,7 +253,9 @@ struct TypedComplex[n: Int](ImplicitlyCopyable, Movable):
             other kind.
 
         Raises:
-            If the complex was built without geometry.
+            If the complex was built without geometry, or (from dual to
+            primal) a dual cell has zero volume, so the inverse star is
+            infinite.
         """
         comptime assert 0 <= k and k <= Self.n, "star: degree out of range"
         if not self.sc.has_geometry():
@@ -263,6 +265,7 @@ struct TypedComplex[n: Int](ImplicitlyCopyable, Movable):
                 self.sc[k].star.copy(), self.sc
             )
         else:
+            self.sc[Self.n - k].require_finite_star_inv()
             return DiagonalOp[Self.n, k, primal, Self.n - k, not primal](
                 self.sc[Self.n - k].star_inv.copy(), self.sc
             )
@@ -1248,7 +1251,7 @@ struct MatrixOp[
 
         An operator from k-cochains to l-cochains transposes to one from
         the duals of l-cochains to the duals of k-cochains: `d[k, PRIMAL]`
-        to `(-1)^(n-k-1) d[n-k-1, DUAL]`, so
+        to `(-1)^(k+1) d[n-k-1, DUAL]`, so
         `tc.d[0, PRIMAL]().T() @ tc.star[1, PRIMAL]() @ tc.d[0, PRIMAL]()`
         is the positive semidefinite stiffness matrix from primal
         0-cochains to dual n-cochains.

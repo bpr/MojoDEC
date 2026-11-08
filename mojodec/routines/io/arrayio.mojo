@@ -161,25 +161,37 @@ def read_array[
     return _read_dense[dtype](reader, header)
 
 
-def read_sparse(path: String) raises -> CSRMatrix:
+def read_sparse(path: String, max_dim: Int = 1 << 31) raises -> CSRMatrix:
     """Read a sparse matrix (csr, csc, or coo) written by PyDEC's `write_array`.
+
+    The row pointers take memory in proportion to the number of rows, which
+    the file's size does not bound (empty rows take no space in csc and
+    coo files), so dimensions above `max_dim` raise rather than exhaust
+    memory.
 
     Args:
         path: The array file to read.
+        max_dim: The largest number of rows or columns accepted.
 
     Returns:
         The matrix, converted to CSR.
 
     Raises:
-        If the file cannot be opened, its `dims` are not 2-D, its `sptype`
-        is not `csr`, `csc`, or `coo`, or a header or component array is
-        malformed or truncated.
+        If the file cannot be opened, its `dims` are not 2-D, negative or
+        above `max_dim`, its `sptype` is not `csr`, `csc`, or `coo`, or a
+        header or component array is malformed or truncated.
     """
     var reader = ByteReader.open(path, "arrayio")
     var header = _read_header(reader)
     var dims = _split_dims(_get(header, "dims"))
     if len(dims) != 2:
         raise Error("arrayio: invalid sparse dims")
+    for x in dims:
+        if x < 0 or x > max_dim:
+            raise Error(
+                String("arrayio: sparse dims ", _get(header, "dims"))
+                + String(" outside 0..", max_dim, " (raise max_dim to allow)")
+            )
     var sptype = _get(header, "sptype")
     var a = _to_floats(_read_dense[DType.float64](reader, _read_header(reader)))
     var b = _to_ints(_read_dense[DType.int](reader, _read_header(reader)))

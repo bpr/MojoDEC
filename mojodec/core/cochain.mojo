@@ -669,7 +669,9 @@ def d[C: CochainLike](f: C) raises -> C:
     """The discrete exterior derivative.
 
     On primal cochains this is `sc[k].d`; on dual cochains it is the signed
-    boundary operator `(-1)^k sc[n-k].boundary`. Out-of-range degrees
+    boundary operator `(-1)^(n-k) sc[n-k].boundary`, the sign that makes
+    `delta` the adjoint of `d` in every dimension (PyDEC uses `(-1)^k`,
+    which differs in odd dimensions). Out-of-range degrees
     give zero cochains: k = -1 maps to the zero 0-cochain, and k >= n (or
     k < -1) to a single zero value.
 
@@ -702,9 +704,9 @@ def d[C: CochainLike](f: C) raises -> C:
         )
     if k < -1 or k >= n:
         return f.mapped(CSRMatrix(1, f.value_rows()), k + 1, .DUAL)
-    # (-1)^k B_{n-k}: negate the result rather than copy the matrix
+    # (-1)^(n-k) B_{n-k}: negate the result rather than copy the matrix
     var df = f.mapped(sc[n - k].boundary, k + 1, .DUAL)
-    if k % 2 == 1:
+    if (n - k) % 2 == 1:
         return df.scaled(-1.0)
     return df^
 
@@ -726,8 +728,10 @@ def star[C: CochainLike](f: C) raises -> C:
         The (n-k)-cochain `*f`, of the other kind.
 
     Raises:
-        If the complex was built without geometry, or the values of `f` do
-        not match the star's size.
+        If the complex was built without geometry, the values of `f` do
+        not match the star's size, or (from dual to primal) a dual cell has
+        zero volume, so the inverse star is infinite there (PyDEC returns
+        infinities and NaNs instead).
     """
     var k = f.degree()
     var n = f.complex_dim()
@@ -738,6 +742,7 @@ def star[C: CochainLike](f: C) raises -> C:
         raise Error("star: the complex was built without geometry")
     if f.primality().is_primal():
         return f.mapped(sc[k].star, n - k, .DUAL)
+    sc[n - k].require_finite_star_inv()
     return f.mapped(sc[n - k].star_inv, n - k, .PRIMAL)
 
 

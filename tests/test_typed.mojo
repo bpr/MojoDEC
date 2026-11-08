@@ -1,3 +1,4 @@
+from std.math import sqrt
 from std.testing import (
     TestSuite,
     assert_equal,
@@ -86,7 +87,9 @@ def _check_level[n: Int, k: Int, primal: Bool](tc: TypedComplex[n]) raises:
     var Lc = L @ c
     var Lc_ref = laplace_derham(c.untyped())
     for i in range(len(Lc)):
-        assert_almost_equal(Lc[i], Lc_ref[i], atol=1e-9 * Lref.max_abs())
+        assert_almost_equal(
+            Lc[i], Lc_ref[i], atol=1e-13 * Lref.max_abs(), rtol=0
+        )
 
 
 def test_operators_match_untyped() raises:
@@ -117,11 +120,13 @@ def test_composition() raises:
     var S = tc.star[1, PRIMAL]()
     var I = S.inverse() @ S
     for i in range(len(I.diag)):
-        assert_almost_equal(I.diag[i], 1.0)
+        assert_almost_equal(I.diag[i], 1.0, atol=1e-15, rtol=0)
     # the star on dual 1-cochains is the inverse up to (-1)^(k(n-k)) = -1
     var Sd = tc.star[1, DUAL]()
     for i in range(len(Sd.diag)):
-        assert_almost_equal(Sd.diag[i], -S.inverse().diag[i])
+        assert_almost_equal(
+            Sd.diag[i], -S.inverse().diag[i], atol=1e-13, rtol=0
+        )
     # inner product and norm of the primal star
     var c = tc.cochain[1, PRIMAL]()
     for i in range(len(c)):
@@ -129,8 +134,8 @@ def test_composition() raises:
     var area: Float64 = 0
     for i in range(len(S.diag)):
         area += S.diag[i]
-    assert_almost_equal(S.inner_product(c, c), area)
-    assert_almost_equal(S.norm(c), area**0.5)
+    assert_almost_equal(S.inner_product(c, c), area, atol=1e-13, rtol=0)
+    assert_almost_equal(S.norm(c), sqrt(area), atol=1e-14, rtol=0)
     # arithmetic
     var c2 = 2.0 * c - c + (-c)
     assert_equal(c2[3], 0.0)
@@ -152,7 +157,7 @@ def test_dirichlet_poisson() raises:
     b.overwrite(fixed, g)
     var u: TypedCochain[2, 0, PRIMAL] = spsolve(A, b)
     for i in range(len(u)):
-        assert_almost_equal(u[i], g[i], atol=1e-12)
+        assert_almost_equal(u[i], g[i], atol=1e-12, rtol=0)
 
 
 def _stiffness(tc: TypedComplex[2]) raises -> MatrixOp[2, 0, PRIMAL, 2, DUAL]:
@@ -163,14 +168,14 @@ def _stiffness(tc: TypedComplex[2]) raises -> MatrixOp[2, 0, PRIMAL, 2, DUAL]:
 
 def test_transpose() raises:
     var tc = _grid(4)
-    # d[k, PRIMAL]^T = (-1)^(n-k-1) d[n-k-1, DUAL], the dual kinds swapped
+    # d[k, PRIMAL]^T = (-1)^(k+1) d[n-k-1, DUAL], the dual kinds swapped
     var d0t: MatrixOp[2, 1, DUAL, 2, DUAL] = tc.d[0, PRIMAL]().T()
     assert_equal(_diff(d0t.mat, -tc.d[1, DUAL]().mat), 0.0)
     var d1t: MatrixOp[2, 0, DUAL, 1, DUAL] = tc.d[1, PRIMAL]().transpose()
     assert_equal(_diff(d1t.mat, tc.d[0, DUAL]().mat), 0.0)
     var t = _torus()
     var e1t: MatrixOp[3, 1, DUAL, 2, DUAL] = t.d[1, PRIMAL]().T()
-    assert_equal(_diff(e1t.mat, -t.d[1, DUAL]().mat), 0.0)
+    assert_equal(_diff(e1t.mat, t.d[1, DUAL]().mat), 0.0)
     # transposing twice gives back the operator and its kind
     var back: MatrixOp[2, 0, PRIMAL, 1, PRIMAL] = d0t.T()
     assert_equal(_diff(back.mat, tc.d[0, PRIMAL]().mat), 0.0)
@@ -211,7 +216,7 @@ def test_dual_diagonal() raises:
         b[i] = g[i]
     var u = spsolve(A, b)  # a linear function is discretely harmonic
     for i in range(N0):
-        assert_almost_equal(u[i], g[i], atol=1e-12)
+        assert_almost_equal(u[i], g[i], atol=1e-13, rtol=0)
     with assert_raises(contains="wrong number"):
         _ = tc.dual_diagonal[0, DUAL](List[Float64]())
 
@@ -229,7 +234,8 @@ def test_solvers() raises:
     var u: TypedCochain[2, 0, PRIMAL] = res^.take_x()
     var r = A @ u - b
     for i in range(len(r)):
-        assert_almost_equal(r[i], 0.0, atol=1e-9)
+        # cg's rtol=1e-12 relative to |b|
+        assert_almost_equal(r[i], 0.0, atol=1e-10, rtol=0)
     # the same iterates as the untyped solver
     var raw = cg(A.mat, b.v, rtol=1e-12).take_x()
     for i in range(len(u)):
@@ -240,7 +246,8 @@ def test_solvers() raises:
     var g: TypedCochain[2, 0, PRIMAL] = ls^.take_x()
     var dg = tc.d[0, PRIMAL]() @ g - w
     for i in range(len(dg)):
-        assert_almost_equal(dg[i], 0.0, atol=1e-9)
+        # lsqr's atol = btol = 1e-12, relative to |A| |x| and |b|
+        assert_almost_equal(dg[i], 0.0, atol=2e-10, rtol=0)
     # operands from another complex are refused
     var other = _grid(6)
     with assert_raises(contains="different complexes"):
@@ -268,7 +275,8 @@ def test_whitney_and_eigenproblems() raises:
     var rhs = (M1 @ x) * eig.values.unsafe_get(last)
     var scale = eig.values.unsafe_get(last)
     for i in range(len(lhs)):
-        assert_almost_equal(lhs[i], rhs[i], atol=1e-9 * scale)
+        # relative to the largest eigenvalue
+        assert_almost_equal(lhs[i], rhs[i], atol=1e-13 * scale, rtol=0)
     # with the diagonal Hodge star as the mass matrix
     var S = tc.star[0, PRIMAL]()
     var eig0 = eigh_generalized(S @ tc.laplacian[0, PRIMAL](), S)
@@ -277,7 +285,7 @@ def test_whitney_and_eigenproblems() raises:
     )
     for i in range(len(eig0)):
         assert_equal(eig0.values.unsafe_get(i), ref0.values.unsafe_get(i))
-    assert_almost_equal(eig0.values.unsafe_get(0), 0.0, atol=1e-10)
+    assert_almost_equal(eig0.values.unsafe_get(0), 0.0, atol=1e-12, rtol=0)
     with assert_raises(contains="index out of range"):
         _ = eig0.mode(len(eig0))
     with assert_raises(contains="different complexes"):

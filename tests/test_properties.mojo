@@ -8,6 +8,7 @@
 #
 #   pixi run mojo run -I . -I build -I ../proptest tests/test_properties.mojo
 
+from std.math import sqrt
 from std.testing import TestSuite, assert_equal, assert_true
 
 from proptest import (
@@ -28,7 +29,11 @@ from mojodec.core.cell_set import CellSet
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
-from mojodec.core.utils import real_array_from_rows, real_vector_from_list
+from mojodec.core.utils import (
+    int_array,
+    real_array_from_rows,
+    real_vector_from_list,
+)
 from mojodec.routines.combinatorial import (
     combinations,
     permutation_parity,
@@ -40,6 +45,7 @@ from mojodec.routines.geometry import (
     signed_volume,
     unsigned_volume,
 )
+from mojodec.routines.innerproduct import whitney_innerproduct
 from mojodec.routines.mesh_generation import (
     cube_grid,
     icosphere,
@@ -384,6 +390,112 @@ def test_barycentric_gradients_sum_to_zero() raises:
             assert_true(abs(s) < 1e-9, String("component ", j, " sums to ", s))
 
     given(composite(_simplex_points), prop, quick())
+
+
+def _thin_simplex(mut data: ConjectureData) raises -> List[List[Float64]]:
+    """An M-simplex in N-space (1 <= M <= 3, M <= N <= M + 2) whose last
+    vertex is an integer combination of the others plus 10^-j times an
+    integer offset (0 <= j <= 8), so it may be very thin."""
+    var m = data.draw(integers(1, 3), "M")
+    var n = m + data.draw(integers(0, 2), "N - M")
+    var pts = List[List[Float64]]()
+    for _ in range(m):
+        var row = List[Float64]()
+        for _ in range(n):
+            row.append(Float64(data.draw(integers(-5, 5))))
+        pts.append(row^)
+    var scale = 1.0
+    for _ in range(data.draw(integers(0, 8), "j")):
+        scale /= 10
+    var last = pts[0].copy()
+    for i in range(1, m):
+        var c = Float64(data.draw(integers(-2, 2), "coefficient"))
+        for k in range(n):
+            last[k] += c * (pts[i][k] - pts[0][k])
+    for k in range(n):
+        last[k] += scale * Float64(data.draw(integers(-3, 3), "offset"))
+    pts.append(last^)
+    return pts^
+
+
+def _thinness(pts: List[List[Float64]]) raises -> Float64:
+    """`L / h` for a simplex: its longest edge over the height of its last
+    vertex above the others (0 if it is flat)."""
+    var m = len(pts) - 1
+    var n = len(pts[0])
+    var base = List[List[Float64]]()
+    for i in range(m):
+        base.append(pts[i].copy())
+    var vol = unsigned_volume(real_array_from_rows(pts))
+    var base_vol = unsigned_volume(real_array_from_rows(base))
+    if vol <= 0 or base_vol <= 0:
+        return 0
+    var h = Float64(m) * vol / base_vol
+    var L = 0.0
+    for i in range(m + 1):
+        for j in range(i):
+            var d2 = 0.0
+            for k in range(n):
+                var t = pts[i][k] - pts[j][k]
+                d2 += t * t
+            L = max(L, sqrt(d2))
+    return L / h
+
+
+def test_thin_simplex_gradients_are_dual_to_the_edges() raises:
+    # grad lambda_i . (x_j - x_0) = delta_ij for i, j >= 1, to within the
+    # problem's own conditioning eps L / h; the Gram-matrix solve this
+    # replaced was off by eps (L / h)^2 (and by 3.6 at h = 1e-8)
+    def prop(pts: List[List[Float64]]) raises:
+        var m = len(pts) - 1
+        var n = len(pts[0])
+        var P = real_array_from_rows(pts)
+        var kappa = _thinness(pts)
+        assume(kappa > 0)
+        var tol = 64 * 2.220446049250313e-16 * kappa
+        var G = barycentric_gradients(P)
+        for i in range(1, m + 1):
+            for j in range(1, m + 1):
+                var s = 0.0
+                for k in range(n):
+                    s += G.unsafe_get(i * n + k) * (pts[j][k] - pts[0][k])
+                var want = 1.0 if i == j else 0.0
+                if abs(s - want) > tol:
+                    fail(
+                        String(
+                            "L/h=",
+                            kappa,
+                            ": grad ",
+                            i,
+                            " . edge ",
+                            j,
+                            " = ",
+                            s,
+                        )
+                    )
+
+    given(composite(_thin_simplex), prop, quick())
+
+
+def test_thin_simplex_top_form_mass_is_inverse_volume() raises:
+    # The Whitney mass matrix of an M-simplex's top form is 1 / volume, a
+    # product of k x k minors of its gradients, to within eps L / h; from
+    # the Gram matrix of the gradients these lost (L / h)^2 to cancellation
+    def prop(pts: List[List[Float64]]) raises:
+        var m = len(pts) - 1
+        var P = real_array_from_rows(pts)
+        var kappa = _thinness(pts)
+        assume(kappa > 0)
+        var T = int_array(1, m + 1)
+        for i in range(m + 1):
+            T.unsafe_set(i, Scalar[DType.int](i))
+        var sc = SimplicialComplex(P, T)
+        var M = whitney_innerproduct(sc, m).todense().unsafe_get(0)
+        var got = M * abs(sc[m].primal_volume.unsafe_get(0))
+        if abs(got - 1) > 64 * 2.220446049250313e-16 * kappa:
+            fail(String("L/h=", kappa, ": M * volume = ", got))
+
+    given(composite(_thin_simplex), prop, quick())
 
 
 # ===----------------------------------------------------------------------=== #

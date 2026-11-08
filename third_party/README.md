@@ -41,5 +41,7 @@ SciPy available for its reference comparisons. Every test passes except:
 `tests/core/test_device.mojo` imports `default_accelerator` from its old
 location; with that import updated, all 43 of its tests pass.
 
+`numojo-bugs.md` lists the NuMojo bugs MojoDEC found, with repros.
+
 When NuMojo publishes a Mojo 1.3 release, delete this directory and depend
 on the package again.

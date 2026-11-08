@@ -51,10 +51,16 @@ def test_cg() raises:
     assert_true(res.normal_residual_norm is None)
     var r = A @ res.x
     for i in range(50):
-        assert_almost_equal(r.unsafe_get(i), b.unsafe_get(i), atol=1e-9)
+        # cg stops at |r| <= rtol |b|
+        assert_almost_equal(
+            r.unsafe_get(i), b.unsafe_get(i), atol=1e-12 * norm2(b), rtol=0
+        )
     var x = spsolve(A, b)
     for i in range(50):
-        assert_almost_equal(x.unsafe_get(i), res.x.unsafe_get(i), atol=1e-8)
+        # the residual bound times cond(A) ~ 1e3, with |x| ~ 150
+        assert_almost_equal(
+            x.unsafe_get(i), res.x.unsafe_get(i), atol=1e-10, rtol=0
+        )
     # the iteration limit, and an indefinite matrix
     var short = cg(A, b, rtol=1e-12, maxiter=3)
     assert_true(short.stop == StopReason.MAX_ITER)
@@ -77,15 +83,20 @@ def test_lsqr() raises:
     var Atb = A.T() @ b
     var x = spsolve(AtA, Atb)
     for i in range(2):
-        assert_almost_equal(res.x.unsafe_get(i), x.unsafe_get(i), atol=1e-8)
+        # two columns: lsqr is exact after two steps
+        assert_almost_equal(
+            res.x.unsafe_get(i), x.unsafe_get(i), atol=1e-13, rtol=0
+        )
     assert_true(res.converged())
     # the reported norms are those of r = b - A x and A^T r
     var r = b.copy()
     var Ax = A @ res.x
     for i in range(4):
         r.unsafe_set(i, r.unsafe_get(i) - Ax.unsafe_get(i))
-    assert_almost_equal(res.residual_norm, norm2(r), atol=1e-8)
-    assert_almost_equal(res.normal_residual_norm.value(), 0.0, atol=1e-6)
+    assert_almost_equal(res.residual_norm, norm2(r), atol=1e-14, rtol=0)
+    assert_almost_equal(
+        res.normal_residual_norm.value(), 0.0, atol=1e-13, rtol=0
+    )
 
 
 def test_dense_pivoting() raises:
@@ -94,8 +105,8 @@ def test_dense_pivoting() raises:
     var b = nm.fromstring[f64]("[2, 2, 2]")
     var x = dense.solve(A, b)
     for i in range(3):
-        assert_almost_equal(x.unsafe_get(i), 1.0)
-    assert_almost_equal(dense.det(A), 2.0)
+        assert_almost_equal(x.unsafe_get(i), 1.0, atol=1e-15, rtol=0)
+    assert_almost_equal(dense.det(A), 2.0, atol=1e-15, rtol=0)
 
 
 def test_eigh_generalized() raises:
@@ -110,7 +121,7 @@ def test_eigh_generalized() raises:
             for k in range(3):
                 kx += fget(K, i, k) * fget(wv.vectors, k, j)
                 mx += fget(M, i, k) * fget(wv.vectors, k, j)
-            assert_almost_equal(kx, lam * mx, atol=1e-9)
+            assert_almost_equal(kx, lam * mx, atol=1e-14, rtol=0)
     assert_true(wv.values.unsafe_get(0) <= wv.values.unsafe_get(1))
 
 
@@ -130,20 +141,23 @@ def test_eigh_generalized_diagonal() raises:
     var wv = eigh_generalized(K, DiagonalOperator(m.copy()))
     for j in range(n):
         var lam = wv.values.unsafe_get(j)
-        assert_almost_equal(lam, dense_wv.values.unsafe_get(j), atol=1e-12)
+        # eigenvalues up to ~10: 1e-13 is a few hundred ulps
+        assert_almost_equal(
+            lam, dense_wv.values.unsafe_get(j), atol=1e-13, rtol=0
+        )
         for i in range(n):
             var kx: Float64 = 0
             for k in range(n):
                 kx += fget(K, i, k) * fget(wv.vectors, k, j)
             assert_almost_equal(
-                kx, lam * m[i] * fget(wv.vectors, i, j), atol=1e-11
+                kx, lam * m[i] * fget(wv.vectors, i, j), atol=1e-13, rtol=0
             )
         # M-orthonormal columns
         for l in range(n):
             var mxx: Float64 = 0
             for i in range(n):
                 mxx += m[i] * fget(wv.vectors, i, j) * fget(wv.vectors, i, l)
-            assert_almost_equal(mxx, 1.0 if j == l else 0.0, atol=1e-12)
+            assert_almost_equal(mxx, 1.0 if j == l else 0.0, atol=1e-13, rtol=0)
     m[3] = 0
     with assert_raises(contains="not positive definite"):
         _ = eigh_generalized(K, DiagonalOperator(m.copy()))
@@ -167,8 +181,12 @@ def test_dense_eigh() raises:
             var s: Float64 = 0
             for k in range(n):
                 s += fget(A, i, k) * fget(wv.vectors, k, j)
+            # eigenvalues up to ~30
             assert_almost_equal(
-                s, wv.values.unsafe_get(j) * fget(wv.vectors, i, j), atol=1e-10
+                s,
+                wv.values.unsafe_get(j) * fget(wv.vectors, i, j),
+                atol=1e-12,
+                rtol=0,
             )
 
 

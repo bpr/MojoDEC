@@ -1,3 +1,4 @@
+from std.math import sqrt
 from std.testing import (
     TestSuite,
     assert_almost_equal,
@@ -60,7 +61,7 @@ def test_pieces_sum_to_dual_volumes() raises:
                     j += 1
         for e in range(len(total)):
             assert_almost_equal(
-                total[e], sc[1].dual_volume.unsafe_get(e), atol=1e-12
+                total[e], sc[1].dual_volume.unsafe_get(e), atol=1e-14, rtol=0
             )
 
 
@@ -91,8 +92,8 @@ def test_triangle_pieces_are_signed_distances() raises:
                     var to_c = fget(sc[2].circumcenter, t, k) - m
                     dist += to_c * to_c
                     side += to_c * (fget(V, vc, k) - m)
-                var expected = dist**0.5 * (-1.0 if side < 0 else 1.0)
-                assert_almost_equal(P.piece(t, j), expected, atol=1e-12)
+                var expected = sqrt(dist) * (-1.0 if side < 0 else 1.0)
+                assert_almost_equal(P.piece(t, j), expected, atol=1e-14, rtol=0)
                 j += 1
 
 
@@ -124,7 +125,7 @@ def check_constant_field(sc: SimplicialComplex, x: List[Float64]) raises:
             expected += x[k] * (
                 fget(sc.vertices(), b, k) - fget(sc.vertices(), a, k)
             )
-        assert_almost_equal(c[e], expected, atol=1e-12)
+        assert_almost_equal(c[e], expected, atol=1e-12, rtol=0)
 
 
 def test_constant_field_is_exact() raises:
@@ -138,7 +139,7 @@ def test_flat_inverts_whitney_sharp_on_constant_forms() raises:
     var X = simplex_quivers(sc, c.v).vectors.copy()
     var back = flat(sc, X)
     for e in range(c.v.size):
-        assert_almost_equal(back[e], c[e], atol=1e-12)
+        assert_almost_equal(back[e], c[e], atol=1e-12, rtol=0)
 
 
 def test_typed_flat() raises:

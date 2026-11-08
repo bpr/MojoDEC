@@ -11,7 +11,6 @@ cube complex. `whitney_innerproduct[k](tc)` gives the Whitney mass matrix as
 a typed operator from primal k-cochains to dual (n-k)-cochains.
 """
 
-from std.math import sqrt
 
 from mojodec.core.parallel import num_chunks, parallel_ranges
 from mojodec.core.regular_cube_complex import RegularCubeComplex
@@ -20,6 +19,7 @@ from mojodec.core.sparse import CSRMatrix
 from mojodec.core.typed import DUAL, PRIMAL, MatrixOp, TypedComplex
 from mojodec.core.utils import (
     factorial,
+    frame_dual_basis,
     iget,
     int_array,
     int_array_from_rows,
@@ -211,11 +211,25 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
                     term_coef.append(sign * Float64(same + 1))
             term_start.append(len(term_pair))
 
-    # G is the Gram matrix of the barycentric gradients of a top simplex:
-    # with the edge vectors E[r] = x_{r+1} - x_0 as rows, gradients 1..p
-    # are the rows of (E E^T)^-1 E, and gradient 0 is minus their sum. The
-    # determinant of pair (a, b) is that of the k x k block of G in the rows
-    # of form a and the columns of form b (1 when k = 0).
+    # The determinant of pair (a, b) is that of the k x k block, in the rows
+    # of form a and the columns of form b, of the Gram matrix D D^T of the
+    # barycentric gradients D of a top simplex (1 when k = 0). With the
+    # edge vectors E[r] = x_{r+1} - x_0 as rows and E^T = Q R (Householder
+    # QR), gradients 1..p are the rows of R^-1 Q^T and gradient 0 is minus
+    # their sum. In the orthonormal frame Q they are the rows of C = R^-1
+    # (and minus their sum), and by Cauchy-Binet the block determinant is
+    # the sum over k-subsets S of the frame's p axes of
+    # det(C[a, S]) det(C[b, S]). Forming D D^T instead squares the
+    # conditioning L / h of a thin simplex.
+    var axes = List[Int]()
+    for i in range(p):
+        axes.append(i)
+    var axis_sets = combinations(axes, k)
+    var num_sets = len(axis_sets)
+    var sets = List[Int](capacity=num_sets * k)
+    for ref a in axis_sets:
+        for v in a:
+            sets.append(v)
     var dim = cols_of(sc.vertices())
     var tsp = term_start.unsafe_ptr()
     var tpp = term_pair.unsafe_ptr()
@@ -245,8 +259,10 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
         dim,
         num_forms,
         nfp,
+        num_sets,
         scale_integration,
         imm forms,
+        imm sets,
         tsp,
         tpp,
         tcp,
@@ -257,15 +273,14 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
         badp,
     }:
         var edges = List[Float64](length=p * dim, fill=0)
-        var gram = List[Float64](length=p * p, fill=0)
-        var grads = List[Float64](length=(p + 1) * dim, fill=0)
-        var G = List[Float64](length=(p + 1) * (p + 1), fill=0)
+        var frame = List[Float64](length=p * p, fill=0)
+        var grads = List[Float64](length=(p + 1) * p, fill=0)
+        var minors = List[Float64](length=num_forms * num_sets, fill=0)
         var dets = List[Float64](length=num_forms * num_forms, fill=1)
         var work = List[Float64](length=k * k, fill=0)
         var ep = edges.unsafe_ptr()
-        var gp = gram.unsafe_ptr()
         var Dp = grads.unsafe_ptr()
-        var Gp = G.unsafe_ptr()
+        var mp = minors.unsafe_ptr()
         var dp = dets.unsafe_ptr()
         for i in range(lo, hi):
             if k > 0:
@@ -277,40 +292,29 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
                             Xp[unsafe_offset=v * dim + c]
                             - Xp[unsafe_offset=v0 * dim + c]
                         )
-                for r in range(p):
-                    for s in range(r + 1):
-                        var t: Float64 = 0
-                        for c in range(dim):
-                            t += (
-                                ep[unsafe_offset=r * dim + c]
-                                * ep[unsafe_offset=s * dim + c]
-                            )
-                        gp[unsafe_offset=r * p + s] = t
-                if not _cholesky_solve(gram, edges, p, dim):
+                if not frame_dual_basis(edges, p, dim, frame):
                     badp[unsafe_offset=chunk] = i
                     return
-                for c in range(dim):
+                for c in range(p):
                     var t: Float64 = 0
                     for r in range(p):
-                        var g = ep[unsafe_offset=r * dim + c]
-                        Dp[unsafe_offset=(r + 1) * dim + c] = g
+                        var g = frame[r * p + c]
+                        Dp[unsafe_offset=(r + 1) * p + c] = g
                         t += g
                     Dp[unsafe_offset=c] = -t
-                for r in range(p + 1):
-                    for s in range(r + 1):
-                        var t: Float64 = 0
-                        for c in range(dim):
-                            t += (
-                                Dp[unsafe_offset=r * dim + c]
-                                * Dp[unsafe_offset=s * dim + c]
-                            )
-                        Gp[unsafe_offset=r * (p + 1) + s] = t
-                        Gp[unsafe_offset=s * (p + 1) + r] = t
+                for a in range(num_forms):
+                    for q in range(num_sets):
+                        mp[unsafe_offset=a * num_sets + q] = _minor_det(
+                            grads, p, forms, a * k, sets, q * k, k, work
+                        )
                 for a in range(num_forms):
                     for b in range(a, num_forms):
-                        var det = _minor_det(
-                            G, p + 1, forms, a * k, b * k, k, work
-                        )
+                        var det: Float64 = 0
+                        for q in range(num_sets):
+                            det += (
+                                mp[unsafe_offset=a * num_sets + q]
+                                * mp[unsafe_offset=b * num_sets + q]
+                            )
                         dp[unsafe_offset=a * num_forms + b] = det
                         dp[unsafe_offset=b * num_forms + a] = det
             var weight = abs(volp[unsafe_offset=i]) * scale_integration
@@ -432,70 +436,31 @@ def _form_index(forms: List[List[Int]], form: List[Int]) raises -> Int:
     raise Error("whitney_innerproduct: k-form not found")
 
 
-def _cholesky_solve(
-    mut a: List[Float64], mut b: List[Float64], n: Int, m: Int
-) -> Bool:
-    """Overwrite the row-major `n x m` matrix `b` with `A^-1 b`, for the
-    symmetric positive definite `n x n` matrix `A` whose lower triangle is in
-    `a` (row-major).
-
-    `a` is overwritten with its Cholesky factor. Returns False, leaving `b`
-    undefined, if a pivot is not positive.
-    """
-    var L = a.unsafe_ptr()
-    var B = b.unsafe_ptr()
-    # A = L L^T, L in the lower triangle of a
-    for j in range(n):
-        var s = L[unsafe_offset=j * n + j]
-        for c in range(j):
-            s -= L[unsafe_offset=j * n + c] * L[unsafe_offset=j * n + c]
-        if s <= 0:
-            return False
-        var d = sqrt(s)
-        L[unsafe_offset=j * n + j] = d
-        for i in range(j + 1, n):
-            var t = L[unsafe_offset=i * n + j]
-            for c in range(j):
-                t -= L[unsafe_offset=i * n + c] * L[unsafe_offset=j * n + c]
-            L[unsafe_offset=i * n + j] = t / d
-    for col in range(m):
-        # L y = b, then L^T x = y
-        for i in range(n):
-            var t = B[unsafe_offset=i * m + col]
-            for c in range(i):
-                t -= L[unsafe_offset=i * n + c] * B[unsafe_offset=c * m + col]
-            B[unsafe_offset=i * m + col] = t / L[unsafe_offset=i * n + i]
-        for i in range(n - 1, -1, -1):
-            var t = B[unsafe_offset=i * m + col]
-            for c in range(i + 1, n):
-                t -= L[unsafe_offset=c * n + i] * B[unsafe_offset=c * m + col]
-            B[unsafe_offset=i * m + col] = t / L[unsafe_offset=i * n + i]
-    return True
-
-
 def _minor_det(
-    gram: List[Float64],
-    n: Int,
-    form_list: List[Int],
+    mat: List[Float64],
+    ncols: Int,
+    row_list: List[Int],
     rows: Int,
+    col_list: List[Int],
     cols: Int,
     k: Int,
     mut scratch: List[Float64],
 ) -> Float64:
-    """The determinant of the k x k block of the row-major `n x n` matrix
-    `gram` in rows `form_list[rows:rows + k]` and columns
-    `form_list[cols:cols + k]` (1 when k = 0); `scratch` holds `k * k`
+    """The determinant of the k x k block of the row-major matrix `mat`
+    (`ncols` columns) in rows `row_list[rows:rows + k]` and columns
+    `col_list[cols:cols + k]` (1 when k = 0); `scratch` holds `k * k`
     values.
     """
-    var G = gram.unsafe_ptr()
-    var forms = form_list.unsafe_ptr()
+    var G = mat.unsafe_ptr()
+    var rl = row_list.unsafe_ptr()
+    var cl = col_list.unsafe_ptr()
     var work = scratch.unsafe_ptr()
 
     @always_inline
-    def g(a: Int, b: Int) {G, n, forms, rows, cols} -> Float64:
+    def g(a: Int, b: Int) {G, ncols, rl, cl, rows, cols} -> Float64:
         return G[
-            unsafe_offset=forms[unsafe_offset=rows + a] * n
-            + forms[unsafe_offset=cols + b]
+            unsafe_offset=rl[unsafe_offset=rows + a] * ncols
+            + cl[unsafe_offset=cols + b]
         ]
 
     if k == 0:

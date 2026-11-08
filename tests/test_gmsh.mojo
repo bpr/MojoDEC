@@ -39,6 +39,7 @@ def test_formats_agree() raises:
                     m.vertices.unsafe_get(i),
                     ref_.vertices.unsafe_get(i),
                     atol=1e-15,
+                    rtol=0,
                 )
             assert_equal(m.elements.size, ref_.elements.size)
             for i in range(m.elements.size):
@@ -158,7 +159,7 @@ def test_cube() raises:
     var total: Float64 = 0
     for t in range(sc[3].num_simplices):
         total += sc[3].primal_volume.unsafe_get(t)
-    assert_almost_equal(abs(total), 1.0, atol=1e-12)
+    assert_almost_equal(abs(total), 1.0, atol=1e-14, rtol=0)
     for pair in [("bottom", 0.0), ("top", 1.0)]:
         var faces = msh.subset(sc, pair[0], 2)
         assert_true(_all_vertices(sc, faces, 2, pair[1]))
@@ -166,7 +167,7 @@ def test_cube() raises:
         var area: Float64 = 0
         for f in faces.indices():
             area += sc[2].primal_volume.unsafe_get(f)
-        assert_almost_equal(area, 1.0, atol=1e-12)
+        assert_almost_equal(area, 1.0, atol=1e-14, rtol=0)
     assert_true(msh.subset(sc, "solid", 3) == Subset.full(sc, 3))
 
 

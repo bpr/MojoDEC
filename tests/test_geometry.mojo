@@ -23,6 +23,7 @@ from mojodec.routines.geometry import (
     circumcenter,
     circumcenter_barycentric,
     is_wellcentered,
+    barycentric_gradients,
 )
 from mojodec.routines.combinatorial import (
     combinations,
@@ -37,12 +38,26 @@ def A(s: String) raises -> NDArray[f64]:
 
 
 def test_unsigned_volume() raises:
-    assert_almost_equal(unsigned_volume(A("[[1]]")), 1.0)
-    assert_almost_equal(unsigned_volume(A("[[1],[10]]")), 9.0)
-    assert_almost_equal(unsigned_volume(A("[[0,0],[1,1]]")), 2.0**0.5)
-    assert_almost_equal(unsigned_volume(A("[[0,0],[0,1],[1,0]]")), 0.5)
-    assert_almost_equal(unsigned_volume(A("[[5,5],[5,6],[6,5]]")), 0.5)
-    assert_almost_equal(unsigned_volume(A("[[0,0,0],[0,0,1],[0,1,0]]")), 0.5)
+    assert_equal(unsigned_volume(A("[[1]]")), 1.0)
+    assert_almost_equal(
+        unsigned_volume(A("[[1],[10]]")), 9.0, atol=1e-14, rtol=0
+    )
+    # sqrt, not 2.0**0.5, which is off by ~3e-13 (see AGENTS.md)
+    assert_almost_equal(
+        unsigned_volume(A("[[0,0],[1,1]]")), sqrt(2.0), atol=1e-15, rtol=0
+    )
+    assert_almost_equal(
+        unsigned_volume(A("[[0,0],[0,1],[1,0]]")), 0.5, atol=1e-15, rtol=0
+    )
+    assert_almost_equal(
+        unsigned_volume(A("[[5,5],[5,6],[6,5]]")), 0.5, atol=1e-15, rtol=0
+    )
+    assert_almost_equal(
+        unsigned_volume(A("[[0,0,0],[0,0,1],[0,1,0]]")),
+        0.5,
+        atol=1e-15,
+        rtol=0,
+    )
 
 
 def test_unsigned_volume_of_degenerate_simplices() raises:
@@ -86,14 +101,28 @@ def test_unsigned_volume_of_embedded_simplices() raises:
 
 
 def test_signed_volume() raises:
-    assert_almost_equal(signed_volume(A("[[1],[2]]")), 1.0)
-    assert_almost_equal(signed_volume(A("[[5.5],[-10]]")), -15.5)
-    assert_almost_equal(signed_volume(A("[[0,0],[1,1],[1,0]]")), -0.5)
-    assert_almost_equal(signed_volume(A("[[0,0],[1,0],[1,1]]")), 0.5)
-    assert_almost_equal(signed_volume(A("[[0,0],[0,1],[1,0]]")), -0.5)
-    assert_almost_equal(signed_volume(A("[[5,5],[5,6],[6,5]]")), -0.5)
+    comptime tol = 1e-15  # small integer coordinates: rounding only
+    assert_almost_equal(signed_volume(A("[[1],[2]]")), 1.0, atol=tol, rtol=0)
     assert_almost_equal(
-        signed_volume(A("[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]")), 1.0 / 6.0
+        signed_volume(A("[[5.5],[-10]]")), -15.5, atol=16 * tol, rtol=0
+    )
+    assert_almost_equal(
+        signed_volume(A("[[0,0],[1,1],[1,0]]")), -0.5, atol=tol, rtol=0
+    )
+    assert_almost_equal(
+        signed_volume(A("[[0,0],[1,0],[1,1]]")), 0.5, atol=tol, rtol=0
+    )
+    assert_almost_equal(
+        signed_volume(A("[[0,0],[0,1],[1,0]]")), -0.5, atol=tol, rtol=0
+    )
+    assert_almost_equal(
+        signed_volume(A("[[5,5],[5,6],[6,5]]")), -0.5, atol=tol, rtol=0
+    )
+    assert_almost_equal(
+        signed_volume(A("[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]")),
+        1.0 / 6.0,
+        atol=tol,
+        rtol=0,
     )
 
 
@@ -101,7 +130,9 @@ def test_volumes_agree() raises:
     nm.random.seed(0)
     for N in range(1, 10):
         var pts = nm.random.rand[f64](Shape(N + 1, N))
-        assert_almost_equal(abs(signed_volume(pts)), unsigned_volume(pts))
+        assert_almost_equal(
+            abs(signed_volume(pts)), unsigned_volume(pts), atol=1e-15, rtol=0
+        )
 
 
 def test_is_wellcentered() raises:
@@ -114,13 +145,13 @@ def test_is_wellcentered() raises:
 
 def test_circumcenter_examples() raises:
     var b = circumcenter_barycentric(A("[[0,0],[4,0],[0,4]]"))
-    assert_almost_equal(b.unsafe_get(0), 0.0)
-    assert_almost_equal(b.unsafe_get(1), 0.5)
-    assert_almost_equal(b.unsafe_get(2), 0.5)
+    assert_almost_equal(b.unsafe_get(0), 0.0, atol=1e-15, rtol=0)
+    assert_almost_equal(b.unsafe_get(1), 0.5, atol=1e-15, rtol=0)
+    assert_almost_equal(b.unsafe_get(2), 0.5, atol=1e-15, rtol=0)
     var cr = circumcenter(A("[[0,0],[1,0],[0,1]]"))
-    assert_almost_equal(cr.center.unsafe_get(0), 0.5)
-    assert_almost_equal(cr.center.unsafe_get(1), 0.5)
-    assert_almost_equal(cr.radius, 0.5**0.5)
+    assert_almost_equal(cr.center.unsafe_get(0), 0.5, atol=1e-15, rtol=0)
+    assert_almost_equal(cr.center.unsafe_get(1), 0.5, atol=1e-15, rtol=0)
+    assert_almost_equal(cr.radius, sqrt(0.5), atol=1e-15, rtol=0)
 
 
 def test_circumcenters_far_from_the_origin() raises:
@@ -178,7 +209,7 @@ def test_circumcenter_random() raises:
                     d2 += (fget(pts, i, k) - cr.center.unsafe_get(k)) ** 2
                 lo = min(lo, d2**0.5)
                 hi = max(hi, d2**0.5)
-            assert_almost_equal(lo, hi, atol=1e-6)
+            assert_almost_equal(lo, hi, atol=1e-13, rtol=0)
 
 
 def test_combinatorial() raises:
@@ -229,6 +260,24 @@ def test_thin_and_sliver_triangles() raises:
         var dx = fget(c, 0, 0) - fget(W, i, 0)
         var dy = fget(c, 0, 1) - fget(W, i, 1)
         assert_almost_equal(sqrt(dx * dx + dy * dy), r0, atol=0, rtol=1e-6)
+
+
+def test_thin_triangle_gradients() raises:
+    # the Gram-matrix solve gave grad . edge = 3.6 instead of 1 at h = 1e-8
+    var h = 1e-8
+    var pts: List[List[Float64]] = [
+        [0.1, 0.2, 0.3],
+        [1.3, 0.7, -0.4],
+        [0.7 + 0.3 * h, 0.45 + 0.8 * h, -0.05 + 0.5 * h],
+    ]
+    var G = barycentric_gradients(real_array_from_rows(pts))
+    for i in range(1, 3):
+        for j in range(1, 3):
+            var s = 0.0
+            for k in range(3):
+                s += fget(G, i, k) * (pts[j][k] - pts[0][k])
+            var want = 1.0 if i == j else 0.0
+            assert_true(abs(s - want) < 1e-7, String(i, " ", j, ": ", s))
 
 
 def main() raises:

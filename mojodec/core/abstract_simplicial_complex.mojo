@@ -18,6 +18,7 @@ from mojodec.core.utils import (
     int_vector,
     lexsort_rows,
     max_entry,
+    require_distinct_simplices,
     rows_of,
     cols_of,
     sort_each_row,
@@ -74,7 +75,9 @@ struct AbstractSimplicialComplex(CellComplex, Copyable, Movable):
                 `N x (k+1)` array of vertex ids holds k-simplices.
 
         Raises:
-            If `simplices` is empty.
+            If `simplices` is empty, the highest-dimensional array has no
+            rows, or a top simplex repeats a vertex or has the same vertices
+            as another.
         """
         var D = 0
         for ref s in simplices:
@@ -84,10 +87,13 @@ struct AbstractSimplicialComplex(CellComplex, Copyable, Movable):
             given[cols_of(s) - 1] = s.copy()
         if not given[D]:
             raise Error("AbstractSimplicialComplex: no simplices given")
+        if rows_of(given[D].value()) == 0:
+            raise Error("AbstractSimplicialComplex: the top array has no rows")
 
         var s = given[D].value().copy()
         var parity = simplex_array_parity(s)
         sort_each_row(s)
+        require_distinct_simplices(s, "AbstractSimplicialComplex")
 
         var out_simplices = List[IntArray](length=D + 1, fill=int_array(0, 1))
         var chain = List[CSRMatrix](length=D + 1, fill=CSRMatrix(0, 0))

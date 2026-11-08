@@ -19,7 +19,7 @@ The complex's data lives behind a shared `ArcPointer`: copying a
 it, refers to the same data, mirroring Python's reference semantics.
 """
 
-from std.math import sqrt
+from std.math import isfinite, sqrt
 from std.memory import ArcPointer
 
 import numojo as nm
@@ -48,6 +48,7 @@ from mojodec.core.utils import (
     parallelotope_volume,
     int_vector,
     lexsort_rows,
+    require_distinct_simplices,
     real_array,
     real_vector,
     row_list,
@@ -98,7 +99,11 @@ struct SimplexLevel(Copyable, Movable):
     var star: DiagonalOperator
     """Diagonal Hodge star from primal k-cochains to dual (n-k)-cochains."""
     var star_inv: DiagonalOperator
-    """Inverse Hodge star, signed so `star_inv @ star = (-1)^(k(n-k))`."""
+    """Inverse Hodge star, signed so `star_inv @ star = (-1)^(k(n-k))`.
+    Infinite where a dual cell has zero volume; `star` and `delta` on dual
+    cochains raise there (see `require_finite_star_inv`)."""
+    var _infinite_star_inv: Int
+    """The first simplex whose `star_inv` is not finite, or -1."""
 
     def __init__(
         out self,
@@ -138,6 +143,35 @@ struct SimplexLevel(Copyable, Movable):
         self.dual_volume = real_vector(0)
         self.star = DiagonalOperator(List[Float64]())
         self.star_inv = DiagonalOperator(List[Float64]())
+        self._infinite_star_inv = -1
+
+    def require_finite_star_inv(self) raises:
+        """Raise if `star_inv` has an infinite entry.
+
+        A simplex whose circumcentric dual cell has zero volume (the
+        hypotenuse of a right triangle, an edge whose circumcenter lies on
+        the boundary of every triangle around it) has a zero Hodge star, so
+        the inverse star, and `delta` on cochains that need it, are
+        undefined there. `mojodec.routines.quality.well_centeredness` finds
+        such simplices; meshes that avoid them are well-centered.
+
+        Raises:
+            If a k-simplex has a zero (or non-finite) Hodge star.
+        """
+        var i = self._infinite_star_inv
+        if i >= 0:
+            raise Error(
+                String(
+                    "star_inv: the dual cell of ",
+                    self.dim,
+                    "-simplex ",
+                    i,
+                    " ",
+                    Simplex(row_list(self.simplices, i)),
+                    " has zero volume, so the inverse Hodge star is",
+                    " infinite there",
+                )
+            )
 
     def find_simplex(self, s: Simplex) -> Int:
         """Index of `s` in `simplices`, or -1 if it is not a simplex here.
@@ -283,8 +317,9 @@ struct SimplicialComplex(
                 stars; pass False for meshes with degenerate simplices.
 
         Raises:
-            If the elements are malformed, or (with geometry) a simplex is
-            degenerate.
+            If the elements are malformed (an element repeats a vertex, or
+            two elements have the same vertices), or (with geometry) a
+            simplex is degenerate.
         """
         self._data = ArcPointer(ComplexData(mesh.copy()))
         self._build_complex()
@@ -307,8 +342,9 @@ struct SimplicialComplex(
                 stars; pass False for meshes with degenerate simplices.
 
         Raises:
-            If the arrays do not form a mesh, or (with geometry) a simplex is
-            degenerate.
+            If the arrays do not form a mesh, an element repeats a vertex,
+            two elements have the same vertices, or (with geometry) a
+            simplex is degenerate.
         """
         self = Self(SimplicialMesh(vertices, simplices), compute_geometry)
 
@@ -1051,7 +1087,8 @@ struct SimplicialComplex(
 
     def construct_hodge(self) raises:
         """The diagonal Hodge stars `dual_volume / primal_volume`, and their
-        inverses signed by `(-1)^(k(n-k))`.
+        inverses signed by `(-1)^(k(n-k))` (infinite where a dual volume is
+        zero; `require_finite_star_inv` reports the first).
 
         Raises:
             If the volumes have not been computed.
@@ -1063,12 +1100,15 @@ struct SimplicialComplex(
             var star = List[Float64](capacity=N)
             var star_inv = List[Float64](capacity=N)
             var sign: Float64 = -1.0 if (dim * (n - dim)) % 2 == 1 else 1.0
+            data._infinite_star_inv = -1
             for i in range(N):
                 var r = data.dual_volume.unsafe_get(
                     i
                 ) / data.primal_volume.unsafe_get(i)
                 star.append(r)
                 star_inv.append(sign / r)
+                if data._infinite_star_inv < 0 and not isfinite(sign / r):
+                    data._infinite_star_inv = i
             data.star = DiagonalOperator(star^)
             data.star_inv = DiagonalOperator(star_inv^)
 
@@ -1083,6 +1123,7 @@ struct SimplicialComplex(
         var s = mesh.elements.copy()
         var parity = simplex_array_parity(s)
         sort_each_row(s)
+        require_distinct_simplices(s, "SimplicialComplex")
 
         # levels from the top down; each step's faces are the next level
         var simplices = List[IntArray]()

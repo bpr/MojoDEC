@@ -1,5 +1,6 @@
 from std.base64 import b64decode
 from std.memory import bitcast
+from std.utils.numerics import inf, nan
 from std.testing import TestSuite, assert_equal, assert_raises, assert_true
 
 import numojo as nm
@@ -186,6 +187,24 @@ def test_bad_inputs() raises:
     )
     with assert_raises(contains="0 <= k"):
         write_vtu_cubes(TMP, rcc, 3)
+
+
+def test_non_finite_values() raises:
+    # VTK's ASCII reader cannot parse nan or inf, which were once written
+    var V = nm.fromstring[f64]("[[0,0],[1,0],[1,1],[0,1]]")
+    var S = nm.fromstring[DType.int]("[[0,1,3],[1,2,3]]")
+    var p = real_vector(2)
+    p.unsafe_set(1, nan[DType.float64]())
+    with assert_raises(contains="field p holds nan"):
+        write_vtu(TMP, V, S, cell_data=[VTKField("p", p)])
+    var W = V.copy()
+    W.unsafe_set(3, inf[DType.float64]())
+    with assert_raises(contains="a point holds inf"):
+        write_vtu(TMP, W, S)
+    # the binary formats carry them exactly
+    var formats: List[VTKFormat] = [.BINARY, .APPENDED]
+    for fmt in formats:
+        write_vtu(TMP, W, S, cell_data=[VTKField("p", p)], format=fmt)
 
 
 def main() raises:

@@ -83,6 +83,9 @@ there); `mojodec/prelude.mojo` is the small common subset.
 
 ### Known toolchain bugs
 
+NuMojo bugs MojoDEC has found are written up, with repros for its
+maintainers, in `third_party/numojo-bugs.md`; add new ones there.
+
 - Write floats as text with `io/scan.mojo`'s `write_float`, not
   `String(x)`: Mojo prints about one in five integral doubles between
   ~1.8e16 and 1e23 with a digit too few, so they don't read back, and
@@ -90,8 +93,10 @@ there); `mojodec/prelude.mojo` is the small common subset.
   text with `atol`, not `atof`, which loses digits past 2^53.
 - `nm.fromstring` reads `1e4` as 14 (it drops the `e`); write test
   literals without exponents or use `real_array_from_rows`.
-- `assert_almost_equal` has a default `rtol=1e-5` on top of `atol`; pass
-  `rtol=0` when a test checks a tight absolute tolerance.
+- `assert_almost_equal` has a default `rtol=1e-5` on top of `atol`, so
+  every call passes `rtol` explicitly (normally `rtol=0`, with an `atol`
+  from the problem's conditioning); `tests/run_all.sh` fails on a call
+  without one.
 - Write `sqrt(x)` (`std.math`), never `x ** 0.5`: Mojo's `**` with a
   fractional exponent is off by up to ~5e-12 relative, which Cholesky and
   Gram-matrix solves amplify (it cost DarcyFlow two digits and Sphere's
@@ -116,7 +121,9 @@ Key design points that span several files:
   relative to the first vertex, and from triangles up the Cartesian center
   is built relative to it too (absolute positions lose precision far from
   the origin). Embedded volumes use Householder QR
-  (`parallelotope_volume`), never the Gram determinant. Dual volumes come from one walk down the chains of
+  (`parallelotope_volume`), never the Gram determinant, and barycentric
+  gradients likewise (`dual_basis`, `frame_dual_basis` in `core/utils.mojo`),
+  never `(E E^T)^-1 E`. Dual volumes come from one walk down the chains of
   circumcenters (`_add_dual_pieces`); `dual_edge_piece_values` runs the
   same walk to keep the edge pieces per top simplex, which `flat` and
   `dual_edge_pieces` use. In loops, look faces up with
@@ -197,7 +204,9 @@ Key design points that span several files:
   against the bytes left before allocating for it, with
   `require_items(count, size)` rather than `require(count * size)`, which
   can overflow. Never index a table by a number read from a file (Gmsh
-  node tags are sorted and searched).
+  node tags are sorted and searched), and bound sizes the file cannot
+  vouch for (`read_sparse`'s `max_dim`). VTK ASCII output raises on NaN
+  and infinity, which VTK's text reader cannot parse.
   The Gmsh fixtures in `tests/meshes/gmsh/` are generated from the `.geo`
   files there: `pixi exec --spec gmsh gmsh -2 square.geo -format msh41
   [-bin] -o square_v41[_bin].msh` (and `msh22`; `-3` for the cube).

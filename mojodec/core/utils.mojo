@@ -415,6 +415,43 @@ def sort_each_row(mut a: IntArray):
             a.unsafe_set(i * c + k + 1, key)
 
 
+def require_distinct_simplices(sorted_rows: IntArray, who: String) raises:
+    """Raise unless every row (simplex) has distinct vertices and no two rows
+    hold the same vertices.
+
+    Args:
+        sorted_rows: Simplices with each row sorted (`sort_each_row`).
+        who: The caller, named in the error message.
+
+    Raises:
+        If a simplex repeats a vertex, or two simplices have the same
+        vertices (in any order).
+    """
+    var r = rows_of(sorted_rows)
+    var c = cols_of(sorted_rows)
+    for i in range(r):
+        for j in range(1, c):
+            if iget(sorted_rows, i, j) == iget(sorted_rows, i, j - 1):
+                raise Error(
+                    String(who, ": simplex ", i, " repeats vertex ")
+                    + String(iget(sorted_rows, i, j))
+                )
+    var order = lexsort_rows(sorted_rows)
+    for t in range(1, r):
+        var a = order[t - 1]
+        var b = order[t]
+        var same = True
+        for j in range(c):
+            if iget(sorted_rows, a, j) != iget(sorted_rows, b, j):
+                same = False
+                break
+        if same:
+            raise Error(
+                String(who, ": simplices ", min(a, b), " and ", max(a, b))
+                + " have the same vertices"
+            )
+
+
 def unique_sorted_rows(a: IntArray) raises -> IntArray:
     """Remove consecutive duplicate rows of an array whose rows are sorted.
 
@@ -604,7 +641,118 @@ def parallelotope_volume(mut a: List[Float64], m: Int, n: Int) -> Float64:
     Returns:
         The volume (1 when `m == 0`).
     """
+    var diag = List[Float64](length=m, fill=0)
+    if not _householder_rows(a, m, n, diag):
+        return 0
     var product: Float64 = 1
+    for j in range(m):
+        product *= abs(diag[j])
+    return product
+
+
+def dual_basis(
+    mut a: List[Float64], m: Int, n: Int, mut work: List[Float64]
+) -> Bool:
+    """Replace `m` independent vectors in n-space by their dual basis in
+    their span.
+
+    The rows `g_i` of the result satisfy `g_i . a_j = delta_ij` and lie in
+    the span of the `a_j`: they are the rows of `(A A^T)^-1 A`, the
+    gradients of the barycentric coordinates when the `a_j` are the edges
+    `x_j - x_0` of a simplex. They are computed from a Householder QR
+    factorization `A^T = Q R` as the rows of `R^-1 Q^T`, so for a simplex
+    of width `h` and size `L` the error is about `eps L / h` relative; the
+    Gram matrix `A A^T` would square that.
+
+    Args:
+        a: The vectors, row after row (`m * n` entries); overwritten with
+            the dual basis.
+        m: Number of vectors, at most `n`.
+        n: Their dimension.
+        work: Scratch space, resized to `m * (n + 1)` entries if smaller.
+
+    Returns:
+        False, leaving `a` undefined, if the vectors are linearly dependent
+        (a zero diagonal entry of `R`).
+    """
+    if len(work) < m * (n + 1):
+        work.resize(m * (n + 1), 0)
+    var diag = List[Float64](length=m, fill=0)
+    if not _householder_rows(a, m, n, diag):
+        return False
+    # g_c is column c of Q [R^-T; 0]: solve R^T y = e_c, pad y to n
+    # entries, and apply H_(m-1), ..., H_0 (Q = H_0 ... H_(m-1))
+    for c in range(m):
+        var w = c * n
+        for i in range(n):
+            work[w + i] = 0
+        for i in range(c, m):
+            var t: Float64 = 1 if i == c else 0
+            for k in range(c, i):
+                t -= a[i * n + k] * work[w + k]  # R[k, i] is in row i
+            work[w + i] = t / diag[i]
+        for j in range(m - 1, -1, -1):
+            var vv: Float64 = 0
+            var vw: Float64 = 0
+            for k in range(j, n):
+                vv += a[j * n + k] * a[j * n + k]
+                vw += a[j * n + k] * work[w + k]
+            var f = 2 * vw / vv
+            for k in range(j, n):
+                work[w + k] -= f * a[j * n + k]
+    for i in range(m * n):
+        a[i] = work[i]
+    return True
+
+
+def frame_dual_basis(
+    mut a: List[Float64], m: Int, n: Int, mut out: List[Float64]
+) -> Bool:
+    """The dual basis of `m` independent vectors in n-space, as coordinates
+    in an orthonormal frame of their span.
+
+    With `A^T = Q R` (Householder QR of the `m x n` matrix `A` whose rows
+    are the vectors), the dual basis of `dual_basis` is the rows of
+    `R^-1 Q^T`; this returns `R^-1`, its coordinates in the frame `Q`.
+    Inner products and Gram determinants of the dual vectors are the same
+    in either form, and the triangular `R^-1` keeps their minors free of
+    the cancellation a Gram matrix would bring.
+
+    Args:
+        a: The vectors, row after row (`m * n` entries); overwritten.
+        m: Number of vectors, at most `n`.
+        n: Their dimension.
+        out: Set to the `m x m` row-major `R^-1` (resized if smaller).
+
+    Returns:
+        False, leaving `out` undefined, if the vectors are linearly
+        dependent.
+    """
+    if len(out) < m * m:
+        out.resize(m * m, 0)
+    var diag = List[Float64](length=m, fill=0)
+    if not _householder_rows(a, m, n, diag):
+        return False
+    # column c of R^-1 solves R x = e_c; R[i, k] (k > i) is in row k
+    for c in range(m):
+        for i in range(m - 1, -1, -1):
+            var t: Float64 = 1 if i == c else 0
+            for k in range(i + 1, c + 1):
+                t -= a[k * n + i] * out[k * m + c]
+            out[i * m + c] = t / diag[i] if i <= c else 0
+    return True
+
+
+def _householder_rows(
+    mut a: List[Float64], m: Int, n: Int, mut diag: List[Float64]
+) -> Bool:
+    """Householder QR of `A^T`, for the `m x n` row-major `A` in `a`.
+
+    Afterwards row `j` of `a` holds `R[k, j]` in columns `k < j` and the
+    Householder vector `v_j` in columns `j..n-1` (`H_j = I - 2 v v^T / v^T
+    v`), and `diag[j] = R[j, j]`. Returns False if a column of `A^T` is
+    zero after the earlier reflections (dependent rows).
+    """
     for j in range(m):
         var r = j * n
         var norm2: Float64 = 0
@@ -612,18 +760,16 @@ def parallelotope_volume(mut a: List[Float64], m: Int, n: Int) -> Float64:
             norm2 += a.unsafe_get(r + k) * a.unsafe_get(r + k)
         var norm = sqrt(norm2)
         if norm == 0:
-            return 0
-        product *= norm
+            return False
         # reflect row j onto -sign(x0) |x| e_j, and every later row with
-        # it; row j itself becomes the Householder vector (it is not needed
-        # again)
+        # it; row j itself becomes the Householder vector
         var x0 = a.unsafe_get(r + j)
-        a.unsafe_set(r + j, x0 - (-norm if x0 >= 0 else norm))
+        var alpha = -norm if x0 >= 0 else norm
+        diag[j] = alpha
+        a.unsafe_set(r + j, x0 - alpha)
         var vv: Float64 = 0
         for k in range(j, n):
             vv += a.unsafe_get(r + k) * a.unsafe_get(r + k)
-        if vv == 0:
-            continue
         for l in range(j + 1, m):
             var dot: Float64 = 0
             for k in range(j, n):
@@ -633,7 +779,7 @@ def parallelotope_volume(mut a: List[Float64], m: Int, n: Int) -> Float64:
                 a.unsafe_set(
                     l * n + k, a.unsafe_get(l * n + k) - f * a.unsafe_get(r + k)
                 )
-    return product
+    return True
 
 
 # ===----------------------------------------------------------------------=== #

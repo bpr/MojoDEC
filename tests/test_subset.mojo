@@ -193,7 +193,7 @@ def test_dirichlet_poisson() raises:
     b.overwrite(fixed, g)
     var u = spsolve(A, b.v)
     for i in range(N):
-        assert_almost_equal(u.unsafe_get(i), g[i], atol=1e-12)
+        assert_almost_equal(u.unsafe_get(i), g[i], atol=1e-14, rtol=0)
     # overwrite checks the kinds
     with assert_raises():
         b.overwrite(sc.boundary_cells()[1].copy(), g)

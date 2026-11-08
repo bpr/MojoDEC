@@ -135,7 +135,7 @@ def test_dual_d() raises:
         var N = sc.complex_dimension()
         for p in range(N):
             var df = d(sc.get_cochain_basis(p, .DUAL))
-            var sign: Float64 = -1.0 if p % 2 == 1 else 1.0
+            var sign: Float64 = -1.0 if (N - p) % 2 == 1 else 1.0
             assert_equal((df.v - sc[N - p].boundary * sign).max_abs(), 0.0)
             assert_equal(d(df).v.max_abs(), 0.0)
 
@@ -153,15 +153,50 @@ def test_star() raises:
             var result = star(star(sc.get_cochain_basis(p))).v.copy()
             var sign: Float64 = -1.0 if (p * (N - p)) % 2 == 1 else 1.0
             var diff = result - CSRMatrix.identity(sc[p].num_simplices) * sign
-            assert_almost_equal(diff.max_abs(), 0.0)
+            assert_almost_equal(diff.max_abs(), 0.0, atol=1e-15, rtol=0)
 
 
 def test_laplacian() raises:
     for ref sc in all_cases():
         var f = sc.get_cochain_basis(0)
         assert_almost_equal(
-            (laplace_beltrami(f) - laplace_derham(f)).v.max_abs(), 0.0
+            (laplace_beltrami(f) - laplace_derham(f)).v.max_abs(),
+            0.0,
+            atol=1e-13,
+            rtol=0,
         )
+
+
+def test_laplacian_is_positive_in_every_dimension() raises:
+    # PyDEC's dual d sign made delta d negative semidefinite in 1-D and 3-D
+    for ref sc in all_cases():
+        for i in range(sc[0].num_simplices):
+            var f = sc.get_cochain(0)
+            f[i] = 1.0
+            assert_true(laplace_beltrami(f)[i] > 0)
+
+
+def test_zero_dual_volumes_raise() raises:
+    # the diagonals of simplicial_grid_2d are hypotenuses of right
+    # triangles, with zero dual volume; delta once returned NaN there
+    from mojodec.routines.mesh_generation import simplicial_grid_2d
+
+    var sc = SimplicialComplex(simplicial_grid_2d(2))
+    var f = sc.get_cochain(0)
+    f[0] = 1.0
+    var df = d(f)
+    var w = sc.get_cochain(2)
+    w[0] = 1.0
+    # delta on 2-cochains needs star_inv on edges
+    with assert_raises(contains="has zero volume"):
+        _ = delta(w)
+    with assert_raises(contains="has zero volume"):
+        _ = star(star(df))
+    with assert_raises(contains="has zero volume"):
+        sc[1].require_finite_star_inv()
+    # the 0-form Laplacian needs it only on vertices, which are fine
+    _ = delta(df)
+    sc[0].require_finite_star_inv()
 
 
 def test_basis_matches_vector() raises:
@@ -173,7 +208,7 @@ def test_basis_matches_vector() raises:
     var Lc = laplace_derham(c)
     var Lv = L @ c.v
     for i in range(c.v.size):
-        assert_almost_equal(Lc[i], Lv.unsafe_get(i))
+        assert_almost_equal(Lc[i], Lv.unsafe_get(i), atol=1e-13, rtol=0)
     var h = delta(c)
     assert_equal(h.k, 0)
 

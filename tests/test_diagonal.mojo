@@ -1,7 +1,6 @@
 from std.testing import (
     TestSuite,
     assert_equal,
-    assert_almost_equal,
     assert_raises,
     assert_true,
 )
@@ -86,17 +85,17 @@ def test_hodge_stars_are_diagonal() raises:
         c[i] = Float64(i + 1)
     var sc1 = star(c)
     for i in range(sc[1].num_simplices):
-        assert_almost_equal(sc1[i], sc[1].star[i] * Float64(i + 1))
+        assert_equal(sc1[i], sc[1].star[i] * Float64(i + 1))
     # composed with d, a CSRMatrix comes out, matching the CSR route
     var A = sc[1].star @ sc[0].d
     var B = sc[1].star.to_csr() @ sc[0].d
     for i in range(A.nrows):
         for j in range(A.ncols):
-            assert_almost_equal(A[i, j], B[i, j])
+            assert_equal(A[i, j], B[i, j])
     # star on a basis gives the matrix
     var Sb = star(sc.get_cochain_basis(1)).v.copy()
     for i in range(sc[1].num_simplices):
-        assert_almost_equal(Sb[i, i], sc[1].star[i])
+        assert_equal(Sb[i, i], sc[1].star[i])
 
 
 def main() raises:

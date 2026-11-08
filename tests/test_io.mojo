@@ -120,7 +120,7 @@ def test_geometry_on_meshes() raises:
             total_primal += abs(sc[n].primal_volume.unsafe_get(j))
         for j in range(sc[0].num_simplices):
             total_dual += sc[0].dual_volume.unsafe_get(j)
-        assert_almost_equal(total_primal, total_dual, rtol=1e-7)
+        assert_almost_equal(total_primal, total_dual, atol=1e-13, rtol=0)
 
 
 def test_dense_roundtrip() raises:
@@ -145,9 +145,8 @@ def test_dense_roundtrip() raises:
             write_array(TMP, A, fmt)
             var B = read_array(TMP)
             for j in range(A.size):
-                assert_almost_equal(
-                    A.unsafe_get(j), B.unsafe_get(j), atol=1e-12
-                )
+                # every format round-trips doubles exactly
+                assert_equal(A.unsafe_get(j), B.unsafe_get(j))
             write_array(TMP, Ai, fmt)
             var Bi = read_array[DType.int32](TMP)
             for j in range(Ai.size):
@@ -294,6 +293,44 @@ def test_hostile_dims_and_narrow_types() raises:
     var C = loadtxt[DType.int](TMP)
     assert_equal(Int(C.unsafe_get(0)), 9007199254740993)
     assert_equal(Int(C.unsafe_get(1)), -9007199254740995)
+
+
+def test_sparse_dims_are_bounded() raises:
+    # a coo file with one entry and 1e14 rows once aborted on allocating
+    # the row pointers
+    def one_value(dtype: String, value: String) -> String:
+        return String(
+            "6\ndims=1\ndtype=",
+            dtype,
+            "\ntype=ndarray\nrank=1\nformat=ascii\nversion=1.0\n",
+            value,
+            "\n",
+        )
+
+    def coo(dims: String) -> String:
+        return (
+            "5\ntype=sparse\nsptype=coo\ndims="
+            + dims
+            + "\nformat=ascii\nversion=1.0\n"
+            + one_value("float64", "5.0")
+            + one_value("int32", "0")
+            + one_value("int32", "1")
+        )
+
+    with open(TMP, "w") as f:
+        f.write(coo("100000000000000,3"))
+    with assert_raises(contains="raise max_dim"):
+        _ = read_sparse(TMP)
+    with open(TMP, "w") as f:
+        f.write(coo("2,-3"))
+    with assert_raises(contains="outside 0.."):
+        _ = read_sparse(TMP)
+    with open(TMP, "w") as f:
+        f.write(coo("2,3"))
+    var A = read_sparse(TMP)
+    assert_equal(A.nrows, 2)
+    with assert_raises(contains="raise max_dim"):
+        _ = read_sparse(TMP, max_dim=2)
 
 
 def main() raises:

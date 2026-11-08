@@ -10,7 +10,9 @@ VisIt open. Not in PyDEC.
 
 `format` (a `VTKFormat`) chooses how the data arrays are stored:
 
-- `.ASCII` (the default): readable text.
+- `.ASCII` (the default): readable text. VTK's ASCII reader cannot parse
+  `nan` or `inf`, so non-finite values raise here (e.g. the NaN curvature
+  of unused vertices); the binary formats store them exactly.
 - `.BINARY`: base64 inside the XML, so the file is still valid XML.
 - `.APPENDED`: raw bytes after the XML; the smallest and fastest to read.
 
@@ -39,6 +41,7 @@ write_vtu(
 """
 
 from std.base64 import b64encode
+from std.math import isfinite
 from std.sys import size_of
 
 from mojodec.core.regular_cube_complex import RegularCubeComplex
@@ -138,7 +141,8 @@ def write_vtu(
         If `cells` is not 2-D, has more than 4 columns, or uses a vertex
         index out of range; `vertices` is not 2-D with at most 3 columns;
         a field has more than 3 columns or the wrong
-        number of rows; or the file cannot be written.
+        number of rows; a value is NaN or infinite in `ASCII`; or the file
+        cannot be written.
     """
     if cells.ndim != 2:
         raise Error("write_vtu: cells must be a 2-D array")
@@ -190,8 +194,8 @@ def write_vtu_cubes(
     Raises:
         If `k` is out of range; the complex has dimension above 3 (its
         vertices have too many coordinates); a field
-        has more than 3 columns or the wrong number of rows; or the file
-        cannot be written.
+        has more than 3 columns or the wrong number of rows; a value is NaN
+        or infinite in `ASCII`; or the file cannot be written.
     """
     var N = cmplx.complex_dimension()
     if k < 0 or k > min(N, 3):
@@ -315,6 +319,17 @@ struct _Encoder(Movable):
                 if c < cols:
                     x = values.unsafe_get(r * cols + c)
                 if self.format == VTKFormat.ASCII:
+                    if not isfinite(x):
+                        raise Error(
+                            String(
+                                "write_vtu: ",
+                                "field " + name if name else "a point",
+                                " holds ",
+                                x,
+                                ", which VTK cannot read as ASCII; use",
+                                " format=.BINARY or .APPENDED",
+                            )
+                        )
                     write_float(self.xml, x)
                     self.xml.write("\n" if c == components - 1 else " ")
                 else:

@@ -27,6 +27,7 @@ from proptest import (
 
 from mojodec.core.cochain import Cochain, d, delta
 from mojodec.core.mesh import SimplicialMesh
+from mojodec.core.primality import Primality
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
@@ -635,42 +636,74 @@ def test_far_translations_move_circumcenters_exactly() raises:
     given(composite(_grid_spec), integers(0, 12), prop, meshes())
 
 
-def test_codifferential_is_adjoint_to_d_with_pydecs_sign() raises:
-    # With the stars as (signed) inner products on primal cochains,
-    #   <a, delta b>_k = (-1)^n <d a, b>_(k+1).
-    # The (-1)^n is PyDEC's convention, which MojoDEC keeps: its dual d
-    # carries (-1)^k, so delta is the adjoint of d only in even dimensions
-    # (in 1-D and 3-D, delta d is negative semidefinite).
+def _weighted_pairing(
+    x: RealArray, y: RealArray, star: RealArray, invert: Bool
+) -> Tuple[Float64, Float64]:
+    """`sum x_i w_i y_i` with `w = star` (or `1 / star`), and the sum of the
+    absolute terms (the scale of its rounding error)."""
+    var total = 0.0
+    var size = 0.0
+    for i in range(x.size):
+        var w = star.unsafe_get(i)
+        if invert:
+            w = 1.0 / w
+        var t = x.unsafe_get(i) * w * y.unsafe_get(i)
+        total += t
+        size += abs(t)
+    return (total, size)
+
+
+def _all_nonzero(x: RealArray) -> Bool:
+    for i in range(x.size):
+        if x.unsafe_get(i) == 0:
+            return False
+    return True
+
+
+def test_codifferential_is_adjoint_to_d() raises:
+    # With the stars as inner products (star_k on primal k-cochains, 1 /
+    # star_(n-j) on dual j-cochains),
+    #   <a, delta b>_k = <d a, b>_(k+1)
+    # in every dimension. PyDEC's dual d carries (-1)^k rather than
+    # MojoDEC's (-1)^(n-k), which gives a factor (-1)^n here: in 1-D and
+    # 3-D its delta d was negative semidefinite.
     def prop(spec: MeshSpec, seed: Int) raises:
         var sc = SimplicialComplex(spec.mesh())
         var n = sc.complex_dimension()
-        var sign = -1.0 if n % 2 == 1 else 1.0
-        for k in range(n):
-            var S = _star_values(sc, k)
-            var T = _star_values(sc, k + 1)
-            # a zero dual volume makes star_inv infinite (right triangles
-            # of unjittered grids); delta is not defined there
-            var finite = True
-            for i in range(S.size):
-                finite = finite and S.unsafe_get(i) != 0
-            assume(finite)
-            var a = _cochain(sc, k, seed)
-            var b = _cochain(sc, k + 1, seed + 1)
-            var db = delta(b)
-            var da = d(a)
-            var lhs = 0.0
-            var size = 0.0
-            for i in range(S.size):
-                var t = a.v.unsafe_get(i) * S.unsafe_get(i) * db.v.unsafe_get(i)
-                lhs += t
-                size += abs(t)
-            var rhs = 0.0
-            for i in range(T.size):
-                var t = da.v.unsafe_get(i) * T.unsafe_get(i) * b.v.unsafe_get(i)
-                rhs += t
-                size += abs(t)
-            if abs(lhs - sign * rhs) > 1e-11 * max(1.0, size):
-                fail(String("k=", k, ": ", lhs, " != ", sign, " * ", rhs))
+        for primal in [True, False]:
+            for k in range(n):
+                # the levels holding the k- and (k+1)-cochains
+                var lk = k if primal else n - k
+                var lk1 = k + 1 if primal else n - k - 1
+                var S = _star_values(sc, lk)
+                var T = _star_values(sc, lk1)
+                # a zero dual volume makes star_inv infinite (right
+                # triangles of unjittered grids); delta is not defined there
+                if primal:
+                    assume(_all_nonzero(S))
+                else:
+                    assume(_all_nonzero(S) and _all_nonzero(T))
+                var p = Primality.PRIMAL if primal else Primality.DUAL
+                var a = sc.get_cochain(k, p)
+                a.v = _seeded_values(a.v.size, seed)
+                var b = sc.get_cochain(k + 1, p)
+                b.v = _seeded_values(b.v.size, seed + 1)
+                var lhs = _weighted_pairing(a.v, delta(b).v, S, not primal)
+                var rhs = _weighted_pairing(d(a).v, b.v, T, not primal)
+                var size = max(1.0, lhs[1] + rhs[1])
+                if abs(lhs[0] - rhs[0]) > 1e-11 * size:
+                    fail(
+                        String(
+                            "primal=",
+                            primal,
+                            " k=",
+                            k,
+                            ": ",
+                            lhs[0],
+                            " != ",
+                            rhs[0],
+                        )
+                    )
 
     given(composite(_any_mesh), integers(0, 10000), prop, meshes())
 

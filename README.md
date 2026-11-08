@@ -386,7 +386,31 @@ the published mathematics:
   positions relative to a vertex, not absolute positions, which keeps
   their precision on meshes far from the origin; triangles use a closed
   form whose denominator, the squared area, also comes from QR, so even
-  slivers get their circumcenters.
+  slivers get their circumcenters. Barycentric gradients, and the Whitney
+  mass matrices built from them, come from the same QR rather than from
+  the Gram matrix of the edges (`barycentric_gradients` in PyDEC), which
+  squares a thin simplex's conditioning: for a triangle 1e-8 high, PyDEC's
+  formula gives gradients that are wrong in the first digit, and the
+  Whitney minors are taken in the simplex's own frame by Cauchy-Binet.
+- **Zero dual volumes raise.** Where a dual cell has zero volume (the
+  hypotenuses of `simplicial_grid_2d`'s right triangles), the Hodge star
+  is zero and its inverse infinite. PyDEC carries on and returns
+  infinities and NaNs from `star` and `delta`; MojoDEC's `star` from dual
+  to primal (and so `delta` where it needs it) raises, naming the
+  simplex. `sc[k].star_inv` itself still holds the infinities, and
+  `sc[k].require_finite_star_inv()` checks a level.
+- **The dual `d` and `delta` in odd dimensions.** PyDEC's `d` on dual
+  k-cochains is `(-1)^k` times the boundary operator, which makes its
+  `delta` minus the adjoint of `d` in odd dimensions: in 1-D and 3-D its
+  `laplace_beltrami` is negative semidefinite. MojoDEC's dual `d` carries
+  `(-1)^(n-k)`, so `delta` is the adjoint of `d` under the Hodge star
+  inner products, and the Laplacians are positive semidefinite, in every
+  dimension. In 2-D (and any even dimension) the two agree exactly.
+- **Malformed meshes raise.** `SimplicialComplex` and the top simplices of
+  `AbstractSimplicialComplex` reject an element that repeats a vertex and
+  two elements with the same vertices; PyDEC accepts both and builds wrong
+  operators (`[[0,1,2],[0,1,2]]` gets an empty boundary and doubled dual
+  volumes).
 - **Simplex lookup.** PyDEC's `simplex_to_index` dict and
   `index_to_simplex` list are methods here: `sc[k].simplex_to_index(s)`
   binary-searches the sorted simplex rows and `sc[k].index_to_simplex(i)`

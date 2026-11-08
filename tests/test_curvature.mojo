@@ -55,7 +55,7 @@ def test_icosphere_shape() raises:
             var r: Float64 = 0
             for k in range(3):
                 r += fget(vt.vertices, v, k) ** 2
-            assert_almost_equal(sqrt(r), 2.0, atol=1e-14)
+            assert_almost_equal(sqrt(r), 2.0, atol=1e-14, rtol=0)
         # every triangle's normal points away from the center
         for t in range(rows_of(vt.elements)):
             var p = List[List[Float64]]()
@@ -113,16 +113,16 @@ def test_gauss_bonnet() raises:
     # the angle defects add up to 2 pi chi, exactly
     for s in range(3):
         var sc = sphere(s, 1.5)
-        assert_almost_equal(total(angle_defect(sc)), 4 * pi, atol=1e-12)
+        assert_almost_equal(total(angle_defect(sc)), 4 * pi, atol=1e-12, rtol=0)
     # a square: no interior defect, pi/2 at each corner, 0 elsewhere on the edge
     var vt = simplicial_grid_2d(4)
     var sc = SimplicialComplex(vt)
     var D = angle_defect(sc)
-    assert_almost_equal(total(D), 2 * pi, atol=1e-12)
+    assert_almost_equal(total(D), 2 * pi, atol=1e-14, rtol=0)
     var corners: List[Int] = [0, 4, 20, 24]
     for v in range(D.size):
         var expected = pi / 2 if v in corners else 0.0
-        assert_almost_equal(D.unsafe_get(v), expected, atol=1e-12)
+        assert_almost_equal(D.unsafe_get(v), expected, atol=1e-14, rtol=0)
 
 
 def test_sphere_curvatures() raises:
@@ -133,18 +133,21 @@ def test_sphere_curvatures() raises:
         var Hn = mean_curvature_normal(sc)
         for v in range(K.size):
             # second order: within 0.6% at 3 subdivisions
-            assert_almost_equal(K.unsafe_get(v) * r * r, 1.0, atol=6e-3)
-            assert_almost_equal(H.unsafe_get(v) * r, 1.0, atol=1e-4)
+            # discretization error of the subdivided sphere, not rounding
+            assert_almost_equal(K.unsafe_get(v) * r * r, 1.0, atol=6e-3, rtol=0)
+            assert_almost_equal(H.unsafe_get(v) * r, 1.0, atol=1e-4, rtol=0)
             # outward
             var dot: Float64 = 0
             for k in range(3):
                 dot += fget(Hn, v, k) * fget(sc.vertices(), v, k)
-            assert_almost_equal(dot / (H.unsafe_get(v) * r), 1.0, atol=1e-4)
+            assert_almost_equal(
+                dot / (H.unsafe_get(v) * r), 1.0, atol=1e-4, rtol=0
+            )
         # K integrates to 4 pi exactly
         var KA: Float64 = 0
         for v in range(K.size):
             KA += K.unsafe_get(v) * sc[0].dual_volume.unsafe_get(v)
-        assert_almost_equal(KA, 4 * pi, atol=1e-11)
+        assert_almost_equal(KA, 4 * pi, atol=1e-11, rtol=0)
 
 
 def test_flat_surface_in_3d() raises:
@@ -162,9 +165,9 @@ def test_flat_surface_in_3d() raises:
         var i = v % 5
         var j = v // 5
         if 0 < i < 4 and 0 < j < 4:
-            assert_almost_equal(K.unsafe_get(v), 0.0, atol=1e-12)
+            assert_almost_equal(K.unsafe_get(v), 0.0, atol=1e-14, rtol=0)
             for k in range(3):
-                assert_almost_equal(fget(Hn, v, k), 0.0, atol=1e-12)
+                assert_almost_equal(fget(Hn, v, k), 0.0, atol=1e-13, rtol=0)
 
 
 def test_needs_a_surface() raises:
@@ -184,8 +187,10 @@ def test_quality() raises:
         nm.fromstring[DType.int]("[[0,1,2],[1,3,4],[3,5,6]]"),
     )
     var w = well_centeredness(sc)
-    assert_almost_equal(w.unsafe_get(0), 1.0 / 3.0, atol=1e-12)  # equilateral
-    assert_almost_equal(w.unsafe_get(1), 0.0, atol=1e-12)  # right angle at 3
+    # equilateral
+    assert_almost_equal(w.unsafe_get(0), 1.0 / 3.0, atol=1e-15, rtol=0)
+    # right angle at 3
+    assert_almost_equal(w.unsafe_get(1), 0.0, atol=1e-15, rtol=0)
     assert_true(w.unsafe_get(2) < -0.5)  # obtuse: 157 degrees at (3, 0.2)
     # stored circumcenters (geometry) and recomputed ones (none) agree,
     # whatever the vertex order of the elements
@@ -197,22 +202,26 @@ def test_quality() raises:
     )
     for t in range(3):
         assert_almost_equal(
-            with_geometry.unsafe_get(t), w.unsafe_get(t), atol=1e-12
+            with_geometry.unsafe_get(t), w.unsafe_get(t), atol=1e-13, rtol=0
         )
-        assert_almost_equal(without.unsafe_get(t), w.unsafe_get(t), atol=1e-12)
-    assert_almost_equal(well_centered_fraction(sc), 1.0 / 3.0, atol=1e-15)
+        assert_almost_equal(
+            without.unsafe_get(t), w.unsafe_get(t), atol=1e-13, rtol=0
+        )
     assert_almost_equal(
-        well_centered_fraction(sc, tol=-1e-9), 2.0 / 3.0, atol=1e-15
+        well_centered_fraction(sc), 1.0 / 3.0, atol=1e-15, rtol=0
+    )
+    assert_almost_equal(
+        well_centered_fraction(sc, tol=-1e-9), 2.0 / 3.0, atol=1e-15, rtol=0
     )
     var s = shape_regularity(sc)
-    assert_almost_equal(s.unsafe_get(0), 1.0, atol=1e-12)
+    assert_almost_equal(s.unsafe_get(0), 1.0, atol=1e-14, rtol=0)
     assert_true(s.unsafe_get(1) < 1)
     var vt = icosahedron()
     var ico = SimplicialComplex(vt)
-    assert_almost_equal(well_centered_fraction(ico), 1.0, atol=0)
+    assert_equal(well_centered_fraction(ico), 1.0)
     var reg = shape_regularity(ico)
     for t in range(reg.size):
-        assert_almost_equal(reg.unsafe_get(t), 1.0, atol=1e-12)
+        assert_almost_equal(reg.unsafe_get(t), 1.0, atol=1e-14, rtol=0)
 
 
 def test_unused_vertices_and_small_angles() raises:

@@ -30,7 +30,7 @@ def test_simplicial_grid_2d() raises:
         var v = signed_volume(take_rows(vi.vertices, row_list(vi.elements, t)))
         assert_true(v > 0)
         total += v
-    assert_almost_equal(total, 1.0)
+    assert_almost_equal(total, 1.0, atol=1e-14, rtol=0)
     var sc = SimplicialComplex(vi)
     assert_equal(sc[1].num_simplices, 25 + 32 - 1)
 
@@ -55,7 +55,7 @@ def test_triangulate_ncube() raises:
         var v = signed_volume(take_rows(tv.vertices, row_list(tv.elements, t)))
         assert_true(v > 0)
         total += v
-    assert_almost_equal(total, 6.0)
+    assert_almost_equal(total, 6.0, atol=1e-14, rtol=0)
 
 
 def test_loop_subdivision() raises:
@@ -68,7 +68,7 @@ def test_loop_subdivision() raises:
         total += signed_volume(
             take_rows(sub.vertices, row_list(sub.elements, t))
         )
-    assert_almost_equal(total, 1.0)
+    assert_almost_equal(total, 1.0, atol=1e-14, rtol=0)
 
 
 def check_orientation(b: String, expected: Bool) raises:

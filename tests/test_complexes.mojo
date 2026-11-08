@@ -94,6 +94,16 @@ def test_asc_2d() raises:
     assert_dense(asc.chain_complex().boundary(2), "[[1],[-1],[0],[1],[0]]")
 
 
+def test_asc_rejects_duplicate_simplices() raises:
+    with assert_raises(contains="have the same vertices"):
+        _ = asc_of([I("[[0,1,2],[2,1,0]]")])
+    with assert_raises(contains="repeats vertex 0"):
+        _ = asc_of([I("[[0,0]]")])
+    # repeated lower-dimensional simplices are merged, as before
+    var asc = asc_of([I("[[0,1,2]]"), I("[[0,1],[1,0]]")])
+    assert_equal(rows_of(asc.simplices[1]), 3)
+
+
 def test_rips_simplices() raises:
     var r = rips_simplices(3, I("[[0,1],[0,2],[1,2]]"), 2)
     assert_int_array(r[1], "[[0,1],[0,2],[1,2]]")
@@ -232,6 +242,14 @@ def test_kd_tree_and_sort_edge_cases() raises:
     assert_equal(len(tree.nearest_n([0.05], -1)), 0)
     with assert_raises(contains="coordinate"):
         _ = KDTree(nm.zeros[DType.float64](Shape(3, 0)))
+    # a query point of the wrong length was read past its end
+    with assert_raises(contains="query point has 2 coordinates"):
+        _ = tree.nearest([0.0, 1.0])
+    with assert_raises(contains="query point has 0 coordinates"):
+        _ = tree.in_sphere(List[Float64](), 1.0)
+    # an abstract complex needs at least one top simplex
+    with assert_raises(contains="no rows"):
+        _ = asc_of([int_array(0, 3)])
     # entries 1.2e19 apart once overflowed the radix sort's span
     var a = int_array(3, 1)
     a.unsafe_set(0, Scalar[DType.int](-6_000_000_000_000_000_000))

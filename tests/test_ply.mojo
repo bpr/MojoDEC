@@ -1,6 +1,5 @@
 from std.testing import (
     TestSuite,
-    assert_almost_equal,
     assert_equal,
     assert_raises,
 )
@@ -26,9 +25,7 @@ def assert_mesh(
     assert_equal(cols_of(mesh.vertices), cols_of(V))
     assert_equal(rows_of(mesh.elements), rows_of(T))
     for i in range(V.size):
-        assert_almost_equal(
-            mesh.vertices.unsafe_get(i), V.unsafe_get(i), atol=0
-        )
+        assert_equal(mesh.vertices.unsafe_get(i), V.unsafe_get(i))
     for i in range(T.size):
         assert_equal(Int(mesh.elements.unsafe_get(i)), Int(T.unsafe_get(i)))
 

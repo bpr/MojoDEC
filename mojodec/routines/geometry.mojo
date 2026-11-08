@@ -20,6 +20,7 @@ from mojodec.core.utils import (
     real_array,
     real_vector,
     factorial,
+    dual_basis,
     parallelotope_volume,
     rows_of,
     cols_of,
@@ -227,25 +228,26 @@ def barycentric_gradients(pts: RealArray) raises -> RealArray:
         The `(M+1) x N` gradients, tangent to the simplex.
 
     Raises:
-        If the simplex is degenerate (singular Gram matrix).
+        If the simplex is degenerate.
     """
     var M = rows_of(pts) - 1
     var N = cols_of(pts)
+    if M > N:
+        raise Error("barycentric_gradients: more vertices than dimensions + 1")
     var V = _edge_vectors(pts)
-    # grads[1:] = inv(V V^T) V
-    var gram = real_array(M, M)
-    for i in range(M):
-        for j in range(M):
-            var s: Float64 = 0
-            for k in range(N):
-                s += V.unsafe_get(i * N + k) * V.unsafe_get(j * N + k)
-            gram.unsafe_set(i * M + j, s)
-    var G = _solve(gram, V)
+    # grads[1:] = (V V^T)^-1 V, by QR rather than the Gram matrix, which
+    # squares the conditioning of a thin simplex
+    var G = List[Float64](capacity=M * N)
+    for i in range(M * N):
+        G.append(V.unsafe_get(i))
+    var work = List[Float64]()
+    if not dual_basis(G, M, N, work):
+        raise Error("barycentric_gradients: the simplex is degenerate")
     var out = real_array(M + 1, N)
     for k in range(N):
         var s: Float64 = 0
         for i in range(M):
-            var g = G.unsafe_get(i * N + k)
+            var g = G[i * N + k]
             out.unsafe_set((i + 1) * N + k, g)
             s += g
         out.unsafe_set(k, -s)
