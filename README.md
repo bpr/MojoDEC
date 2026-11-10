@@ -130,6 +130,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/core/chain_complex.mojo` — `ChainComplex` | the lists of `chain_complex()`, `cochain_complex()` |
 | `mojodec/core/cell_set.mojo` — `CellSet`, `CellComplex` | (new) |
 | `mojodec/routines/topology.mojo` — `star_of`, `closure_of`, `link_of`, `boundary_of`, `interior_of` | (new) |
+| `mojodec/routines/homology.mojo` — `betti_numbers`, `relative_betti_numbers`, `non_manifold_cells` | (new) |
 | `mojodec/vis/draw.mojo` — `triplot`, `lineplot`, `lineplot2`, `simplex_quivers`, `cube_quivers` | `vis/draw.py` |
 
 ## Plotting
@@ -216,6 +217,32 @@ the published mathematics:
 - **Mesh quality**: `well_centeredness` (the smallest barycentric
   coordinate of each circumcenter), `well_centered_fraction`, and
   `shape_regularity`.
+- **Orienting meshes.** `coherent_orientation(elements)` walks across
+  shared faces and gives each element a sign (`-1` to reverse it) that
+  makes neighbors induce opposite orientations on their shared face, or
+  `None` for a non-orientable mesh such as a Möbius band.
+  `orient_coherently(mesh)` returns the mesh with those elements reversed,
+  ready for `SimplicialComplex`.
+- **Betti numbers** over the rationals on every complex type:
+  `betti_numbers()`, `betti_numbers(cells)` for a subcomplex such as a
+  link, and `relative_betti_numbers()` (relative to the boundary) or
+  `relative_betti_numbers(sub)` for a pair. The free functions in
+  `routines/homology.mojo` take a `ChainComplex`. Ranks come from sparse
+  elimination modulo a prime near 2^30, exact unless the integral
+  homology has torsion of that order; 20k triangles take milliseconds.
+  The tests check Lefschetz duality on the solid torus, spheres as links
+  of interior vertices, and that the projective plane gets `[1, 0, 0]`
+  (over Z/2 it would be `[1, 1, 1]`).
+- **Homology-manifold check** on every complex type:
+  `non_manifold_cells()` gives the cells whose link does not have the
+  homology of a sphere (inside) or a point (on the boundary), such as the
+  tip where two cones meet, and `is_homology_manifold()` says whether
+  there are none. Cells of every dimension below n are checked, not only
+  vertices: two tetrahedra sharing just an edge have disks for all vertex
+  links, and only the edge's link (two separate edges) shows the pinch.
+  The constructors don't require it, since pinched meshes are valid DEC
+  input; it is a query, a few tens of milliseconds on a 2,500-vertex
+  surface.
 - **`euler_characteristic()`** on `SimplicialComplex`,
   `AbstractSimplicialComplex`, and `RegularCubeComplex`.
 - **Neighborhoods**: `star`, `closure`, and `link` methods on every
@@ -410,7 +437,12 @@ the published mathematics:
   `AbstractSimplicialComplex` reject an element that repeats a vertex and
   two elements with the same vertices; PyDEC accepts both and builds wrong
   operators (`[[0,1,2],[0,1,2]]` gets an empty boundary and doubled dual
-  volumes).
+  volumes). `SimplicialComplex` also requires a pseudomanifold (no
+  (n−1)-simplex is a face of three or more elements) with coherently
+  oriented elements, which the dual `d`, `delta`, and `wedge` assume;
+  PyDEC builds wrong dual operators otherwise. The error names the
+  offending face and elements, and says whether `orient_coherently` can
+  fix the mesh.
 - **Simplex lookup.** PyDEC's `simplex_to_index` dict and
   `index_to_simplex` list are methods here: `sc[k].simplex_to_index(s)`
   binary-searches the sorted simplex rows and `sc[k].index_to_simplex(i)`
@@ -437,7 +469,8 @@ the published mathematics:
   holding both kinds without padding: `cc.boundary(k)` is `B_k` for
   k = 1..n, `cc.coboundary(k)` is `d_k` for k = 0..n-1, and
   `cc.num_cells(k)` is `N_k`. `sc[k].boundary` and `sc[k].d` still give
-  the operators of one level directly.
+  the operators of one level directly. The constructor raises unless
+  `B_k B_{k+1} = 0` and each `d_k` is `B_{k+1}^T`.
 - **File formats are types.** `write_array` and `write_mesh` take an
   `ArrayFormat` (`.BASIC`, `.ASCII`, `.BINARY`), `write_sparse` a
   `SparseFormat`, `write_ply` a `PlyFormat`, and `write_vtu` a

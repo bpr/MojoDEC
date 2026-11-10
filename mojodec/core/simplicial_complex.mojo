@@ -57,6 +57,11 @@ from mojodec.core.utils import (
     cols_of,
     sort_each_row,
 )
+from mojodec.routines.homology import (
+    betti_numbers as _betti_numbers,
+    non_manifold_cells as _non_manifold_cells,
+    relative_betti_numbers as _relative_betti_numbers,
+)
 from mojodec.routines.topology import (
     boundary_of,
     closure_of,
@@ -65,6 +70,7 @@ from mojodec.routines.topology import (
     star_of,
 )
 from mojodec.routines.simplex_array import (
+    require_coherent_orientation,
     simplex_array_boundary,
     simplex_array_parity,
 )
@@ -319,8 +325,12 @@ struct SimplicialComplex(
 
         Raises:
             If the elements are malformed (an element repeats a vertex, or
-            two elements have the same vertices), or (with geometry) a
-            simplex is degenerate.
+            two elements have the same vertices), do not form a
+            pseudomanifold (an (n-1)-simplex is a face of three or more
+            elements), or are not coherently oriented (two elements induce
+            the same orientation on a shared face; `orient_coherently`
+            fixes an orientable mesh), or (with geometry) a simplex is
+            degenerate.
         """
         self._data = ArcPointer(ComplexData(mesh.copy()))
         self._build_complex()
@@ -344,7 +354,8 @@ struct SimplicialComplex(
 
         Raises:
             If the arrays do not form a mesh, an element repeats a vertex,
-            two elements have the same vertices, or (with geometry) a
+            two elements have the same vertices, the elements do not form
+            a coherently oriented pseudomanifold, or (with geometry) a
             simplex is degenerate.
         """
         self = Self(SimplicialMesh(vertices, simplices), compute_geometry)
@@ -689,6 +700,88 @@ struct SimplicialComplex(
             True if both share one `ComplexData`.
         """
         return self._data.ptr() == other._data.ptr()
+
+    def betti_numbers(self) raises -> List[Int]:
+        """The Betti numbers over the rationals; see
+        `mojodec.routines.homology`.
+
+        Returns:
+            `b_0, ..., b_n`: the numbers of connected pieces, independent
+            loops, enclosed voids, and so on.
+
+        Raises:
+            Never in practice.
+        """
+        return _betti_numbers(self.chain_complex())
+
+    def betti_numbers(self, cells: CellSet) raises -> List[Int]:
+        """The Betti numbers of a subcomplex, such as a link.
+
+        Args:
+            cells: A subcomplex: every face of a cell in it is in it.
+
+        Returns:
+            `b_0, ..., b_n` of the subcomplex.
+
+        Raises:
+            If `cells` does not belong to the complex or is not closed.
+        """
+        return _betti_numbers(self.chain_complex(), cells)
+
+    def relative_betti_numbers(self) raises -> List[Int]:
+        """The Betti numbers relative to the boundary, `b_k(K, ∂K)`.
+
+        Count the harmonic forms that vanish on the boundary; for an
+        orientable manifold, `b_k(K, ∂K) = b_{n-k}(K)`.
+
+        Returns:
+            `b_0, ..., b_n` of the pair (complex, `boundary_cells()`).
+
+        Raises:
+            Never in practice.
+        """
+        return _relative_betti_numbers(
+            self.chain_complex(), self.boundary_cells()
+        )
+
+    def relative_betti_numbers(self, sub: CellSet) raises -> List[Int]:
+        """The Betti numbers of the pair (complex, `sub`).
+
+        Args:
+            sub: A subcomplex: every face of a cell in it is in it.
+
+        Returns:
+            `b_0, ..., b_n` of the pair.
+
+        Raises:
+            If `sub` does not belong to the complex or is not closed.
+        """
+        return _relative_betti_numbers(self.chain_complex(), sub)
+
+    def non_manifold_cells(self) raises -> CellSet:
+        """The cells around which the complex is not a homology manifold;
+        see `mojodec.routines.homology.non_manifold_cells`.
+
+        Returns:
+            The cells whose links have the wrong homology; empty for a
+            homology manifold.
+
+        Raises:
+            Never in practice.
+        """
+        return _non_manifold_cells(self.chain_complex())
+
+    def is_homology_manifold(self) raises -> Bool:
+        """Whether every cell's link has the homology of a sphere (inside)
+        or of a point (on the boundary).
+
+        Returns:
+            True if `non_manifold_cells()` is empty.
+
+        Raises:
+            Never in practice.
+        """
+        return self.non_manifold_cells().is_empty()
 
     def chain_complex(self) raises -> ChainComplex:
         """The boundary and coboundary operators of every level, copied.
@@ -1138,6 +1231,10 @@ struct SimplicialComplex(
         while cols_of(simplices[len(simplices) - 1]) > 1:
             var top = len(simplices) - 1
             var fb = simplex_array_boundary(simplices[top], parities[top])
+            if top == 0:
+                require_coherent_orientation(
+                    fb.faces, fb.boundary, fb.coboundary, "SimplicialComplex"
+                )
             var faces = IntArray(Shape(0))
             var boundary = CSRMatrix(0, 0)
             var d = CSRMatrix(0, 0)

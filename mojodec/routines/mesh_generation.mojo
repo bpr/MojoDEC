@@ -16,6 +16,7 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.mesh import SimplicialMesh
+from mojodec.routines.simplex_array import coherent_orientation
 from mojodec.core.utils import (
     IntArray,
     RealArray,
@@ -412,3 +413,37 @@ def loop_subdivision(mesh: SimplicialMesh) raises -> SimplicialMesh:
             )
             fset(new_vertices, nv + k, e, m)
     return SimplicialMesh(new_vertices, new_tris)
+
+
+def orient_coherently(mesh: SimplicialMesh) raises -> SimplicialMesh:
+    """The mesh with its elements coherently oriented, as
+    `SimplicialComplex` requires.
+
+    Neighboring elements are made to induce opposite orientations on their
+    shared (n-1)-face (see `coherent_orientation`). The first element of
+    each piece connected through faces keeps its orientation; an element
+    that must be reversed has its last two vertices swapped. Vertices and
+    element order are unchanged.
+
+    Args:
+        mesh: A pseudomanifold mesh.
+
+    Returns:
+        A copy of `mesh` that `SimplicialComplex` accepts.
+
+    Raises:
+        If the elements are malformed, or the mesh is not a pseudomanifold
+        or not orientable.
+    """
+    var signs = coherent_orientation(mesh.elements)
+    if not signs:
+        raise Error("orient_coherently: the mesh is not orientable")
+    var out = mesh.copy()
+    var K = cols_of(out.elements)
+    ref s = signs.value()
+    for t in range(len(s)):
+        if s[t] < 0:
+            var a = iget(out.elements, t, K - 2)
+            iset(out.elements, t, K - 2, iget(out.elements, t, K - 1))
+            iset(out.elements, t, K - 1, a)
+    return out^

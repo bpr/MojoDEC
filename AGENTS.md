@@ -114,6 +114,12 @@ Key design points that span several files:
   `d`/`boundary` `CSRMatrix`es, `simplex_to_index(s)`/`index_to_simplex(i)`
   lookups (binary search over the sorted rows, no per-level dictionary), and geometry
   (circumcenters, primal/dual volumes, diagonal Hodge `star`/`star_inv`).
+  The constructor raises unless the elements form a coherently
+  oriented pseudomanifold (`require_coherent_orientation` in
+  `routines/simplex_array.mojo`, on the top-level boundary);
+  `orient_coherently(mesh)` fixes an orientable mesh, so tests of
+  non-manifold or non-orientable input use `coherent_orientation` on the
+  element array instead.
   Geometry is computed eagerly at construction, unlike PyDEC's lazy
   `__getattr__`; `compute_geometry=False` skips it for degenerate meshes.
   `simplex_array_boundary` builds `d` directly (k+1 entries per row) and
@@ -190,7 +196,14 @@ Key design points that span several files:
 - Other complex types (`AbstractSimplicialComplex`, `RipsComplex`,
   `RegularCubeComplex`) expose the same neighborhood API
   (`star`/`closure`/`link`/`boundary`/`interior`, `euler_characteristic`),
-  implemented on top of `routines/topology.mojo`.
+  implemented on top of `routines/topology.mojo`, and the same
+  `betti_numbers`/`relative_betti_numbers`/`non_manifold_cells`/
+  `is_homology_manifold` methods, which pass
+  `chain_complex()` to `routines/homology.mojo` (sparse column reduction
+  modulo a 30-bit prime; `_betti_of` touches only the given cells, so
+  per-cell link checks cost the size of the link). `ChainComplex` checks `B_k B_{k+1} = 0` and
+  `d_k = B_{k+1}^T` when built. `len(cells)` on a `CellSet` counts cells;
+  `len(cells.levels)` is the number of dimensions.
 - **`mojodec.vis`** uses matplotlib via Python interop and is intentionally
   *not* re-exported from `mojodec`, so non-plotting programs never load
   Python. `pyplot(interactive=show_requested())` uses Agg unless `--show`

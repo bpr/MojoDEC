@@ -51,8 +51,9 @@ struct ChainComplex(CellComplex, Copyable, Movable, Sized, Writable):
                 empty for a complex of vertices only.
 
         Raises:
-            If the shapes do not chain: `B_1` must have `num_vertices` rows
-            and `B_{k+1}` as many rows as `B_k` has columns.
+            If the shapes do not chain (`B_1` must have `num_vertices` rows
+            and `B_{k+1}` as many rows as `B_k` has columns), or
+            `B_k B_{k+1}` is not zero.
         """
         var coboundaries = List[CSRMatrix](capacity=len(boundaries))
         for ref B in boundaries:
@@ -70,11 +71,13 @@ struct ChainComplex(CellComplex, Copyable, Movable, Sized, Writable):
         Args:
             num_vertices: `N_0`, the number of 0-cells.
             boundaries: `B_1, ..., B_n`.
-            coboundaries: `d_0, ..., d_{n-1}`, with `d_k = B_{k+1}^T`; only
-                their shapes are checked.
+            coboundaries: `d_0, ..., d_{n-1}`, with `d_k = B_{k+1}^T`.
 
         Raises:
-            If the shapes do not chain or the lists differ in length.
+            If the lists differ in length, the shapes do not chain, a
+            coboundary is not the transpose of its boundary, or
+            `B_k B_{k+1}` is not zero (to rounding: entries at most `1e-12`
+            times the largest possible product term sum).
         """
         if len(boundaries) != len(coboundaries):
             raise Error("ChainComplex: boundary and coboundary counts differ")
@@ -104,6 +107,28 @@ struct ChainComplex(CellComplex, Copyable, Movable, Sized, Writable):
                     )
                 )
             self._num_cells.append(B.ncols)
+        for k in range(len(boundaries)):
+            if (coboundaries[k] - boundaries[k].transpose()).max_abs() != 0:
+                raise Error(
+                    String("ChainComplex: d_", k, " is not B_", k + 1, "^T")
+                )
+        for k in range(len(boundaries) - 1):
+            ref A = boundaries[k]
+            ref B = boundaries[k + 1]
+            var width = 0
+            for r in range(A.nrows):
+                width = max(width, A.indptr[r + 1] - A.indptr[r])
+            var tol = 1e-12 * Float64(width) * A.max_abs() * B.max_abs()
+            if (A @ B).max_abs() > tol:
+                raise Error(
+                    String(
+                        "ChainComplex: B_",
+                        k + 1,
+                        " B_",
+                        k + 2,
+                        " is not zero; the boundary of a boundary must vanish",
+                    )
+                )
         self._boundary = boundaries^
         self._coboundary = coboundaries^
 

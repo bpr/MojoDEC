@@ -16,8 +16,10 @@ from mojodec.core.utils import (
     int_array,
     int_vector,
     lexsort_rows,
+    require_distinct_simplices,
     rows_of,
     cols_of,
+    sort_each_row,
 )
 
 
@@ -245,3 +247,154 @@ def simplex_array_boundary(
     var d = CSRMatrix(num_simplices, len(unique_rows), indptr^, indices^, data^)
     var B = d.transpose()
     return FacesAndBoundary(unique_faces^, B^, d^)
+
+
+def _row_string(a: IntArray, i: Int) -> String:
+    var out = String("[")
+    var c = cols_of(a)
+    for j in range(c):
+        if j > 0:
+            out += ", "
+        out += String(Int(a.unsafe_get(i * c + j)))
+    return out + "]"
+
+
+def _element_signs(
+    boundary: CSRMatrix, coboundary: CSRMatrix
+) -> Optional[List[Int]]:
+    """Signs making the elements coherent, or None if there are none.
+
+    `boundary` is the `num_faces x num_elements` boundary of the elements,
+    with at most two entries per row; `coboundary` its transpose. The first
+    element of each piece connected through faces keeps its sign.
+    """
+    var N = boundary.ncols
+    var sign = List[Int](length=N, fill=0)
+    var stack = List[Int]()
+    for root in range(N):
+        if sign[root] != 0:
+            continue
+        sign[root] = 1
+        stack.append(root)
+        while len(stack) > 0:
+            var t = stack.pop()
+            for p in range(coboundary.indptr[t], coboundary.indptr[t + 1]):
+                var f = coboundary.indices[p]
+                var lo = boundary.indptr[f]
+                if boundary.indptr[f + 1] - lo != 2:
+                    continue
+                var a = boundary.indices[lo]
+                var u = boundary.indices[lo + 1] if a == t else a
+                # s_t B[f,t] + s_u B[f,u] = 0, entries +-1
+                var want = -sign[t] * Int(
+                    boundary.data[lo] * boundary.data[lo + 1]
+                )
+                if sign[u] == 0:
+                    sign[u] = want
+                    stack.append(u)
+                elif sign[u] != want:
+                    return None
+    return sign^
+
+
+def _require_pseudomanifold(
+    faces: IntArray, boundary: CSRMatrix, who: String
+) raises:
+    for f in range(boundary.nrows):
+        var count = boundary.indptr[f + 1] - boundary.indptr[f]
+        if count > 2:
+            raise Error(
+                who,
+                ": not a pseudomanifold: the face ",
+                _row_string(faces, f),
+                " is shared by ",
+                count,
+                " elements",
+            )
+
+
+def require_coherent_orientation(
+    faces: IntArray, boundary: CSRMatrix, coboundary: CSRMatrix, who: String
+) raises:
+    """Raise unless the elements form a coherently oriented pseudomanifold.
+
+    Args:
+        faces: The `(n-1)`-faces of the elements, sorted rows.
+        boundary: The `num_faces x num_elements` boundary of the elements,
+            signed by their orientations (`simplex_array_boundary`).
+        coboundary: Its transpose.
+        who: The caller, named in the error message.
+
+    Raises:
+        If a face is shared by three or more elements, or two elements
+        induce the same orientation on their shared face (the message says
+        whether the mesh is orientable at all).
+    """
+    _require_pseudomanifold(faces, boundary, who)
+    for f in range(boundary.nrows):
+        var lo = boundary.indptr[f]
+        if boundary.indptr[f + 1] - lo != 2:
+            continue
+        if boundary.data[lo] + boundary.data[lo + 1] == 0:
+            continue
+        var t = boundary.indices[lo]
+        var u = boundary.indices[lo + 1]
+        if not _element_signs(boundary, coboundary):
+            raise Error(
+                who,
+                ": the mesh is not orientable (elements ",
+                t,
+                " and ",
+                u,
+                " induce the same orientation on their face ",
+                _row_string(faces, f),
+                ")",
+            )
+        raise Error(
+            who,
+            ": elements ",
+            t,
+            " and ",
+            u,
+            " induce the same orientation on their face ",
+            _row_string(faces, f),
+            "; orient_coherently(mesh) reorients the elements",
+        )
+
+
+def coherent_orientation(elements: IntArray) raises -> Optional[List[Int]]:
+    """Signs that make a mesh's elements coherently oriented.
+
+    Coherent means two elements sharing an (n-1)-face induce opposite
+    orientations on it, as `SimplicialComplex` requires. Walks from element
+    to element across shared faces; the first element of each piece
+    connected through faces keeps its orientation.
+
+    ```mojo
+    # coherent_orientation([[0,1,2],[1,2,3]])  ->  [1, 1]
+    # coherent_orientation([[0,1,2],[2,1,3]])  ->  [1, -1]
+    ```
+
+    Args:
+        elements: `N x (n+1)` vertex lists; their order gives the
+            orientation.
+
+    Returns:
+        One sign per element, `1` to keep its orientation and `-1` to
+        reverse it, or `None` if no choice is coherent (e.g. a Möbius band).
+        All ones for points (n = 0).
+
+    Raises:
+        If an element repeats a vertex, two elements have the same
+        vertices, or a face is shared by three or more elements.
+    """
+    var N = rows_of(elements)
+    if cols_of(elements) < 2:
+        return List[Int](length=N, fill=1)
+    var s = elements.copy()
+    var parity = simplex_array_parity(s)
+    sort_each_row(s)
+    require_distinct_simplices(s, "coherent_orientation")
+    var fb = simplex_array_boundary(s, parity)
+    _require_pseudomanifold(fb.faces, fb.boundary, "coherent_orientation")
+    return _element_signs(fb.boundary, fb.coboundary)

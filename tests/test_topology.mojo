@@ -19,7 +19,24 @@ from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.subset import Subset
 from mojodec.routines.io.meshio import read_mesh
-from mojodec.routines.mesh_generation import icosphere, simplicial_grid_2d
+from mojodec.core.mesh import SimplicialMesh
+from mojodec.core.utils import (
+    IntArray,
+    cols_of,
+    iget,
+    iset,
+    rows_of,
+    sort_each_row,
+)
+from mojodec.routines.simplex_array import (
+    coherent_orientation,
+    simplex_array_parity,
+)
+from mojodec.routines.mesh_generation import (
+    icosphere,
+    orient_coherently,
+    simplicial_grid_2d,
+)
 from mojodec.routines.topology import (
     boundary_of,
     closure_of,
@@ -214,6 +231,17 @@ def test_chain_complex() raises:
             sc[0].num_simplices,
             [sc[1].boundary.copy(), sc[1].boundary.copy()],
         )
+    # the boundary of a boundary must vanish
+    var bad = sc[2].boundary.copy()
+    bad.data[0] = -bad.data[0]
+    with assert_raises(contains="B_1 B_2 is not zero"):
+        _ = ChainComplex(sc[0].num_simplices, [sc[1].boundary.copy(), bad^])
+    with assert_raises(contains="d_1 is not B_2^T"):
+        _ = ChainComplex(
+            sc[0].num_simplices,
+            [sc[1].boundary.copy(), sc[2].boundary.copy()],
+            [sc[0].d.copy(), sc[1].d * 2.0],
+        )
 
 
 def test_other_complexes() raises:
@@ -335,6 +363,133 @@ def test_errors() raises:
     var grid = SimplicialComplex(vt)
     with assert_raises(contains="count differs"):
         _ = sc.star(cells(grid, [[0]]))
+
+
+def flip_every_third(mesh: SimplicialMesh) raises -> SimplicialMesh:
+    """`mesh` with elements 1, 4, 7, ... reversed (first two vertices
+    swapped, unlike `orient_coherently`)."""
+    var out = mesh.copy()
+    for t in range(1, rows_of(out.elements), 3):
+        var a = iget(out.elements, t, 0)
+        iset(out.elements, t, 0, iget(out.elements, t, 1))
+        iset(out.elements, t, 1, a)
+    return out^
+
+
+def assert_same_orientation(a: IntArray, b: IntArray) raises:
+    """Each row of `a` is an even permutation of the same row of `b`."""
+    var sa = a.copy()
+    var sb = b.copy()
+    var pa = simplex_array_parity(sa)
+    var pb = simplex_array_parity(sb)
+    sort_each_row(sa)
+    sort_each_row(sb)
+    for t in range(rows_of(a)):
+        for j in range(cols_of(a)):
+            assert_equal(iget(sa, t, j), iget(sb, t, j))
+        assert_equal(pa.unsafe_get(t), pb.unsafe_get(t), String("element ", t))
+
+
+def all_ones(signs: List[Int]) -> Bool:
+    for s in signs:
+        if s != 1:
+            return False
+    return True
+
+
+def test_oriented_meshes() raises:
+    var meshes = List[SimplicialMesh]()
+    meshes.append(simplicial_grid_2d(4))
+    meshes.append(icosphere(2))
+    meshes.append(read_mesh("tests/meshes/torus_tet.xml"))
+    for ref mesh in meshes:
+        assert_true(all_ones(coherent_orientation(mesh.elements).value()))
+        _ = SimplicialComplex(mesh)
+
+
+def test_orient_coherently() raises:
+    var meshes = List[SimplicialMesh]()
+    meshes.append(simplicial_grid_2d(4))
+    meshes.append(icosphere(1))
+    meshes.append(read_mesh("tests/meshes/torus_tet.xml"))
+    for ref mesh in meshes:
+        var flipped = flip_every_third(mesh)
+        with assert_raises(contains="orient_coherently(mesh) reorients"):
+            _ = SimplicialComplex(flipped)
+        # connected, element 0 kept: exactly the flipped elements reverse
+        var signs = coherent_orientation(flipped.elements).value().copy()
+        for t in range(len(signs)):
+            assert_equal(signs[t], -1 if t % 3 == 1 else 1)
+        var fixed = orient_coherently(flipped)
+        assert_same_orientation(fixed.elements, mesh.elements)
+        # a constant dual 0-cochain is closed on interior faces
+        var sc = SimplicialComplex(fixed)
+        var n = sc.complex_dimension()
+        ref B = sc[n].boundary
+        for f in range(B.nrows):
+            if B.indptr[f + 1] - B.indptr[f] == 2:
+                assert_equal(B.data[B.indptr[f]] + B.data[B.indptr[f] + 1], 0.0)
+
+
+def test_orientation_of_pieces() raises:
+    # two triangles touching at a vertex (no shared edge), and a separate
+    # coherent pair
+    var V = nm.zeros[f64](Shape(8, 2))
+    var S = nm.fromstring[DType.int]("[[0,1,2],[2,3,4],[5,6,7],[6,5,4]]")
+    assert_true(all_ones(coherent_orientation(S).value()))
+    _ = SimplicialComplex(SimplicialMesh(V, S), compute_geometry=False)
+    # the second pair with one triangle reversed
+    var T = nm.fromstring[DType.int]("[[0,1,2],[2,3,4],[5,6,7],[5,6,4]]")
+    with assert_raises(contains="elements 2 and 3 induce the same"):
+        _ = SimplicialComplex(SimplicialMesh(V, T), compute_geometry=False)
+    var signs = coherent_orientation(T).value().copy()
+    assert_equal(signs[0], 1)
+    assert_equal(signs[1], 1)
+    assert_equal(signs[2], 1)
+    assert_equal(signs[3], -1)
+    _ = SimplicialComplex(
+        orient_coherently(SimplicialMesh(V, T)), compute_geometry=False
+    )
+
+
+def test_moebius_band_is_rejected() raises:
+    # the 5-vertex Moebius band: triangles {i, i+1, i+2} mod 5
+    var V = nm.zeros[f64](Shape(5, 3))
+    var S = nm.fromstring[DType.int](
+        "[[0,1,2],[1,2,3],[2,3,4],[3,4,0],[4,0,1]]"
+    )
+    var mesh = SimplicialMesh(V, S)
+    assert_false(Bool(coherent_orientation(S)))
+    with assert_raises(contains="not orientable"):
+        _ = SimplicialComplex(mesh, compute_geometry=False)
+    with assert_raises(contains="not orientable"):
+        _ = orient_coherently(mesh)
+
+
+def test_non_pseudomanifold_is_rejected() raises:
+    # three triangles on one edge
+    var V = nm.zeros[f64](Shape(5, 3))
+    var S = nm.fromstring[DType.int]("[[0,1,2],[1,0,3],[0,1,4]]")
+    with assert_raises(contains="the face [0, 1] is shared by 3 elements"):
+        _ = SimplicialComplex(SimplicialMesh(V, S), compute_geometry=False)
+    with assert_raises(contains="not a pseudomanifold"):
+        _ = coherent_orientation(S)
+    with assert_raises(contains="not a pseudomanifold"):
+        _ = orient_coherently(SimplicialMesh(V, S))
+    # three edges at a vertex
+    var E = nm.fromstring[DType.int]("[[0,1],[0,2],[0,3]]")
+    with assert_raises(contains="the face [0] is shared by 3"):
+        _ = SimplicialComplex(SimplicialMesh(V, E), compute_geometry=False)
+    # a path of edges must run head to tail
+    var path = nm.fromstring[DType.int]("[[0,1],[2,1],[2,3]]")
+    with assert_raises(contains="orient_coherently"):
+        _ = SimplicialComplex(SimplicialMesh(V, path), compute_geometry=False)
+    var fixed = orient_coherently(SimplicialMesh(V, path))
+    _ = SimplicialComplex(fixed, compute_geometry=False)
+    # dimension 0: points are trivially oriented
+    var P = nm.fromstring[DType.int]("[[0],[1],[2]]")
+    assert_equal(len(coherent_orientation(P).value()), 3)
+    _ = SimplicialComplex(SimplicialMesh(V, P), compute_geometry=False)
 
 
 def main() raises:

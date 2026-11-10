@@ -29,6 +29,11 @@ from mojodec.routines.simplex_array import simplex_array_searchsorted
 from mojodec.core.cell_set import CellComplex, CellSet
 from mojodec.core.chain_complex import ChainComplex
 from mojodec.core.subset import Subset
+from mojodec.routines.homology import (
+    betti_numbers as _betti_numbers,
+    non_manifold_cells as _non_manifold_cells,
+    relative_betti_numbers as _relative_betti_numbers,
+)
 from mojodec.routines.topology import (
     boundary_of,
     closure_of,
@@ -99,6 +104,88 @@ struct RipsComplex(CellComplex, Copyable, Movable):
             The number of columns of `vertices`.
         """
         return cols_of(self.vertices)
+
+    def betti_numbers(self) raises -> List[Int]:
+        """The Betti numbers over the rationals; see
+        `mojodec.routines.homology`.
+
+        Returns:
+            `b_0, ..., b_n`: the numbers of connected pieces, independent
+            loops, enclosed voids, and so on.
+
+        Raises:
+            Never in practice.
+        """
+        return _betti_numbers(self.chain_complex())
+
+    def betti_numbers(self, cells: CellSet) raises -> List[Int]:
+        """The Betti numbers of a subcomplex, such as a link.
+
+        Args:
+            cells: A subcomplex: every face of a cell in it is in it.
+
+        Returns:
+            `b_0, ..., b_n` of the subcomplex.
+
+        Raises:
+            If `cells` does not belong to the complex or is not closed.
+        """
+        return _betti_numbers(self.chain_complex(), cells)
+
+    def relative_betti_numbers(self) raises -> List[Int]:
+        """The Betti numbers relative to the boundary, `b_k(K, ∂K)`.
+
+        Count the harmonic forms that vanish on the boundary; for an
+        orientable manifold, `b_k(K, ∂K) = b_{n-k}(K)`.
+
+        Returns:
+            `b_0, ..., b_n` of the pair (complex, `boundary_cells()`).
+
+        Raises:
+            Never in practice.
+        """
+        return _relative_betti_numbers(
+            self.chain_complex(), self.boundary_cells()
+        )
+
+    def relative_betti_numbers(self, sub: CellSet) raises -> List[Int]:
+        """The Betti numbers of the pair (complex, `sub`).
+
+        Args:
+            sub: A subcomplex: every face of a cell in it is in it.
+
+        Returns:
+            `b_0, ..., b_n` of the pair.
+
+        Raises:
+            If `sub` does not belong to the complex or is not closed.
+        """
+        return _relative_betti_numbers(self.chain_complex(), sub)
+
+    def non_manifold_cells(self) raises -> CellSet:
+        """The cells around which the complex is not a homology manifold;
+        see `mojodec.routines.homology.non_manifold_cells`.
+
+        Returns:
+            The cells whose links have the wrong homology; empty for a
+            homology manifold.
+
+        Raises:
+            Never in practice.
+        """
+        return _non_manifold_cells(self.chain_complex())
+
+    def is_homology_manifold(self) raises -> Bool:
+        """Whether every cell's link has the homology of a sphere (inside)
+        or of a point (on the boundary).
+
+        Returns:
+            True if `non_manifold_cells()` is empty.
+
+        Raises:
+            Never in practice.
+        """
+        return self.non_manifold_cells().is_empty()
 
     def chain_complex(self) -> ref[self._chains] ChainComplex:
         """The boundary operators `B_k` and coboundary operators `d_k`.

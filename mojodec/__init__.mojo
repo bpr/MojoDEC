@@ -82,6 +82,7 @@ from mojodec.routines.simplex_array import (
     simplex_array_searchsorted,
     simplex_array_parity,
     simplex_array_boundary,
+    coherent_orientation,
 )
 from mojodec.routines.cube_array import cube_array_search, cube_array_boundary
 from mojodec.routines.combinatorial import (
@@ -117,12 +118,18 @@ from mojodec.routines.linalg import (
 from mojodec.routines.dense import (
     EighResult,
 )
+from mojodec.routines.homology import (
+    betti_numbers,
+    non_manifold_cells,
+    relative_betti_numbers,
+)
 from mojodec.routines.mesh_generation import (
     CubeGrid,
     simplicial_grid_2d,
     cube_grid,
     triangulate_ncube,
     loop_subdivision,
+    orient_coherently,
     icosahedron,
     icosphere,
 )
