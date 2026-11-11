@@ -122,6 +122,11 @@ from mojodec.routines.dense import (
     EighResult,
 )
 from mojodec.routines.time import Leapfrog, TypedLeapfrog
+from mojodec.routines.quadrature import (
+    QuadratureRule,
+    grundmann_moeller,
+    integrate_simplices,
+)
 from mojodec.routines.homology import (
     betti_numbers,
     non_manifold_cells,

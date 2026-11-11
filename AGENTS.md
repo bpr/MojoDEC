@@ -229,6 +229,13 @@ Key design points that span several files:
   exactly flat. All simplices of a cell share the cell center as
   circumcenter, so diagonal simplices have zero dual volume: test with
   `whitney_innerproduct`, not `star_inv`.
+- **Quadrature** (`routines/quadrature.mojo`): `grundmann_moeller(n,
+  degree)` gives barycentric nodes and weights summing to 1 (degree
+  rounded up to odd, capped at `MAX_DEGREE = 21` because the negative
+  weights' cancellation costs digits); integrands are
+  `def(List[Float64]) raises -> Float64` functions or closures taking
+  Cartesian coordinates. `integrate_simplices` integrates densities
+  (unsigned volume), not k-forms.
 - **Time stepping** (`routines/time.mojo`): `Leapfrog` takes diagonal
   masses `Mq`, `Mp` and one coupling `K` and steps `Mq q' = K p`,
   `Mp p' = -K^T q`, so the system is skew by construction; it raises on

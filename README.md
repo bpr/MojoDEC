@@ -139,6 +139,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/topology.mojo` — `star_of`, `closure_of`, `link_of`, `boundary_of`, `interior_of` | (new) |
 | `mojodec/routines/homology.mojo` — `betti_numbers`, `relative_betti_numbers`, `non_manifold_cells` | (new) |
 | `mojodec/routines/time.mojo` — `Leapfrog`, `TypedLeapfrog` | (new) |
+| `mojodec/routines/quadrature.mojo` — `grundmann_moeller`, `QuadratureRule`, `integrate_simplices` | (new) |
 | `mojodec/vis/draw.mojo` — `triplot`, `lineplot`, `lineplot2`, `simplex_quivers`, `cube_quivers` | `vis/draw.py` |
 
 ## Plotting
@@ -441,6 +442,10 @@ the published mathematics:
   circumcentric dual is the dual cube grid, so diagonal simplices have
   zero dual volume; with Whitney forms the 0-form stiffness is exactly the
   finite-difference Laplacian, which the tests check entry by entry.
+- **Quadrature on simplices** (`grundmann_moeller`, `integrate_simplices`):
+  Grundmann–Möller rules for any dimension and odd degree up to 21, exact
+  for polynomials of that degree, applied to one simplex or to every
+  k-simplex of a complex with a function or closure as the integrand.
 - **Backward errors of eigenpairs.** `eig.residuals(K, M)` gives each
   pair's `||K x - lambda M x|| / ((||K|| + |lambda| ||M||) ||x||)`, the
   relative change of `K` and `M` that would make it exact: scale-free, so

@@ -15,6 +15,9 @@ how to use it, and what can go wrong.
   flat tori in any dimension, why the torus in R^(2d) is exactly flat,
   the circumcentric dual being the dual cube grid, the Whitney stiffness
   equal to finite differences, and closed-form spectra.
+- **[Quadrature](quadrature.md)**: Grundmann–Möller rules on simplices
+  of any dimension and odd degree, their negative weights and the degree
+  limit, and integrating functions over the simplices of a mesh.
 - **[Linear solvers](linear-solvers.md)**: putting DEC systems in
   symmetric form, the `LinearOperator` and `Preconditioner` traits,
   conjugate gradients and preconditioning, MINRES for saddle points,
