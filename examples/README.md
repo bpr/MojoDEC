@@ -62,7 +62,7 @@ show the figures, and the PNG files are still written.
 |---|---|---|---|---|
 | Ranking | least-squares ranking of a graph's vertices from edge data | printed | — | — |
 | RipsComplex | Rips complex of 300 random points and a harmonic 1-chain, which outlines the holes in coverage | `harmonic.txt` | `nodes.png`, `complex.png`, `harmonic.png` (edge width ∝ \|h\|) | `harmonic.vtu` |
-| HodgeDecomposition | four harmonic 1-cochains on a square with four holes | `harmonic.txt` | `harmonic_0.png` … `harmonic_3.png` | `harmonic.vtu` |
+| HodgeDecomposition | four harmonic 1-cochains on a square with four holes, each circulating once around one hole (from integer cocycles) | `harmonic.txt` | `harmonic_0.png` … `harmonic_3.png` | `harmonic.vtu` |
 | DarcyFlow | Darcy flow through a square: pressures and fluxes | `pressures.txt` | `pressures.png` (vs. exact), `flux.png` (velocity field) | `darcy.vtu` |
 | HeatConduction | steady heat flow through a plate of two materials, meshed by Gmsh: its physical groups give the hot, cold, and insulated edges and the material regions | `temperature.txt` | `temperature.png` (over the plate), `profile.png` (vs. exact, along x) | `heat.vtu` |
 | ResonantCavity | eigenvalues of the curl-curl operator on a square cavity, and one eigenmode | `eigenvalues.txt`, `mode3.txt` | `eigenvalues.png`, `mode3.png` | `mode3.vtu` |

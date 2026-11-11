@@ -135,6 +135,11 @@ from mojodec.routines.quadrature import (
     grundmann_moeller,
     integrate_simplices,
 )
+from mojodec.routines.cohomology import (
+    CohomologyBasis,
+    cohomology_basis,
+    harmonic_basis,
+)
 from mojodec.routines.homology import (
     betti_numbers,
     non_manifold_cells,

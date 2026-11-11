@@ -138,6 +138,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/core/cell_set.mojo` — `CellSet`, `CellComplex` | (new) |
 | `mojodec/routines/topology.mojo` — `star_of`, `closure_of`, `link_of`, `boundary_of`, `interior_of` | (new) |
 | `mojodec/routines/homology.mojo` — `betti_numbers`, `relative_betti_numbers`, `non_manifold_cells` | (new) |
+| `mojodec/routines/cohomology.mojo` — `cohomology_basis`, `CohomologyBasis`, `harmonic_basis` | (new) |
 | `mojodec/routines/time.mojo` — `Leapfrog`, `TypedLeapfrog` | (new) |
 | `mojodec/routines/quadrature.mojo` — `grundmann_moeller`, `QuadratureRule`, `integrate_simplices` | (new) |
 | `mojodec/routines/derham.mojo` — `derham_map`, `whitney_form`, `l2_projection`, `whitney_load`, `l2_error`, `form_index_sets` | (new) |
@@ -243,6 +244,13 @@ the published mathematics:
   The tests check Lefschetz duality on the solid torus, spheres as links
   of interior vertices, and that the projective plane gets `[1, 0, 0]`
   (over Z/2 it would be `[1, 1, 1]`).
+- **Cohomology bases and harmonic forms** (`cohomology_basis`,
+  `harmonic_basis`): `b_k` integer cocycles and dual cycles with
+  `<z_i, c_j> = delta_ij`, from exact integer elimination (on a surface,
+  a tree and cotree), and the harmonic cochain with period 1 around each
+  cycle, `h = z - d p` with `d^T M d p = d^T M z` solved by MINRES, in the
+  Hodge star or any mass matrix. The count needs no eigenvalue tolerance.
+  HodgeDecomposition uses it in place of random cochains.
 - **Homology-manifold check** on every complex type:
   `non_manifold_cells()` gives the cells whose link does not have the
   homology of a sphere (inside) or a point (on the boundary), such as the
@@ -617,7 +625,7 @@ from your own program.
 |---|---|
 | Ranking | matches PyDEC's ranking |
 | RipsComplex | same complex as PyDEC (300 / 2831 / 10955 simplices), harmonic chain with norm 7.6274 |
-| HodgeDecomposition | four harmonic 1-cochains with `|d h|, |δ h|` ≈ 0 (see below) |
+| HodgeDecomposition | four harmonic 1-cochains from integer cocycles, periods around the holes the identity, `|d h|` 2e-16, `|δ h|` 7e-11; a random cochain's harmonic part is their combination to 2e-7 (see below) |
 | DarcyFlow | pressures agree with the exact solution to 1e-14 |
 | HeatConduction | mesh and boundary pieces from a Gmsh file; the piecewise-linear temperature through two materials to 7e-15, and the heat in through the hot edge equals the heat out through the cold one and the exact 25/26 (not from PyDEC) |
 | ResonantCavity | eigenvalues 1, 1, 2, 4, 4, 5, 5, 8, 9, 9, 10, 10, 13, 13, … (the exact m²+n²); largest backward error 7e-15 |
@@ -632,7 +640,10 @@ from your own program.
 does not converge (PyDEC's call to SciPy's `cg` returns `info > 0`), and
 the resulting "harmonic" forms are not harmonic. MojoDEC solves that
 system with LSQR, and the 0-cochain system in its symmetric form with
-preconditioned CG (see *Symmetric solvers check symmetry* above).
+preconditioned CG (see *Symmetric solvers check symmetry* above). The
+basis itself comes from `harmonic_basis`, one form per hole, rather than
+from four random cochains; the decomposition of one random cochain checks
+it.
 
 **DarcyFlow, HeatConduction, ResonantCavity, and CavityWaves** are written with the
 typed layer (`TypedComplex`, typed operators and solves); the others use

@@ -11,6 +11,10 @@ how to use it, and what can go wrong.
   and pairs; what they say about harmonic forms; rational coefficients
   and how the ranks are computed; homology manifolds and
   `non_manifold_cells`.
+- **[Cohomology bases and harmonic forms](cohomology.md)**: integer
+  cocycles and dual cycles by exact elimination (`cohomology_basis`),
+  periods, and a harmonic basis with period 1 around each hole
+  (`harmonic_basis`) in the Hodge star or the Whitney inner product.
 - **[Kuhn grids and flat tori](kuhn-grids-and-tori.md)**: boxes and
   flat tori in any dimension, why the torus in R^(2d) is exactly flat,
   the circumcentric dual being the dual cube grid, the Whitney stiffness

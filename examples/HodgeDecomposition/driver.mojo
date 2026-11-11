@@ -1,5 +1,11 @@
 # Compute a harmonic 1-cochain basis for a square with 4 holes.
 #
+# The basis comes from integer cocycles (cohomology_basis): one per hole,
+# made harmonic by removing its exact part (harmonic_basis), so harmonic
+# form i circulates once around hole i and not around the others. PyDEC's
+# driver decomposes four random cochains instead; this one decomposes one
+# and checks that its harmonic part lies in the span of the basis.
+#
 # Run from the repository root:  pixi run examples HodgeDecomposition [--show]
 # or from this directory:  pixi run mojo run -I ../.. -I ../../build driver.mojo [--show]
 # --show also opens the figures in windows (see examples/README.md).
@@ -7,7 +13,6 @@
 # plots each one to harmonic_<n>.png. harmonic.vtu holds all four, sampled
 # at the triangle barycenters, for ParaView.
 
-from std.math import sqrt
 import numojo as nm
 from numojo.prelude import *
 
@@ -20,12 +25,13 @@ from mojodec import (
     d,
     delta,
     cg,
+    cohomology_basis,
+    harmonic_basis,
     lsqr,
     read_mesh,
 )
 from mojodec.core.utils import (
     RealArray,
-    dot,
     norm2,
     real_array,
     rows_of,
@@ -73,36 +79,6 @@ def hodge_decomposition(
     return (alpha^, beta^, h^)
 
 
-def ortho(var A: RealArray) raises -> RealArray:
-    """Separate the harmonic forms stored in the rows of A with Householder reflections.
-    """
-    var m = rows_of(A)
-    var n = cols_of(A)
-    for i in range(m):
-        var j = 0
-        for c in range(n):
-            if abs(fget(A, i, c)) > abs(fget(A, i, j)):
-                j = c
-        var v = List[Float64](capacity=m)
-        var vn: Float64 = 0
-        for r in range(m):
-            v.append(fget(A, r, j))
-            vn += v[r] * v[r]
-        vn = sqrt(vn)
-        v[i] += vn if fget(A, i, j) > 0 else -vn
-        var vv: Float64 = 0
-        for r in range(m):
-            vv += v[r] * v[r]
-        # A = (I - 2 v v^T / v^T v) A
-        for c in range(n):
-            var s: Float64 = 0
-            for r in range(m):
-                s += v[r] * fget(A, r, c)
-            for r in range(m):
-                fset(A, r, c, fget(A, r, c) - 2 * v[r] * s / vv)
-    return A^
-
-
 def main() raises:
     nm.random.seed(1)  # make results consistent
 
@@ -132,53 +108,62 @@ def main() raises:
         negative,
     )
 
-    var H = List[RealArray]()  # harmonic forms
-    # decompose 4 random 1-cochains
-    for _ in range(4):
-        var omega = sc.get_cochain(1)
-        omega.v = nm.random.rand[f64](Shape(omega.v.size))
-        var abh = hodge_decomposition(omega)
-        var h = abh[2].v.copy()
-        for ref v in H:
-            var c = dot(v, h)
-            for t in range(h.size):
-                h.unsafe_set(t, h.unsafe_get(t) - c * v.unsafe_get(t))
-        var hn = norm2(h)
-        for t in range(h.size):
-            h.unsafe_set(t, h.unsafe_get(t) / hn)
-        H.append(h^)
-
-    var stacked = real_array(4, H[0].size)
-    for r in range(4):
-        for c in range(H[0].size):
-            fset(stacked, r, c, H[r].unsafe_get(c))
-    stacked = ortho(stacked^)
-
-    # each row is harmonic: d h = 0 and delta h = 0
-    for r in range(4):
-        var hc = sc.get_cochain(1)
-        for c in range(hc.v.size):
-            hc[c] = fget(stacked, r, c)
+    # one integer cocycle per hole, made harmonic in the star inner product
+    var basis = cohomology_basis(sc, 1)
+    var H = harmonic_basis(sc, 1)
+    print(
+        "b_1 =",
+        len(basis),
+        "(Betti numbers",
+        sc.betti_numbers(),
+        "); periods of each harmonic 1-cochain around the holes:",
+    )
+    for r in range(len(H)):
+        var p = basis.periods(H[r])
         print(
             "harmonic 1-cochain",
             r,
-            ": |d h| =",
-            norm2(d(hc).v),
+            ": periods",
+            p,
+            " |d h| =",
+            norm2(d(H[r]).v),
             " |delta h| =",
-            norm2(delta(hc).v),
+            norm2(delta(H[r]).v),
         )
+
+    # PyDEC's way: the harmonic part of a random cochain. Being closed, it
+    # is determined by its periods, so it should equal sum_j p_j H[j].
+    var omega = sc.get_cochain(1)
+    omega.v = nm.random.rand[f64](Shape(omega.v.size))
+    var h = hodge_decomposition(omega)[2].copy()
+    var p = basis.periods(h)
+    var diff = h.v.copy()
+    for j in range(len(H)):
+        for t in range(diff.size):
+            diff.unsafe_set(t, diff.unsafe_get(t) - p[j] * H[j].v.unsafe_get(t))
+    print(
+        "harmonic part of a random 1-cochain: periods",
+        p,
+        "; |h - sum p_j H_j| / |h| =",
+        norm2(diff) / norm2(h.v),
+    )
+
+    var stacked = real_array(len(H), H[0].v.size)
+    for r in range(len(H)):
+        for c in range(H[0].v.size):
+            fset(stacked, r, c, H[r].v.unsafe_get(c))
 
     with open("harmonic.txt", "w") as f:
         for c in range(cols_of(stacked)):
-            for r in range(4):
-                f.write(fget(stacked, r, c), " " if r < 3 else "\n")
+            for r in range(len(H)):
+                f.write(fget(stacked, r, c), " " if r < len(H) - 1 else "\n")
     print("wrote harmonic.txt")
 
     # plot the results
     var show = show_requested()
     var plt = pyplot(interactive=show)
     var fields = List[VTKField]()
-    for n in range(4):
+    for n in range(len(H)):
         var h = sc.get_cochain(1)
         for c in range(h.v.size):
             h[c] = fget(stacked, n, c)

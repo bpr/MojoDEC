@@ -249,6 +249,14 @@ Key design points that span several files:
   `l2_error`; `l2_projection` solves `M c = b` with Jacobi-PCG and raises
   if CG stops. `tests/test_convergence.mojo` holds the rate tests
   (thresholds just below the measured rates in `docs/guide/convergence.md`).
+- **Cohomology** (`routines/cohomology.mojo`): `cohomology_basis` runs
+  two exact integer column reductions (lowest pivot, as persistence):
+  the boundary of the k-simplices gives the gauge set `G` (and, tracked,
+  the dual cycles), the coboundary of the rest gives the cocycles. It
+  raises if a pivot does not divide (torsion) instead of going rational.
+  `harmonic_basis` solves `d^T M d p = d^T M z` with Jacobi-MINRES
+  (singular, consistent; the star may be indefinite) and returns
+  `z - d p`; the periods stay the identity.
 - **Time stepping** (`routines/time.mojo`): `Leapfrog` takes diagonal
   masses `Mq`, `Mp` and one coupling `K` and steps `Mq q' = K p`,
   `Mp p' = -K^T q`, so the system is skew by construction; it raises on

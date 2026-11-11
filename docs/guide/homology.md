@@ -51,6 +51,9 @@ products; a well-centered mesh guarantees it). So:
 - a Poisson problem on 0-cochains has one constant in its kernel per
   connected piece ($b_0$).
 
+To compute the harmonic cochains themselves, one per class with period 1
+around its cycle, see [Cohomology bases and harmonic forms](cohomology.md).
+
 With a boundary, the boundary conditions decide which homology counts:
 harmonic forms whose tangential part vanishes on the boundary (Dirichlet,
 "relative" conditions) number $b_k(K, \partial K)$, and those whose normal
