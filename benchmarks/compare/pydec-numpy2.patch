@@ -1,0 +1,11 @@
+--- a/pydec/pydec/fem/innerproduct.py
++++ b/pydec/pydec/fem/innerproduct.py
+@@ -127,7 +127,7 @@
+ 
+     ## COMPUTATION
+     if k == 1:
+-        Fdet = lambda x : x #det for 1x1 matrices - extend
++        Fdet = lambda x : x.item() #det for 1x1 matrices - extend
+     else:
+         # scipy.linalg.flinalg was removed in SciPy 1.13.1
+         #Fdet, = scipy.linalg.flinalg.get_flinalg_funcs(('det',),(complex.vertices,))

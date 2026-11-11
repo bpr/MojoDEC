@@ -1,0 +1,16 @@
+# dexterior's and formoniq's side of the cross-library comparison; see
+# ../README.md. Both are pinned to the commits the results were taken at.
+[package]
+name = "dec-compare"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+dexterior = { git = "https://codeberg.org/molentum/dexterior", rev = "9b0f37907f0a8dcc2ac5b8d30c2209792b455bea" }
+formoniq = { git = "https://github.com/luiswirth/formoniq", rev = "710139e05dc1b1cd6cf0906c1471115594812c65" }
+simplicial = { git = "https://github.com/luiswirth/formoniq", rev = "710139e05dc1b1cd6cf0906c1471115594812c65" }
+regge = { git = "https://github.com/luiswirth/formoniq", rev = "710139e05dc1b1cd6cf0906c1471115594812c65" }
+
+[profile.release]
+codegen-units = 1

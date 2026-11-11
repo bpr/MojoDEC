@@ -45,6 +45,10 @@ how to use it, and what can go wrong.
 - **[Time stepping](time-stepping.md)**: the leapfrog for Maxwell's
   equations and other wave systems, its conserved energy, the stability
   limit, dispersion, mesh requirements, and boundary conditions.
+- **[Performance against other DEC libraries](performance.md)**: build,
+  geometry, and Whitney matrices timed against PyDEC, dexterior, and
+  formoniq on the same meshes, with checks that they compute the same
+  numbers, and what the results say about MojoDEC's parallel scaling.
 
 The repository's `README.md` covers installation, a tour of complexes,
 cochains, and operators, the differences from PyDEC, and the examples.

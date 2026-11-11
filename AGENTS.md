@@ -25,6 +25,7 @@ pixi run examples                     # all examples; figures saved as PNG
 pixi run examples DarcyFlow --show    # one example, figures in windows
 pixi run test-release                 # tests with -D ASSERT=none (also examples-release)
 pixi run bench                        # timings of the parallel loops (release build)
+pixi run bench-compare                # vs PyDEC, dexterior, formoniq (benchmarks/compare)
 pixi run package                      # build/mojodec.mojoc
 pixi run format                       # mojo format mojodec tests examples
 pixi run doc-check                    # doc string warnings vs docs/docstring-baseline.txt
@@ -53,7 +54,10 @@ there); `mojodec/prelude.mojo` is the small common subset.
   (`examples/run.sh` cds into it) and writes outputs that `.gitignore`
   excludes.
 - `third_party/numojo`: vendored NuMojo (see Toolchain).
-- `benchmarks/`: timings of the parallel loops.
+- `benchmarks/`: timings of the parallel loops; `benchmarks/compare/`
+  times MojoDEC against PyDEC, dexterior, and formoniq on shared meshes
+  (Rust crate pinned by git rev, PyDEC cloned and patched into
+  `build/compare`, scipy from the `bench` pixi environment).
 - `docs/`: doc string guide, doc-check baseline, MkDocs sources.
 - `conda.recipe/`: rattler-build recipe and package smoke test; see
   `docs/publishing.md` and `docs/community-edition.md` (the submission
@@ -311,8 +315,9 @@ Key design points that span several files:
 work (POSIX threads cost 20–50 µs), so thresholds are set where the serial
 loop takes a few hundred µs: matvec at `PARALLEL_NNZ` (1M stored entries),
 circumcenters and primal volumes at 50k simplices, `whitney_innerproduct`
-at 4096 top simplices. Bodies must not raise: record failures per chunk
-and raise afterwards. Keep a hot serial loop out of a function that also
+at 4096 top simplices. `MOJODEC_NUM_THREADS=k` caps the chunks at k (1 runs
+everything serially, for single-threaded benchmarks). Bodies must not
+raise: record failures per chunk and raise afterwards. Keep a hot serial loop out of a function that also
 holds the parallel branch (`CSRMatrix._matvec_parallel` is separate): in
 the same function the serial loop ran about 15% slower. Dual volumes stay
 serial (each top simplex adds into shared faces). `tests/test_parallel.mojo`

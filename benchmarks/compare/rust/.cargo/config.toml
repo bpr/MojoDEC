@@ -1,0 +1,3 @@
+# Mojo compiles for the host CPU; so does this crate.
+[build]
+rustflags = ["-C", "target-cpu=native"]

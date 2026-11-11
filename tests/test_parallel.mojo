@@ -1,4 +1,6 @@
 from std.math import sqrt
+from std.os import setenv, unsetenv
+from std.sys import num_physical_cores
 from std.testing import (
     TestSuite,
     assert_almost_equal,
@@ -42,6 +44,21 @@ def test_parallel_ranges_covers_once() raises:
     # below the threshold: one chunk on the calling thread
     assert_equal(num_chunks(10, 100), 1)
     assert_equal(num_chunks(0, 0), 0)
+
+
+def test_num_threads_env_caps_chunks() raises:
+    var cores = num_physical_cores()
+    _ = setenv("MOJODEC_NUM_THREADS", "1")
+    assert_equal(num_chunks(100_000, 0), 1)
+    _ = setenv("MOJODEC_NUM_THREADS", "2")
+    assert_equal(num_chunks(100_000, 0), min(2, cores))
+    # not a positive integer: ignored
+    _ = setenv("MOJODEC_NUM_THREADS", "zero")
+    assert_equal(num_chunks(100_000, 0), cores)
+    _ = setenv("MOJODEC_NUM_THREADS", "0")
+    assert_equal(num_chunks(100_000, 0), cores)
+    _ = unsetenv("MOJODEC_NUM_THREADS")
+    assert_equal(num_chunks(100_000, 0), cores)
 
 
 def test_large_geometry() raises:

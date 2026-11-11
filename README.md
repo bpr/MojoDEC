@@ -80,6 +80,7 @@ pixi run examples                    # every example; figures saved as PNG
 pixi run examples DarcyFlow --show   # one example, figures in windows
 pixi run examples-release            # the same with bounds checks compiled out
 pixi run bench                       # timings of the parallel loops
+pixi run bench-compare               # vs PyDEC, dexterior, formoniq
 pixi run format
 ```
 
@@ -382,7 +383,8 @@ the published mathematics:
   (from 50k simplices), Whitney mass matrices (from 4096 top simplices),
   and sparse matrix-vector products in `cg` and `lsqr` (from 1M stored
   entries), through MAX's `parallelize`. Smaller problems run serially, and
-  the results are the same either way.
+  the results are the same either way. `MOJODEC_NUM_THREADS=k` caps the
+  threads at k.
 - **`icosahedron` and `icosphere`**, closed surfaces to test on.
 - **`read_ply` and `write_ply`**, for meshes from MeshLab, Blender, and
   scanners (ASCII and binary, either byte order; `write_ply` takes

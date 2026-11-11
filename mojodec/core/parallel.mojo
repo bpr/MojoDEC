@@ -22,11 +22,17 @@ def body(chunk: Int, lo: Int, hi: Int) {op}:
 parallel_ranges(n, 50_000, body)
 ```
 
+Setting the environment variable `MOJODEC_NUM_THREADS` to a positive
+integer caps the number of chunks (so `MOJODEC_NUM_THREADS=1` runs every
+loop serially, as single-threaded benchmarks need); unset, or not a
+positive integer, it leaves one chunk per physical core.
+
 The body must not raise, and chunks must write to disjoint memory. A loop
 that can fail records it at its chunk index (there are `num_chunks(n,
 serial_below)` of them) and raises after `parallel_ranges` returns.
 """
 
+from std.os import getenv
 from std.sys import num_physical_cores
 
 from max.algorithm import parallelize
@@ -41,13 +47,33 @@ def num_chunks(n: Int, serial_below: Int) -> Int:
 
     Returns:
         0 when `n <= 0`; 1 when `n < serial_below`; else the number of
-        physical cores, at most `n`.
+        physical cores (or `MOJODEC_NUM_THREADS`, if smaller), at most `n`.
     """
     if n <= 0:
         return 0
     if n < serial_below:
         return 1
-    return max(1, min(n, num_physical_cores()))
+    return max(1, min(n, max_threads()))
+
+
+def max_threads() -> Int:
+    """The most chunks a parallel loop is split into.
+
+    Returns:
+        The number of physical cores, or the value of the environment
+        variable `MOJODEC_NUM_THREADS` when it is a smaller positive integer.
+    """
+    var cores = num_physical_cores()
+    var s = getenv("MOJODEC_NUM_THREADS")
+    if not s:
+        return cores
+    try:
+        var cap = atol(s)
+        if cap > 0:
+            return min(cap, cores)
+    except:
+        pass
+    return cores
 
 
 def parallel_ranges[
