@@ -25,7 +25,12 @@ from mojodec.routines.mesh_generation import (
     loop_subdivision,
     kuhn_grid,
     flat_torus,
+    klein_bottle,
+    mobius_band,
+    orient_coherently,
 )
+from mojodec.core.abstract_simplicial_complex import AbstractSimplicialComplex
+from mojodec.routines.simplex_array import coherent_orientation
 
 
 def test_simplicial_grid_2d() raises:
@@ -335,6 +340,55 @@ def test_flat_torus_spectrum_and_harmonic_forms() raises:
         var co = t3[0].d.transpose() @ (W1 @ w)
         for i in range(co.size):
             assert_almost_equal(co.unsafe_get(i), 0.0, atol=1e-14, rtol=0)
+
+
+def test_non_orientable_surfaces() raises:
+    # the Möbius band and the Klein bottle: homology manifolds that no
+    # orientation makes coherent, so SimplicialComplex refuses them
+    var band = mobius_band(12, 2)
+    var klein = klein_bottle([6, 5])
+    assert_equal(rows_of(band.vertices), 36)
+    assert_equal(rows_of(band.elements), 48)
+    assert_equal(rows_of(klein.vertices), 30)
+    assert_equal(rows_of(klein.elements), 60)
+    for which in range(2):
+        var m = band.copy() if which == 0 else klein.copy()
+        assert_true(not coherent_orientation(m.elements))
+        with assert_raises(
+            contains="orient_coherently: the mesh is not orientable"
+        ):
+            _ = orient_coherently(m)
+        with assert_raises(contains="the mesh is not orientable"):
+            _ = SimplicialComplex(m)
+        # orientation does not matter to rational homology or to the
+        # manifold check
+        var asc = AbstractSimplicialComplex([m.elements.copy()])
+        var b = asc.betti_numbers()
+        assert_equal(b[0], 1)
+        assert_equal(b[1], 1)
+        assert_equal(b[2], 0)
+        assert_equal(asc.euler_characteristic(), 0)
+        assert_true(asc.is_homology_manifold())
+    # the band's boundary is one circle twice as long as the band
+    var bd = AbstractSimplicialComplex([band.elements.copy()]).boundary_cells()
+    assert_equal(len(bd[1].indices()), 24)
+    assert_equal(len(bd[0].indices()), 24)
+    assert_equal(
+        len(
+            AbstractSimplicialComplex([klein.elements.copy()])
+            .boundary_cells()[1]
+            .indices()
+        ),
+        0,
+    )
+    # the flat strip and torus glued without a flip are orientable
+    _ = SimplicialComplex(flat_torus([6, 5]))
+    with assert_raises(contains="segments >= 3"):
+        _ = mobius_band(2)
+    with assert_raises(contains="width must be in (0, 2)"):
+        _ = mobius_band(5, 1, 2.0)
+    with assert_raises(contains="each at least 3"):
+        _ = klein_bottle([6, 2])
 
 
 def main() raises:

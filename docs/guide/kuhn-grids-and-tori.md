@@ -250,6 +250,41 @@ $\pi^2$ with multiplicity 2, from $m = (0, \pm 1)$. The computed pair
 equals $\lambda_h = 9.99708\ldots$ to $10^{-11}$, 1.3% above
 $\pi^2 = 9.8696$.
 
+## Gluing with a flip: the Möbius band and the Klein bottle
+
+Gluing two sides of a 2D grid with a flip instead of a shift gives
+non-orientable surfaces. MojoDEC has them as test meshes:
+
+```mojo
+var band = mobius_band(12, 2)        # 12 steps around, 2 across, in R^3
+var klein = klein_bottle([6, 5])     # periodic in v, flipped in u, in R^4
+```
+
+- **`mobius_band(segments, across, width)`** glues the strip at $u = 2\pi$
+  with $w \mapsto -w$. Its coordinates are
+  $((1 + w\cos\tfrac u2)\cos u, (1 + w \cos\tfrac u2)\sin u, w\sin\tfrac u2)$.
+  Its boundary is one circle, twice as long as the band.
+- **`klein_bottle([n_u, n_v])`** is the flat torus's grid with the seam at
+  $u = 2\pi$ flipped, $v \mapsto -v$. Its coordinates are
+  $((2 + \cos v)\cos u, (2 + \cos v)\sin u, \sin v \cos\tfrac u2,
+  \sin v\sin\tfrac u2)$, an embedding in $\mathbb R^4$: the half angles
+  change sign together with $\sin v$ across the seam, so the map is
+  well defined on the quotient.
+
+Every triangle keeps the grid's orientation, so the two triangles at a
+flipped seam induce the same orientation on their shared edge. No choice
+of signs repairs that, which is what non-orientable means:
+- `coherent_orientation` returns `None`;
+- `orient_coherently` raises;
+- `SimplicialComplex` refuses them with "the mesh is not orientable".
+
+Their topology is available through `AbstractSimplicialComplex`, which
+needs no orientation: both have rational Betti numbers $[1, 1, 0]$ and
+Euler characteristic 0, and both are homology manifolds. Over
+$\mathbb Z/2$, the Klein bottle's would be $[1, 2, 1]$. The rank
+computation works modulo a large prime, so it sees the rational ones (see
+[Homology](homology.md)).
+
 ## Pitfalls
 
 - **Zero dual volumes.** Use `whitney_innerproduct`, not `sc[k].star_inv`
@@ -278,3 +313,6 @@ $\pi^2 = 9.8696$.
   above.
 - `test_flat_torus_spectrum_and_harmonic_forms`: the closed-form discrete
   eigenvalue, and the constant 1-forms being closed and coclosed.
+- `test_non_orientable_surfaces`: the Möbius band and the Klein bottle
+  refused by every orientation check; their Betti numbers, Euler
+  characteristic, manifold check, and boundaries.

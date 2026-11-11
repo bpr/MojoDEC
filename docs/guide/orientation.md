@@ -133,7 +133,8 @@ A Möbius band, a Klein bottle, or the projective plane cannot be a
 operators to use. Their *topology* is still available through
 `AbstractSimplicialComplex`, which has no orientation requirement: Betti
 numbers, links, and the homology-manifold check all work on it (see
-[Homology](homology.md)).
+[Homology](homology.md)). `mobius_band` and `klein_bottle` generate such
+meshes of any size (see [Kuhn grids](kuhn-grids-and-tori.md)).
 
 ## Tests to read
 
@@ -141,3 +142,5 @@ numbers, links, and the homology-manifold check all work on it (see
 element of a grid, an icosphere, and a tetrahedral torus and checks that the
 walk finds exactly those; `test_moebius_band_is_rejected` uses the 5-vertex
 Möbius band, triangles $\{i, i+1, i+2\} \bmod 5$.
+`tests/test_mesh_generation.mojo`, `test_non_orientable_surfaces`: larger
+Möbius bands and Klein bottles from the generators.

@@ -164,6 +164,48 @@ solve. This holds only for closed $\omega$. For a general cochain, the
 coexact part also has periods, and the harmonic part comes from a full
 Hodge decomposition.
 
+## Dirichlet conditions: relative cohomology
+
+The forms above satisfy the natural (Neumann) condition at a boundary,
+$d^T M h = 0$ on every row. They count $b_k(K)$ and circulate around holes.
+Harmonic forms with **Dirichlet** conditions instead vanish on the
+boundary k-simplices. They count $b_k(K, \partial K)$, which by Lefschetz
+duality is $b_{n-k}(K)$ for an orientable manifold. For a domain in the
+plane, $b_1(K, \partial K)$ is again the number of holes, but the forms
+are different: they flow *from* one boundary piece *to* another.
+
+Every function above takes a subcomplex $L$, usually
+`sc.boundary_cells()`:
+
+```mojo
+var bd = sc.boundary_cells()
+var rel = cohomology_basis(sc, 1, bd)        # b_1(K, dK) relative cocycles
+var D = harmonic_basis(sc, 1, bd)            # Dirichlet-harmonic, star
+var Dw = harmonic_basis(sc, 1, whitney_innerproduct(sc, 1), bd)
+```
+
+**Relative cochains** vanish on $L$. Since $L$ is closed under taking
+faces, $d$ maps them to relative cochains, and the elimination is the
+same with the cells of $L$ removed from both reductions:
+- a **relative cocycle** is zero on $L$ and closed;
+- a **relative cycle** is a chain off $L$ whose boundary lies in $L$, such
+  as a path from one boundary piece to another.
+
+The pairing is again exactly the identity.
+
+**The harmonic representative** removes $dp$ with $p$ also vanishing on
+$L$. It solves $(d^T M d)\, p = d^T M z$ only on the rows and columns of
+the (k-1)-simplices off $L$. So $h$ is zero on $L$, closed, and coclosed
+at every (k-1)-simplex off $L$. At the boundary itself nothing is imposed,
+which is what a Dirichlet condition means.
+
+For the plane with holes and $k = 1$, these are exactly the gradients
+$h = du$ of the functions $u$ that are discrete harmonic inside, 1 on the
+boundary of one hole, and 0 on the other boundary pieces. The tests check
+that the Whitney basis spans these to $10^{-10}$. In the top degree,
+$b_n(K, \partial K) = b_0(K)$: one area form per connected piece, and with
+the star it is the area form over the total area.
+
 ## Typed API
 
 ```mojo
@@ -172,7 +214,9 @@ var H = harmonic_basis[1](tc)                          # star
 var Hw = harmonic_basis(tc, whitney_innerproduct[1](tc))
 ```
 
-Both give `List[TypedCochain[n, k, PRIMAL]]`. The mass matrix must have
+Both give `List[TypedCochain[n, k, PRIMAL]]`, and both take a
+subcomplex after the other arguments for the relative versions:
+`harmonic_basis[1](tc, bd)`, `harmonic_basis(tc, W1, bd)`. The mass matrix must have
 the Hodge star's kind, from primal k-cochains to dual (n-k)-cochains, and
 must be built on the same complex.
 
@@ -194,11 +238,11 @@ hole.
 
 ## Pitfalls
 
-- **Boundaries give absolute cohomology.** On a mesh with boundary,
-  $d^T M h = 0$ is the natural (Neumann) condition, so the forms counted
-  are $b_k(K)$: circulations around holes, not flows between boundary
-  pieces. Harmonic forms with Dirichlet conditions, counted by the
-  relative Betti numbers, are not computed here.
+- **Which boundary condition.** Without a subcomplex, the forms satisfy
+  the natural (Neumann) condition and circulate around holes. With
+  `sc.boundary_cells()`, they vanish on the boundary and flow between
+  boundary pieces. Pass a different subcomplex for mixed conditions, such
+  as only the outer boundary.
 - **An indefinite star.** On a mesh that is not well-centered, some
   entries of `sc[k].star` can be negative. Then the star is not an inner
   product, and "harmonic" is with respect to an indefinite form. MINRES
@@ -232,4 +276,13 @@ hole.
   are the component indicators.
 - `test_square_with_holes`: both inner products, periods, and the periods
   of a cocycle plus a coboundary.
-- `test_typed` and `test_errors`.
+- `test_relative_counts_and_duality`: on holed and disconnected squares,
+  a solid torus, and a cube, the relative counts equal
+  `relative_betti_numbers()` and $b_{n-k}$. The cocycles vanish on the
+  boundary, the relative cycles have their boundary in it, and the
+  pairing is the identity.
+- `test_dirichlet_harmonic_forms`: the Dirichlet 1-forms against $du$,
+  zero on boundary edges, coclosed inside; the relative 2-form is the
+  area form.
+- `test_typed` and `test_errors`, including a set that is not closed
+  under faces.

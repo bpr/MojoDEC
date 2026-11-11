@@ -27,7 +27,9 @@ Beyond PyDEC, MojoDEC adds:
 - coherent orientation checks: complexes must be coherently oriented
   pseudomanifolds, and `orient_coherently` fixes an orientable mesh
 - explicit leapfrog time stepping (Yee's scheme) with an exactly
-  conserved energy, for Maxwell's equations and other wave systems
+  conserved energy, for Maxwell's equations and other wave systems, and
+  the implicit midpoint rule for the same systems (with a Whitney mass, any
+  step) and for diffusion (Crank–Nicolson)
 - cell subsets for boundary conditions: bitsets of primal or dual cells
   with set operations, boundary and coboundary, the mesh boundary in every
   dimension, and `exclude_subset` / `restrict_to_subset` on operators
@@ -139,7 +141,8 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/topology.mojo` — `star_of`, `closure_of`, `link_of`, `boundary_of`, `interior_of` | (new) |
 | `mojodec/routines/homology.mojo` — `betti_numbers`, `relative_betti_numbers`, `non_manifold_cells` | (new) |
 | `mojodec/routines/cohomology.mojo` — `cohomology_basis`, `CohomologyBasis`, `harmonic_basis` | (new) |
-| `mojodec/routines/time.mojo` — `Leapfrog`, `TypedLeapfrog` | (new) |
+| `mojodec/routines/refinement.mojo` — `refine`, `Refinement` (`prolongation`) | (new) |
+| `mojodec/routines/time.mojo` — `Leapfrog`, `ImplicitMidpoint`, `CrankNicolson` (and typed versions) | (new) |
 | `mojodec/routines/quadrature.mojo` — `grundmann_moeller`, `QuadratureRule`, `integrate_simplices` | (new) |
 | `mojodec/routines/derham.mojo` — `derham_map`, `whitney_form`, `l2_projection`, `whitney_load`, `l2_error`, `form_index_sets` | (new) |
 | `mojodec/vis/draw.mojo` — `triplot`, `lineplot`, `lineplot2`, `simplex_quivers`, `cube_quivers` | `vis/draw.py` |
@@ -250,7 +253,9 @@ the published mathematics:
   a tree and cotree), and the harmonic cochain with period 1 around each
   cycle, `h = z - d p` with `d^T M d p = d^T M z` solved by MINRES, in the
   Hodge star or any mass matrix. The count needs no eigenvalue tolerance.
-  HodgeDecomposition uses it in place of random cochains.
+  HodgeDecomposition uses it in place of random cochains. Given a
+  subcomplex such as `sc.boundary_cells()`, both give relative classes
+  and the harmonic forms with Dirichlet conditions (`b_k(K, dK)` of them).
 - **Homology-manifold check** on every complex type:
   `non_manifold_cells()` gives the cells whose link does not have the
   homology of a sphere (inside) or a point (on the boundary), such as the
@@ -428,6 +433,13 @@ the published mathematics:
   kind, or a `K` into the wrong kind) fails to compile.
 - **The CavityWaves example**, Maxwell's equations stepped in time in an
   equilateral-triangle cavity.
+- **Implicit midpoint and Crank–Nicolson** (`ImplicitMidpoint`,
+  `CrankNicolson`, typed versions): the wave system with any symmetric
+  positive definite mass for `q` (the Whitney mass) and a diagonal one for
+  `p`, one SPD solve per step, unconditionally stable and conserving the
+  plain energy exactly. Maxwell then runs on meshes that are not
+  well-centered. `CrankNicolson` steps `M u' = -K u + f` with monotone
+  energy decay and the steady state as its limit.
 - **Operator traits, preconditioned CG, and MINRES.** `cg` and `minres`
   take any `LinearOperator` (`CSRMatrix`, `DiagonalOperator`, the typed
   ops, a `BlockOp` applied block by block) and, as `M=`, any
@@ -451,6 +463,8 @@ the published mathematics:
   circumcentric dual is the dual cube grid, so diagonal simplices have
   zero dual volume; with Whitney forms the 0-form stiffness is exactly the
   finite-difference Laplacian, which the tests check entry by entry.
+  `mobius_band` and `klein_bottle` glue a 2D grid with a flip: test meshes
+  that every orientation check refuses.
 - **Quadrature on simplices** (`grundmann_moeller`, `integrate_simplices`):
   Grundmann–Möller rules for any dimension and odd degree up to 21, exact
   for polynomials of that degree, applied to one simplex or to every
@@ -468,6 +482,20 @@ the published mathematics:
   Kuhn grids in 1–3D for every degree: 2 for 0-forms, 1 above, the
   projection never worse than `W R`, and Poisson's equation second order
   within 5 times the best approximation.
+- **Uniform refinement and prolongation** (`refine`,
+  `Refinement.prolongation`): Freudenthal subdivision of every element
+  into 2^n children in any dimension, conforming, coherently oriented,
+  and with a vertex numbering that keeps the number of shapes bounded
+  (3 for tetrahedra over any number of levels); the exact prolongation
+  `P_k = R_fine W_coarse` of k-cochains, which commutes with `d` and
+  preserves the Whitney inner products. The convergence tests use it for
+  Poisson on nested irregular meshes and a two-level error estimate.
+- **Mixed Hodge Laplacian and block preconditioners.** The convergence
+  tests solve Arnold–Falk–Winther's mixed formulation on 1- and 2-forms
+  (first order in `sigma`, `u`, and `du`). `BlockDiagonal(P1, P2)` makes a
+  preconditioner of two, and `DenseCholesky(A)` applies `A^-1` exactly on
+  small problems; with the blocks' natural norms MINRES takes 7
+  iterations at every mesh size, where Jacobi takes 79 to 424.
 - **Backward errors of eigenpairs.** `eig.residuals(K, M)` gives each
   pair's `||K x - lambda M x|| / ((||K|| + |lambda| ||M||) ||x||)`, the
   relative change of `K` and `M` that would make it exact: scale-free, so

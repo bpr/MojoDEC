@@ -8,6 +8,8 @@ from std.testing import (
 
 from mojodec import (
     SimplicialComplex,
+    cg,
+    jacobi,
     TypedComplex,
     cohomology_basis,
     d,
@@ -18,6 +20,7 @@ from mojodec import (
     read_mesh,
     whitney_innerproduct,
 )
+from mojodec.core.cell_set import CellSet
 from mojodec.core.cochain import Cochain
 from mojodec.core.primality import Primality
 from mojodec.core.sparse import CSRMatrix
@@ -271,6 +274,121 @@ def test_square_with_holes() raises:
     assert_almost_equal(p[1], 0.0, atol=1e-12, rtol=0)
 
 
+def test_relative_counts_and_duality() raises:
+    # relative to the boundary: b_k(K, dK) classes (Lefschetz: b_(n-k)),
+    # cocycles zero on the boundary and closed, cycles with boundary in
+    # it, pairing the identity
+    var complexes = List[SimplicialComplex]()
+    complexes.append(
+        _remove_cells([5, 5], [[0.2, 0.4, 0.2, 0.4], [0.6, 0.8, 0.6, 0.8]])
+    )
+    complexes.append(_remove_cells([5, 2], [[0.4, 0.6, 0.0, 1.0]]))
+    complexes.append(SimplicialComplex(read_mesh("tests/meshes/torus_tet.xml")))
+    complexes.append(SimplicialComplex(kuhn_grid([2, 2, 2])))
+    for ref sc in complexes:
+        var n = sc.complex_dimension()
+        var bd = sc.boundary_cells()
+        var rel = sc.relative_betti_numbers()
+        var b = sc.betti_numbers()
+        for k in range(n + 1):
+            assert_equal(rel[k], b[n - k])
+            var B = cohomology_basis(sc, k, bd)
+            assert_equal(len(B), rel[k])
+            var on_bd = bd[k].mask()
+            for i in range(len(B)):
+                ref z = B.cocycles[i].v
+                ref c = B.cycles[i]
+                for t in range(z.size):
+                    if on_bd[t]:
+                        assert_equal(z.unsafe_get(t), 0.0)
+                        assert_equal(c.unsafe_get(t), 0.0)
+                if k < n:
+                    var dz = sc[k].d @ z
+                    for t in range(dz.size):
+                        assert_equal(dz.unsafe_get(t), 0.0)
+                if k > 0:
+                    var below = bd[k - 1].mask()
+                    var bc = sc[k].boundary @ c
+                    for t in range(bc.size):
+                        if not below[t]:
+                            assert_equal(bc.unsafe_get(t), 0.0)
+                var p = B.periods(B.cocycles[i])
+                for j in range(len(B)):
+                    assert_equal(p[j], 1.0 if i == j else 0.0)
+
+
+def test_dirichlet_harmonic_forms() raises:
+    # on a square with two holes, the Dirichlet harmonic 1-forms are d u,
+    # u piecewise linear, harmonic inside, 1 on one hole and 0 on the other
+    # boundaries
+    var sc = _remove_cells([5, 5], [[0.2, 0.4, 0.2, 0.4], [0.6, 0.8, 0.6, 0.8]])
+    var bd = sc.boundary_cells()
+    var W1 = whitney_innerproduct(sc, 1)
+    var H = harmonic_basis(sc, 1, W1, bd)
+    var Hs = harmonic_basis(sc, 1, bd)
+    assert_equal(len(H), 2)
+    assert_equal(len(Hs), 2)
+    var K = sc[0].d.transpose() @ W1 @ sc[0].d
+    var on_bd = bd[0].mask()
+    var free = List[Int]()
+    for v in range(sc[0].num_simplices):
+        if not on_bd[v]:
+            free.append(v)
+    var du = List[RealArray]()
+    for hole in range(2):
+        var lo = 0.2 if hole == 0 else 0.6
+        var u = real_vector(sc[0].num_simplices)
+        for v in range(sc[0].num_simplices):
+            var x = fget(sc.vertices(), v, 0)
+            var y = fget(sc.vertices(), v, 1)
+            var eps = 1e-12
+            if (
+                on_bd[v]
+                and lo - eps <= x
+                and x <= lo + 0.2 + eps
+                and lo - eps <= y
+                and y <= lo + 0.2 + eps
+            ):
+                u.unsafe_set(v, 1.0)
+        # K_ff u_f = -K_fb u_b
+        var rhs_full = K @ u
+        var rhs = real_vector(len(free))
+        for i in range(len(free)):
+            rhs.unsafe_set(i, -rhs_full.unsafe_get(free[i]))
+        var Kf = K.select(free, free)
+        var uf = cg(Kf, rhs, M=jacobi(Kf), rtol=1e-14).take_x()
+        for i in range(len(free)):
+            u.unsafe_set(free[i], uf.unsafe_get(i))
+        du.append(sc[0].d @ u)
+    var on_bd1 = bd[1].mask()
+    for i in range(2):
+        assert_true(_fit_residual(H[i].v, du) < 1e-10)
+        for t in range(H[i].v.size):
+            if on_bd1[t]:
+                assert_equal(H[i].v.unsafe_get(t), 0.0)
+                assert_equal(Hs[i].v.unsafe_get(t), 0.0)
+        assert_true(norm2(d(Hs[i]).v) < 1e-14)
+        # coclosed at the interior vertices
+        var dl = delta(Hs[i]).v.copy()
+        for v in range(dl.size):
+            if not on_bd[v]:
+                assert_true(abs(dl.unsafe_get(v)) < 1e-9 * norm2(Hs[i].v))
+    # 2-forms: one class per piece; with the star it is the area form
+    var H2 = harmonic_basis(sc, 2, bd)
+    assert_equal(len(H2), 1)
+    var area: Float64 = 0
+    for t in range(sc[2].num_simplices):
+        area += sc[2].primal_volume.unsafe_get(t)
+    for t in range(sc[2].num_simplices):
+        assert_almost_equal(
+            abs(H2[0].v.unsafe_get(t)) * area,
+            sc[2].primal_volume.unsafe_get(t),
+            atol=1e-12,
+            rtol=0,
+        )
+    assert_equal(len(harmonic_basis(sc, 0, bd)), 0)
+
+
 def test_typed() raises:
     var sc = _remove_cells([4, 4], [[0.25, 0.5, 0.25, 0.5]])
     var tc = TypedComplex[2](sc)
@@ -283,6 +401,14 @@ def test_typed() raises:
     for t in range(U[0].v.size):
         assert_equal(H[0].v.unsafe_get(t), U[0].v.unsafe_get(t))
         assert_equal(Hw[0].v.unsafe_get(t), Uw[0].v.unsafe_get(t))
+    var bd = sc.boundary_cells()
+    var R = harmonic_basis[1](tc, bd)
+    var Rw = harmonic_basis(tc, whitney_innerproduct[1](tc), bd)
+    var UR = harmonic_basis(sc, 1, bd)
+    assert_equal(len(R), 1)
+    assert_equal(len(Rw), 1)
+    for t in range(UR[0].v.size):
+        assert_equal(R[0].v.unsafe_get(t), UR[0].v.unsafe_get(t))
     var other = TypedComplex[2](_remove_cells([4, 4], [[0.25, 0.5, 0.25, 0.5]]))
     with assert_raises(contains="different complex"):
         _ = harmonic_basis(tc, whitney_innerproduct[1](other))
@@ -298,6 +424,12 @@ def test_errors() raises:
         _ = harmonic_basis(sc, 3)
     with assert_raises(contains="M is not"):
         _ = harmonic_basis(sc, 1, whitney_innerproduct(sc, 0))
+    var square = SimplicialComplex(kuhn_grid([2, 2]))
+    var tops = CellSet.top_cells(square)  # triangles without their edges
+    with assert_raises(contains="not a subcomplex"):
+        _ = cohomology_basis(square, 1, tops)
+    with assert_raises(contains="not a subcomplex"):
+        _ = harmonic_basis(square, 1, tops)
     var B = cohomology_basis(sc, 1)
     with assert_raises(contains="primal 1-cochain"):
         _ = B.periods(sc.get_cochain(2))

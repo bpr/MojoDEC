@@ -210,7 +210,9 @@ Key design points that span several files:
   `Identity`, `MatrixOp`, `DiagonalOp`, and `BlockOp` (applied block by
   block) implement it. `Preconditioner` is a method-less marker for
   symmetric positive definite operators (`DiagonalOperator`, `DiagonalOp`,
-  `Identity`; never a general `CSRMatrix`). `cg` and `minres` are generic
+  `Identity`; never a general `CSRMatrix`). `BlockDiagonal(P1, P2)`
+  (`core/operator.mojo`) stacks two for 2 x 2 systems; `DenseCholesky`
+  (`routines/linalg.mojo`) is an exact dense inverse for small problems. `cg` and `minres` are generic
   over both, with `M=` keyword-only; the unpreconditioned overloads pass
   `Identity`, which reproduces the old iterates bit for bit. Both raise on
   a non-symmetric operator (`_require_symmetric`, two probe products) and
@@ -228,7 +230,10 @@ Key design points that span several files:
   `h / (2 sin(pi / n))` so the chords have length h and the complex is
   exactly flat. All simplices of a cell share the cell center as
   circumcenter, so diagonal simplices have zero dual volume: test with
-  `whitney_innerproduct`, not `star_inv`.
+  `whitney_innerproduct`, not `star_inv`. `mobius_band` and
+  `klein_bottle` (2D grids glued with a flip) are non-orientable test
+  meshes: `SimplicialComplex` refuses them; use
+  `AbstractSimplicialComplex`.
 - **Quadrature** (`routines/quadrature.mojo`): `grundmann_moeller(n,
   degree)` gives barycentric nodes and weights summing to 1 (degree
   rounded up to odd, capped at `MAX_DEGREE = 21` because the negative
@@ -256,14 +261,27 @@ Key design points that span several files:
   raises if a pivot does not divide (torsion) instead of going rational.
   `harmonic_basis` solves `d^T M d p = d^T M z` with Jacobi-MINRES
   (singular, consistent; the star may be indefinite) and returns
-  `z - d p`; the periods stay the identity.
+  `z - d p`; the periods stay the identity. The `relative_to` overloads
+  (Dirichlet) drop the subcomplex's cells from both reductions and solve
+  for `p` only off it.
+- **Refinement** (`routines/refinement.mojo`): `refine` splits each
+  element in its sorted vertex order by the Kuhn simplices of the doubled
+  simplex (`_template`, vertex codes `i (n+1) + j` for the midpoint of
+  `i`, `j`); fine vertices are numbered in lexicographic order of their
+  coarse pairs `(a, a)`/`(a, b)`, which makes sorted order the inherited
+  (Bey) order, so shapes stay bounded; don't renumber them old-first.
+  `prolongation(k)` integrates coarse Whitney forms over fine simplices
+  from barycentric coordinates alone, in integers (`_whitney_integral`).
 - **Time stepping** (`routines/time.mojo`): `Leapfrog` takes diagonal
   masses `Mq`, `Mp` and one coupling `K` and steps `Mq q' = K p`,
   `Mp p' = -K^T q`, so the system is skew by construction; it raises on
   non-positive masses (stars on meshes that are not well-centered) and on
   `dt` at or above the stability limit (power iteration). `TypedLeapfrog`
   infers its kinds from the operators and checks them with
-  `comptime assert`.
+  `comptime assert`. `ImplicitMidpoint` (any SPD `Mq`, diagonal `Mp`)
+  and `CrankNicolson` assemble one SPD matrix and solve each step with
+  Jacobi-PCG for the increment (CG starts from zero, so the tolerance is
+  relative to the change, not the state).
 - **`mojodec.vis`** uses matplotlib via Python interop and is intentionally
   *not* re-exported from `mojodec`, so non-plotting programs never load
   Python. `pyplot(interactive=show_requested())` uses Agg unless `--show`

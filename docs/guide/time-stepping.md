@@ -1,10 +1,18 @@
-# Time stepping: the leapfrog
+# Time stepping
 
-`Leapfrog` and `TypedLeapfrog` (in `mojodec.routines.time`) step linear
-wave systems in time with the explicit leapfrog, the Störmer–Verlet method,
-which for Maxwell's equations is Yee's scheme. With DEC's diagonal Hodge
-stars as mass matrices every step is explicit, and a discrete energy is
-conserved exactly, for any number of steps.
+`mojodec.routines.time` has three schemes:
+- **`Leapfrog`** steps linear wave systems explicitly. It is the
+  Störmer–Verlet method, which for Maxwell's equations is Yee's scheme.
+  With DEC's diagonal Hodge stars as mass matrices every step is explicit,
+  and a discrete energy is conserved exactly, for any number of steps.
+- **`ImplicitMidpoint`** steps the same systems with one solve per step. In
+  exchange it takes any symmetric positive definite mass for one field
+  (the Whitney mass), any time step, and conserves the plain energy.
+- **`CrankNicolson`** is the same rule for diffusion, $M u' = -K u + f$.
+
+Each has a typed version (`TypedLeapfrog`, `TypedImplicitMidpoint`,
+`TypedCrankNicolson`). Most of this page is about the leapfrog; the
+implicit schemes are described [at the end](#implicit-schemes).
 
 ## The systems it solves
 
@@ -244,18 +252,124 @@ equilateral-triangle cavity of side 1, cut into 256 equilateral triangles
 It writes `waves.txt`, `amplitude.png`, `energy.png`, and `waves.vtu`
 (the initial $E$ field and $B_z$ a quarter period later).
 
+## Implicit schemes
+
+The **implicit midpoint rule** evaluates the right-hand side at the
+midpoint of each step:
+
+$$
+M_q \frac{q_1 - q_0}{\Delta t} = K \, \frac{p_0 + p_1}{2}, \qquad
+M_p \frac{p_1 - p_0}{\Delta t} = -K^T \frac{q_0 + q_1}{2} .
+$$
+
+It is a Gauss–Legendre Runge–Kutta method with one stage: second order,
+symplectic, and A-stable. It conserves every quadratic invariant of the
+system exactly. Here that is the plain energy
+$\tfrac12 q^T M_q q + \tfrac12 p^T M_p p$, with no staggered correction and
+for **any** $\Delta t$.
+
+A mode of frequency $\omega$ turns by $\theta = 2 \arctan(\omega \Delta
+t / 2)$ per step, so
+
+$$
+\omega_{\Delta t} = \frac{2}{\Delta t} \arctan\frac{\omega \Delta t}{2}
+  \approx \omega \left(1 - \frac{(\omega \Delta t)^2}{12}\right),
+$$
+
+slightly slower than $\omega$; the leapfrog errs by half as much, in the
+other direction.
+Large steps are stable but resolve fast modes badly: at
+$\omega \Delta t = 2$ the phase per step is $\pi/2$ instead of 2.
+
+**One solve per step.** Write $q_m$, $p_m$ for the midpoint values and
+eliminate $p_m$:
+
+$$
+\Big(M_q + \frac{\Delta t^2}{4} K M_p^{-1} K^T\Big)\, q_m = M_q q_0 +
+\frac{\Delta t}{2} K p_0, \qquad p_m = p_0 - \frac{\Delta t}{2} M_p^{-1}
+K^T q_m ,
+$$
+
+then $q_1 = 2 q_m - q_0$ and $p_1 = 2 p_m - p_0$. The matrix is symmetric
+positive definite and is assembled once. Each step solves it with
+Jacobi-preconditioned CG for the change $q_m - q_0$, so the tolerance
+`rtol` (default $10^{-12}$) applies to that change and the energy stays
+constant to about that relative accuracy.
+
+This needs $M_p^{-1}$, so **$M_p$ must be diagonal**, while **$M_q$ may be
+any symmetric positive definite matrix**. For Maxwell's equations in 2D:
+- put $e$ on the edges with the Whitney mass `whitney_innerproduct(sc, 1)`;
+- put $b$ on the triangles with $\star_2 = 1/\text{area}$, which is
+  positive on every mesh.
+
+Then no well-centered or Delaunay mesh is needed. A Kuhn grid, whose
+diagonal edges have zero dual length, works; the leapfrog refuses it.
+
+```mojo
+var W1 = whitney_innerproduct[1](tc)
+var star2 = tc.star[2, PRIMAL]()
+var K = tc.d[1, PRIMAL]().T() @ star2.to_matrix_op()
+var im = TypedImplicitMidpoint(W1, star2, K, dt)   # any dt > 0
+im.step(e, b, steps=100)
+```
+
+**Crank–Nicolson** is the same rule for $M u' = -K u + f$, with $M$
+symmetric positive definite (a star or a Whitney mass) and $K$ symmetric
+positive semidefinite (a stiffness $d^T \star d$):
+
+$$
+\Big(M + \frac{\Delta t}{2} K\Big) u_1 = \Big(M - \frac{\Delta t}{2} K\Big)
+u_0 + \Delta t\, f .
+$$
+
+Without a source, $u^T M u$ and $u^T K u$ never increase. A mode with
+$K x = \lambda M x$ is multiplied by
+$g = (1 - \Delta t \lambda/2) / (1 + \Delta t \lambda / 2)$ per step.
+
+The scheme is A-stable but not L-stable: for $\Delta t \lambda \gg 1$,
+$g \to -1$. Stiff modes then flip sign every step and decay slowly, which
+shows as checkerboard oscillations after a rough start or a jump in the
+boundary data. Take a few small steps first, or smaller steps throughout,
+if that matters.
+
+With a constant source, `step(u, f, steps)` approaches the steady state
+$K u = f$. Here `f` is a load vector, such as `whitney_load` or a mass
+times nodal values; the typed version types it as the dual kind.
+
+**Boundary conditions.** Fix values the way the leapfrog does: drop the
+fixed cells from $q$ (or $u$) and from the rows of $K$ and the mass, as
+with `select(free, free)`. Nonzero Dirichlet data enters as a source.
+
 ## Limitations
 
-- Diagonal masses only (no Whitney mass, which needs a solve per step).
-- No sources, currents, or damping terms; the system is the skew one above.
-- Explicit only: stiff problems (heat flow, very fine meshes) need an
-  implicit scheme such as Crank–Nicolson, which MojoDEC does not have yet.
+- The leapfrog takes diagonal masses only. With a Whitney mass, use
+  `ImplicitMidpoint`.
+- No currents or damping terms in the wave schemes; the system is the skew
+  one above.
+- The implicit schemes are one-stage, so second order. Higher-order Gauss
+  or Radau IIA stages would need Kronecker block systems.
 
 ## Tests to read
 
-`tests/test_time.mojo`: an oscillator against $\cos(n\theta)$ for 1,000
-steps, the constructor's errors, and the Maxwell cavity mode checked
-against the dense eigensolver, including the stability limit.
+`tests/test_time.mojo`:
+- **Leapfrog:**
+  - an oscillator against $\cos(n\theta)$ for 1,000 steps;
+  - the constructor's errors;
+  - the Maxwell cavity mode against the dense eigensolver, including the
+    stability limit.
+- **Implicit midpoint:**
+  - the oscillator against $\cos(n\theta)$ with
+    $\theta = 2\arctan(\omega \Delta t/2)$, at twice the leapfrog's
+    limit, energy constant to $10^{-14}$;
+  - Maxwell on a Kuhn grid with the Whitney mass, which the leapfrog
+    refuses: the lowest mode turns as predicted to $10^{-10}$ over 200
+    steps, with energy constant to $10^{-12}$.
+- **Crank–Nicolson:**
+  - the slowest and stiffest modes against $g^n$, including $g < -0.9$ at
+    a large step;
+  - monotone decay of both energies;
+  - the steady state with the consistent and a lumped mass;
+  - the typed versions and the errors.
 
 ## Reference
 

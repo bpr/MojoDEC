@@ -11,7 +11,7 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.diagonal import DiagonalOperator
-from mojodec.core.operator import Identity
+from mojodec.core.operator import BlockDiagonal, Identity
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.utils import (
     RealArray,
@@ -22,6 +22,7 @@ from mojodec.core.utils import (
     norm2,
 )
 from mojodec.routines.linalg import (
+    DenseCholesky,
     StopReason,
     cg,
     eigh_generalized,
@@ -377,6 +378,50 @@ def test_preconditioned_minres() raises:
     assert_equal(same.iterations, plain.iterations)
     for i in range(n):
         assert_equal(same.x.unsafe_get(i), plain.x.unsafe_get(i))
+
+
+def test_dense_cholesky_and_block_diagonal() raises:
+    var n = 30
+    var A = laplacian_1d(n) + CSRMatrix.identity(n) * 0.5
+    var C = DenseCholesky(A)
+    var b = _rhs(n)
+    var y = real_vector(n)
+    C.apply_into(b, y)
+    var r = A @ y
+    for i in range(n):
+        assert_almost_equal(
+            r.unsafe_get(i), b.unsafe_get(i), atol=1e-13, rtol=0
+        )
+    # an exact preconditioner: CG converges in one step
+    var res = cg(A, b, M=DenseCholesky(A), rtol=1e-12)
+    assert_true(res.converged())
+    assert_true(res.iterations <= 1)
+    # diag(P1, P2) applies each block to its half
+    var P = BlockDiagonal(DiagonalOperator([2.0, 3.0]), DenseCholesky(A))
+    assert_equal(P.num_rows(), n + 2)
+    var x = real_vector(n + 2)
+    for i in range(n + 2):
+        x.unsafe_set(i, Float64(i + 1))
+    var z = real_vector(n + 2)
+    P.apply_into(x, z)
+    assert_equal(z.unsafe_get(0), 2.0)
+    assert_equal(z.unsafe_get(1), 6.0)
+    var tail = real_vector(n)
+    for i in range(n):
+        tail.unsafe_set(i, Float64(i + 3))
+    C.apply_into(tail, y)
+    for i in range(n):
+        assert_almost_equal(
+            z.unsafe_get(2 + i), y.unsafe_get(i), atol=1e-15, rtol=0
+        )
+    with assert_raises(contains="dimension mismatch"):
+        P.apply_into(real_vector(n), z)
+    with assert_raises(contains="not positive definite"):
+        _ = DenseCholesky(laplacian_1d(n) - CSRMatrix.identity(n) * 5.0)
+    with assert_raises(contains="not symmetric"):
+        _ = DenseCholesky(
+            CSRMatrix.from_dense(nm.fromstring[f64]("[[2, 1], [0, 2]]"))
+        )
 
 
 def test_solver_input_checks() raises:

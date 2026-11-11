@@ -17,7 +17,9 @@ circumcentric dual volumes are zero (the hypotenuses in 2D); use the
 Whitney inner products there, not the diagonal Hodge star's inverse.
 `flat_torus` glues opposite faces of the same grid and places it in
 R^(2d), each axis on a circle sized so the mesh is exactly the flat torus:
-a closed manifold with Betti numbers `binomial(d, k)`.
+a closed manifold with Betti numbers `binomial(d, k)`. `mobius_band` and
+`klein_bottle` glue a 2D grid with a flip: non-orientable surfaces, which
+`SimplicialComplex` refuses (test meshes for orientation checks).
 
 ```mojo
 var sc = SimplicialComplex(kuhn_grid([4, 4, 4]))        # 384 tetrahedra
@@ -608,6 +610,141 @@ def flat_torus(
             fset(vertices, v, 2 * a, r * cos(t))
             fset(vertices, v, 2 * a + 1, r * sin(t))
     return SimplicialMesh(vertices, _kuhn_elements(dims, dims, True))
+
+
+def mobius_band(
+    segments: Int, across: Int = 1, width: Float64 = 1.0
+) raises -> SimplicialMesh:
+    """A Möbius band in `R^3`: a strip of Kuhn triangles glued to itself
+    with a half twist. It is not orientable.
+
+    The strip's `(u, w)` grid, `u` around in `segments` steps and `w`
+    across in `across` steps, is glued at `u = 2 pi` with `w -> -w`, and
+    placed at `((1 + w cos(u/2)) cos u, (1 + w cos(u/2)) sin u,
+    w sin(u/2))`. Every triangle is oriented as in the flat strip, so two
+    triangles across the seam induce the same orientation on their shared
+    edge: `SimplicialComplex` refuses the mesh, `coherent_orientation`
+    returns `None`, and `orient_coherently` raises. It is a homology
+    2-manifold with boundary (one circle of `2 segments` edges) and Betti
+    numbers `[1, 1, 0]`; use it through `AbstractSimplicialComplex`.
+
+    ```mojo
+    var m = mobius_band(12, 2)
+    var asc = AbstractSimplicialComplex([m.elements])
+    print(asc.betti_numbers())          # [1, 1, 0]
+    ```
+
+    Args:
+        segments: Steps around, at least 3.
+        across: Steps across, at least 1.
+        width: The width of the strip, positive and below 2.
+
+    Returns:
+        `segments (across + 1)` vertices and `2 segments across` triangles.
+
+    Raises:
+        If `segments < 3`, `across < 1`, or `width` is not in `(0, 2)`.
+    """
+    if segments < 3 or across < 1:
+        raise Error(
+            String(
+                "mobius_band: need segments >= 3 and across >= 1, got ",
+                segments,
+                " and ",
+                across,
+            )
+        )
+    if not (width > 0 and width < 2):
+        raise Error(String("mobius_band: width must be in (0, 2), got ", width))
+    var rows = across + 1
+    var vertices = real_array(segments * rows, 3)
+    for i in range(segments):
+        var u = 2 * pi * Float64(i) / Float64(segments)
+        for j in range(rows):
+            var w = width * (Float64(j) / Float64(across) - 0.5)
+            var r = 1 + w * cos(u / 2)
+            var v = i * rows + j
+            fset(vertices, v, 0, r * cos(u))
+            fset(vertices, v, 1, r * sin(u))
+            fset(vertices, v, 2, w * sin(u / 2))
+
+    def vid(i: Int, j: Int) {imm segments, imm rows, imm across} -> Int:
+        if i == segments:  # the seam: w -> -w
+            return across - j
+        return i * rows + j
+
+    return SimplicialMesh(vertices, _strip_triangles(segments, across, vid))
+
+
+def klein_bottle(dims: List[Int]) raises -> SimplicialMesh:
+    """A Klein bottle in `R^4`: a periodic Kuhn grid with one pair of
+    sides glued with a flip. It is not orientable.
+
+    The `(u, v)` grid is glued at `v = 2 pi` as a torus and at `u = 2 pi`
+    with `v -> -v`, and placed at `((2 + cos v) cos u, (2 + cos v) sin u,
+    sin v cos(u/2), sin v sin(u/2))`, which is well defined on the
+    quotient and has no self-intersections. As for `mobius_band`, the
+    triangles keep the grid's orientation, so they disagree across the
+    flipped seam and `SimplicialComplex` refuses the mesh. It is a closed
+    homology 2-manifold with Euler characteristic 0 and rational Betti
+    numbers `[1, 1, 0]` (over Z/2, `[1, 2, 1]`).
+
+    Args:
+        dims: Cells along `u` and `v`, `[n_u, n_v]`, each at least 3.
+
+    Returns:
+        `n_u n_v` vertices and `2 n_u n_v` triangles.
+
+    Raises:
+        If `dims` does not have two entries of at least 3.
+    """
+    if len(dims) != 2 or dims[0] < 3 or dims[1] < 3:
+        raise Error("klein_bottle: dims must be [n_u, n_v], each at least 3")
+    var nu = dims[0]
+    var nv = dims[1]
+    var vertices = real_array(nu * nv, 4)
+    for i in range(nu):
+        var u = 2 * pi * Float64(i) / Float64(nu)
+        for j in range(nv):
+            var v = 2 * pi * Float64(j) / Float64(nv)
+            var k = i * nv + j
+            fset(vertices, k, 0, (2 + cos(v)) * cos(u))
+            fset(vertices, k, 1, (2 + cos(v)) * sin(u))
+            fset(vertices, k, 2, sin(v) * cos(u / 2))
+            fset(vertices, k, 3, sin(v) * sin(u / 2))
+
+    def vid(i: Int, j: Int) {imm nu, imm nv} -> Int:
+        var jj = j % nv
+        if i == nu:  # the flipped seam: v -> -v
+            return (nv - jj) % nv
+        return i * nv + jj
+
+    return SimplicialMesh(vertices, _strip_triangles(nu, nv, vid))
+
+
+def _strip_triangles[
+    F: def(Int, Int) -> Int
+](n: Int, m: Int, vid: F) raises -> IntArray:
+    """The two Kuhn triangles of each cell `(i, j)` of an `n x m` grid,
+    positively oriented in the grid's coordinates, with vertex numbers
+    from `vid(i, j)` (`i` up to `n`, `j` up to `m`), which does the
+    gluing."""
+    var out = int_array(2 * n * m, 3)
+    var row = 0
+    for i in range(n):
+        for j in range(m):
+            var a = vid(i, j)
+            var b = vid(i + 1, j)
+            var c = vid(i + 1, j + 1)
+            var e = vid(i, j + 1)
+            iset(out, row, 0, a)
+            iset(out, row, 1, b)
+            iset(out, row, 2, c)
+            iset(out, row + 1, 0, a)
+            iset(out, row + 1, 1, c)
+            iset(out, row + 1, 2, e)
+            row += 2
+    return out^
 
 
 def _spacing(

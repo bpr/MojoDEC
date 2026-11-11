@@ -14,7 +14,8 @@ how to use it, and what can go wrong.
 - **[Cohomology bases and harmonic forms](cohomology.md)**: integer
   cocycles and dual cycles by exact elimination (`cohomology_basis`),
   periods, and a harmonic basis with period 1 around each hole
-  (`harmonic_basis`) in the Hodge star or the Whitney inner product.
+  (`harmonic_basis`) in the Hodge star or the Whitney inner product;
+  relative to the boundary, the harmonic forms with Dirichlet conditions.
 - **[Kuhn grids and flat tori](kuhn-grids-and-tori.md)**: boxes and
   flat tori in any dimension, why the torus in R^(2d) is exactly flat,
   the circumcentric dual being the dual cube grid, the Whitney stiffness
@@ -27,6 +28,10 @@ how to use it, and what can go wrong.
   evaluating a cochain's Whitney form (`whitney_form`), the L²
   projection (`l2_projection`, `whitney_load`, `l2_error`), orientation,
   and why `R d = d R`, `R W = id`, and `d W = W d`.
+- **[Uniform refinement and prolongation](refinement.md)**: Freudenthal
+  subdivision into 2^n children in any dimension, why the vertex
+  numbering keeps the shapes bounded, the exact prolongation
+  `P = R_fine W_coarse` of k-cochains, and two-level error estimates.
 - **[Convergence](convergence.md)**: the rates Whitney forms reach (and
   why), measured for projection, interpolation, and Poisson's equation in
   1–3D, and what the convergence tests assert.

@@ -37,7 +37,12 @@ comptime __version__: String = "0.1.0"
 
 from mojodec.core.sparse import COOEntries, CSRMatrix
 from mojodec.core.diagonal import DiagonalOperator
-from mojodec.core.operator import Identity, LinearOperator, Preconditioner
+from mojodec.core.operator import (
+    BlockDiagonal,
+    Identity,
+    LinearOperator,
+    Preconditioner,
+)
 from mojodec.core.primality import Primality
 from mojodec.core.subset import Subset
 from mojodec.core.cell_set import CellComplex, CellSet
@@ -108,6 +113,7 @@ from mojodec.routines.innerproduct import (
     massmatrix_rowcols,
 )
 from mojodec.routines.linalg import (
+    DenseCholesky,
     cg,
     jacobi,
     minres,
@@ -121,7 +127,14 @@ from mojodec.routines.linalg import (
 from mojodec.routines.dense import (
     EighResult,
 )
-from mojodec.routines.time import Leapfrog, TypedLeapfrog
+from mojodec.routines.time import (
+    CrankNicolson,
+    ImplicitMidpoint,
+    Leapfrog,
+    TypedCrankNicolson,
+    TypedImplicitMidpoint,
+    TypedLeapfrog,
+)
 from mojodec.routines.derham import (
     derham_map,
     form_index_sets,
@@ -140,6 +153,7 @@ from mojodec.routines.cohomology import (
     cohomology_basis,
     harmonic_basis,
 )
+from mojodec.routines.refinement import Refinement, refine
 from mojodec.routines.homology import (
     betti_numbers,
     non_manifold_cells,
@@ -148,6 +162,8 @@ from mojodec.routines.homology import (
 from mojodec.routines.mesh_generation import (
     CubeGrid,
     flat_torus,
+    klein_bottle,
+    mobius_band,
     kuhn_grid,
     simplicial_grid_2d,
     cube_grid,

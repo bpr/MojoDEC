@@ -487,6 +487,76 @@ def minres[
     return SolveResult(x^, stop, it, norm2(r))
 
 
+struct DenseCholesky(Movable, Preconditioner):
+    """`A^-1` for a symmetric positive definite matrix, by a dense
+    Cholesky factorization: a `Preconditioner` that solves exactly.
+
+    It costs `n^3 / 3` operations to build and `n^2` numbers to store, so
+    it suits a few thousand unknowns at most. Its use is as the exact
+    block of a `BlockDiagonal` preconditioner on small problems, to see
+    what an ideal preconditioner achieves before a scalable one (multigrid,
+    a sparse factorization) replaces it.
+    """
+
+    var _L: RealArray
+
+    def __init__(out self, A: CSRMatrix) raises:
+        """Factor `A = L L^T`.
+
+        Args:
+            A: A symmetric positive definite matrix.
+
+        Raises:
+            If `A` is not square, not symmetric (checked on two probe
+            vectors), or not positive definite.
+        """
+        if A.nrows != A.ncols:
+            raise Error("DenseCholesky: the matrix is not square")
+        _require_symmetric(A, "DenseCholesky")
+        self._L = dense.cholesky(A.todense())
+
+    def num_rows(self) -> Int:
+        """The dimension.
+
+        Returns:
+            `n`.
+        """
+        return rows_of(self._L)
+
+    def num_cols(self) -> Int:
+        """The dimension.
+
+        Returns:
+            `n`.
+        """
+        return rows_of(self._L)
+
+    def apply_into(self, x: RealArray, mut y: RealArray) raises:
+        """Solve `A y = x` by two triangular solves.
+
+        Args:
+            x: A vector of length `n`.
+            y: A vector of length `n`, overwritten with `A^-1 x`.
+
+        Raises:
+            If a length is not `n`.
+        """
+        var n = rows_of(self._L)
+        if x.size != n or y.size != n:
+            raise Error("DenseCholesky.apply_into: dimension mismatch")
+        # L z = x, then L^T y = z
+        for i in range(n):
+            var s = x.unsafe_get(i)
+            for j in range(i):
+                s -= self._L.unsafe_get(i * n + j) * y.unsafe_get(j)
+            y.unsafe_set(i, s / self._L.unsafe_get(i * n + i))
+        for i in range(n - 1, -1, -1):
+            var s = y.unsafe_get(i)
+            for j in range(i + 1, n):
+                s -= self._L.unsafe_get(j * n + i) * y.unsafe_get(j)
+            y.unsafe_set(i, s / self._L.unsafe_get(i * n + i))
+
+
 def jacobi(A: CSRMatrix) raises -> DiagonalOperator:
     """The Jacobi preconditioner of a square matrix: `1 / |a_ii|`.
 

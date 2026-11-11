@@ -294,10 +294,55 @@ With `M=`, the stopping test is in the M-norm:
 $\|r\|_M \le \max(\texttt{rtol} \cdot \|b\|_M, \texttt{atol})$. Preconditioned
 CG keeps the Euclidean test.
 
-For saddle points, the effective preconditioners are block-diagonal, with
-the exact inverse star on the flux block and a Schur-complement
-approximation $(d_1 \star_1^{-1} d_1^T)^{-1}$ on the pressure block. That
-needs an inner solve per application, and is not in MojoDEC yet.
+### Block preconditioners for saddle points
+
+For a saddle point, a good preconditioner is block-diagonal, with one
+block per unknown. `BlockDiagonal(P1, P2)` combines any two
+preconditioners into one for the 2 × 2 system. It applies `P1` to the
+first `P1.num_rows()` entries and `P2` to the rest, and it is symmetric
+positive definite when both blocks are.
+
+Which blocks? For the mixed Hodge Laplacian (see
+[Convergence](convergence.md)),
+
+$$
+\begin{pmatrix} -M_{k-1} & B^T \\ B & A \end{pmatrix}, \qquad B = M_k
+d_{k-1}, \quad A = d_k^T M_{k+1} d_k ,
+$$
+
+Arnold, Falk, and Winther showed that preconditioning each unknown by the
+inverse of its natural norm keeps MINRES's iteration count bounded
+independently of the mesh. The natural norms are $M_{k-1} + d^T M_k d$ for
+$\sigma$ and $M_k + d^T M_{k+1} d$ for $u$. Measured on the 1-form problem
+on Kuhn grids of 4, 8, and 16 cells per side:
+
+| preconditioner | iterations |
+|---|---|
+| `jacobi(K)` | 79, 205, 424 |
+| diagonal blocks: $\mathrm{diag}(M_{k-1})^{-1}$ and the diagonal of $A + B\,\mathrm{diag}(M_{k-1})^{-1} B^T$ | about the same as Jacobi |
+| `BlockDiagonal(DenseCholesky(M0 + d0^T M1 d0), DenseCholesky(M1 + A))` | 7, 7, 7 |
+
+```mojo
+var P = BlockDiagonal(
+    DenseCholesky(M0 + sc[0].d.transpose() @ B),   # sigma's H(grad) norm
+    DenseCholesky(M1 + A),                         # u's H(curl) norm
+)
+var res = minres(K, b, M=P, rtol=1e-10)            # 7 iterations
+```
+
+`DenseCholesky(A)` factors a symmetric positive definite matrix densely
+and applies $A^{-1}$ exactly. That costs $n^3/3$ operations and $n^2$
+storage, so it only suits a few thousand unknowns. It shows what the
+ideal preconditioner achieves. A scalable one replaces each exact inverse
+by something spectrally equivalent at linear cost, which for the $H(\mathrm{curl})$
+and $H(\mathrm{div})$ blocks means multigrid with smoothers that respect
+the kernel of $d$ (Hiptmair; Arnold, Falk, and Winther). MojoDEC does not
+have that yet.
+
+Diagonal approximations do not help. They miss the $d^T M d$ part, which
+dominates as $h \to 0$. An inner iterative solve is no substitute for the
+exact block either: CG to a tolerance is not a fixed linear operator, and
+MINRES needs one.
 
 ## Stopping and breakdown
 
@@ -369,6 +414,9 @@ cg: the operator is not symmetric (u^T A w = -484.22, w^T A u = -400.53)
     down; monotone residuals.
   - `test_minres_singular_consistent`: the least-norm solution.
   - `test_preconditioned_minres`.
+  - `test_dense_cholesky_and_block_diagonal`: `DenseCholesky` applies
+    $A^{-1}$ and makes CG converge in one step; `BlockDiagonal` applies
+    each block to its half.
   - `test_solver_input_checks`: non-symmetric operators, indefinite
     preconditioners, `jacobi`'s errors.
 - `tests/test_typed.mojo`, `test_solvers`: typed `cg` and `minres` with a
@@ -376,3 +424,6 @@ cg: the operator is not symmetric (u^T A w = -484.22, w^T A u = -400.53)
 - `tests/test_typed_block.mojo`, `test_minres_on_blocks`: the Darcy
   saddle point against `spsolve`, and a non-symmetric block operator
   refused.
+- `tests/test_convergence.mojo`, `test_mixed_block_preconditioner`:
+  bounded iterations with the block preconditioner, growing ones with
+  Jacobi.

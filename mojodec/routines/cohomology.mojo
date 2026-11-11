@@ -28,6 +28,7 @@ var p = basis.periods(H[0])             # [1, 0, 0, ...]
 ```
 """
 
+from mojodec.core.cell_set import CellSet
 from mojodec.core.cochain import Cochain
 from mojodec.core.primality import Primality
 from mojodec.core.simplicial_complex import SimplicialComplex
@@ -41,6 +42,7 @@ from mojodec.core.typed import (
 )
 from mojodec.core.utils import RealArray, real_vector
 from mojodec.routines.linalg import jacobi, minres
+from mojodec.routines.topology import closure_of
 
 comptime _MAX_ENTRY = 1 << 40
 """Above this, an entry of the elimination is taken as runaway growth."""
@@ -172,10 +174,13 @@ def _minus_multiple(
     return out^
 
 
-def _row(A: CSRMatrix, i: Int, who: String) raises -> _Sparse:
-    """Row i of an integer matrix, sorted by column."""
+def _row(A: CSRMatrix, i: Int, drop: List[Bool], who: String) raises -> _Sparse:
+    """Row i of an integer matrix, sorted by column, without the columns
+    `drop` marks (none if it is empty)."""
     var out = _Sparse()
     for t in range(A.indptr[i], A.indptr[i + 1]):
+        if len(drop) > 0 and drop[A.indices[t]]:
+            continue
         var x = A.data[t]
         var v = Int(x)
         if Float64(v) != x:
@@ -304,26 +309,101 @@ def cohomology_basis(sc: SimplicialComplex, k: Int) raises -> CohomologyBasis:
         If `k` is outside `0..n`, or the elimination needs a fraction or
         its entries exceed 2^40.
     """
+    return _cohomology(sc, k, None, "cohomology_basis")
+
+
+def cohomology_basis(
+    sc: SimplicialComplex, k: Int, relative_to: CellSet
+) raises -> CohomologyBasis:
+    """Integer cocycles spanning the k-th cohomology relative to a
+    subcomplex, and dual relative cycles.
+
+    Relative cochains vanish on the subcomplex `L`; a relative cocycle has
+    `d z = 0` there too, and a relative cycle has its boundary in `L`. The
+    elimination is that of the absolute overload with the cells of `L`
+    removed. Relative to the boundary (`sc.boundary_cells()`) these are
+    the classes of harmonic forms with Dirichlet conditions; their number
+    is `b_k(K, L)` (`sc.relative_betti_numbers()`), which for an
+    orientable manifold equals `b_{n-k}(K)` (Lefschetz duality). Every
+    cocycle is zero on the cells of `L`.
+
+    ```mojo
+    var rel = cohomology_basis(sc, 1, sc.boundary_cells())
+    ```
+
+    Args:
+        sc: The complex.
+        k: The degree, `0..n`.
+        relative_to: A subcomplex of `sc`: every face of a cell in it is
+            in it.
+
+    Returns:
+        The relative cocycles and cycles; `len` is `b_k(K, L)`.
+
+    Raises:
+        If `k` is outside `0..n`, `relative_to` does not belong to `sc` or
+        is not closed, or as the absolute overload.
+    """
+    _require_subcomplex(sc, relative_to, "cohomology_basis")
+    return _cohomology(sc, k, relative_to.copy(), "cohomology_basis")
+
+
+def _check_degree(sc: SimplicialComplex, k: Int, who: String) raises:
     var n = sc.complex_dimension()
     if k < 0 or k > n:
-        raise Error(String("cohomology_basis: k = ", k, " is outside 0..", n))
-    var who = String("cohomology_basis")
+        raise Error(String(who, ": k = ", k, " is outside 0..", n))
+
+
+def _require_subcomplex(
+    sc: SimplicialComplex, cells: CellSet, who: String
+) raises:
+    cells.check_complex(sc)
+    if closure_of(sc, cells) != cells:
+        raise Error(
+            who,
+            ": the cells are not a subcomplex (a face of a cell is missing)",
+        )
+
+
+def _outside(
+    sc: SimplicialComplex, k: Int, sub: Optional[CellSet]
+) raises -> List[Bool]:
+    """Which k-simplices are in the subcomplex (empty if there is none)."""
+    if not sub or k < 0 or k > sc.complex_dimension():
+        return List[Bool]()
+    return sub.value()[k].mask()
+
+
+def _cohomology(
+    sc: SimplicialComplex, k: Int, sub: Optional[CellSet], who: String
+) raises -> CohomologyBasis:
+    """The two reductions, on the cells outside `sub`."""
+    _check_degree(sc, k, who)
+    var n = sc.complex_dimension()
     var m = sc[k].num_simplices
+    var in_sub = _outside(sc, k, sub)
+    var below = _outside(sc, k - 1, sub)
+    # the k-simplices that carry values
+    var cells = List[Int](capacity=m)
+    for f in range(m):
+        if len(in_sub) == 0 or not in_sub[f]:
+            cells.append(f)
     # 1. the boundaries of the k-simplices: rows of d on (k-1)-cochains
-    var faces = List[_Sparse](capacity=m)
+    var faces = List[_Sparse](capacity=len(cells))
     var nfaces = 0
     if k > 0:
         ref D = sc[k - 1].d
         nfaces = D.ncols
-        for f in range(m):
-            faces.append(_row(D, f, who))
+        for f in cells:
+            faces.append(_row(D, f, below, who))
     else:
-        for _ in range(m):
+        for _ in range(len(cells)):
             faces.append(_Sparse())
     var first = _reduce(faces, nfaces, List[Bool](), who)
-    # 2. the coboundaries of the non-pivot simplices
-    var N = List[Int]()
-    for f in range(m):
+    # 2. the coboundaries of the non-pivot simplices (outside a subcomplex,
+    # so are their cofaces)
+    var N = List[Int]()  # positions in `cells`
+    for f in range(len(cells)):
         if not first.is_pivot[f]:
             N.append(f)
     var cofaces = List[_Sparse](capacity=len(N))
@@ -332,7 +412,7 @@ def cohomology_basis(sc: SimplicialComplex, k: Int) raises -> CohomologyBasis:
         ref B = sc[k + 1].boundary
         ncofaces = B.ncols
         for f in N:
-            cofaces.append(_row(B, f, who))
+            cofaces.append(_row(B, cells[f], List[Bool](), who))
     else:
         for _ in range(len(N)):
             cofaces.append(_Sparse())
@@ -340,13 +420,13 @@ def cohomology_basis(sc: SimplicialComplex, k: Int) raises -> CohomologyBasis:
         cofaces, ncofaces, List[Bool](length=len(N), fill=True), who
     )
     var cocycles = List[Cochain](capacity=len(second.kernel))
-    var want = List[Bool](length=m, fill=False)
+    var want = List[Bool](length=len(cells), fill=False)
     for i in range(len(second.kernel)):
         want[N[second.kernel[i]]] = True
         var z = real_vector(m)
         ref vec = second.vectors[i]
         for t in range(len(vec)):
-            z.unsafe_set(N[vec.idx[t]], Float64(vec.val[t]))
+            z.unsafe_set(cells[N[vec.idx[t]]], Float64(vec.val[t]))
         cocycles.append(Cochain(sc, k, Primality.PRIMAL, z^))
     # the dual cycles, from the first reduction with its combinations kept
     var again = _reduce(faces, nfaces, want, who)
@@ -355,7 +435,7 @@ def cohomology_basis(sc: SimplicialComplex, k: Int) raises -> CohomologyBasis:
         var c = real_vector(m)
         ref vec = again.vectors[i]
         for t in range(len(vec)):
-            c.unsafe_set(vec.idx[t], Float64(vec.val[t]))
+            c.unsafe_set(cells[vec.idx[t]], Float64(vec.val[t]))
         cycles.append(c^)
     # both lists follow the simplex order of their marked columns
     return CohomologyBasis(k, cocycles^, cycles^)
@@ -382,15 +462,8 @@ def harmonic_basis(
         As `cohomology_basis`, if a diagonal entry of `d^T star d` is zero,
         or if MINRES does not converge.
     """
-    var basis = cohomology_basis(sc, k)
-    if k == 0 or len(basis) == 0:
-        return basis.cocycles.copy()
-    ref S = sc[k].star
-    ref Bt = sc[k].boundary
-    var rhs = List[RealArray](capacity=len(basis))
-    for ref z in basis.cocycles:
-        rhs.append(Bt @ (S @ z.v))
-    return _project(sc, k, basis, Bt @ (S @ sc[k - 1].d), rhs, rtol)
+    _check_degree(sc, k, "harmonic_basis")
+    return _harmonic(sc, k, sc[k].star.to_csr(), None, rtol)
 
 
 def harmonic_basis(
@@ -420,7 +493,86 @@ def harmonic_basis(
         As `cohomology_basis`, if `M` is not `N_k x N_k` or a diagonal
         entry of `d^T M d` is zero, or if MINRES does not converge.
     """
-    var basis = cohomology_basis(sc, k)
+    return _harmonic(sc, k, M, None, rtol)
+
+
+def harmonic_basis(
+    sc: SimplicialComplex,
+    k: Int,
+    relative_to: CellSet,
+    rtol: Float64 = 1e-12,
+) raises -> List[Cochain]:
+    """Harmonic k-cochains vanishing on a subcomplex, in the Hodge star.
+
+    Relative to the boundary these are the harmonic forms with Dirichlet
+    conditions: zero on the boundary k-simplices, closed, and coclosed at
+    the (k-1)-simplices off the boundary. See the overload with a mass
+    matrix.
+
+    Args:
+        sc: The complex.
+        k: The degree, `0..n`.
+        relative_to: A subcomplex, such as `sc.boundary_cells()`.
+        rtol: The relative residual at which MINRES stops.
+
+    Returns:
+        `b_k(K, L)` primal k-cochains.
+
+    Raises:
+        As `cohomology_basis` with `relative_to`, or as the absolute
+        overload.
+    """
+    _check_degree(sc, k, "harmonic_basis")
+    _require_subcomplex(sc, relative_to, "harmonic_basis")
+    return _harmonic(sc, k, sc[k].star.to_csr(), relative_to.copy(), rtol)
+
+
+def harmonic_basis(
+    sc: SimplicialComplex,
+    k: Int,
+    M: CSRMatrix,
+    relative_to: CellSet,
+    rtol: Float64 = 1e-12,
+) raises -> List[Cochain]:
+    """Harmonic k-cochains vanishing on a subcomplex, in the inner
+    product `M`.
+
+    For each cocycle `z` of `cohomology_basis(sc, k, relative_to)`, the
+    exact part is removed with (k-1)-cochains `p` that also vanish on the
+    subcomplex: `h = z - d p`, `(d^T M d) p = d^T M z` on the rows and
+    columns of the (k-1)-simplices outside it. So `h` is zero on the
+    subcomplex, closed, M-orthogonal to `d p` for every such `p`, and has
+    the relative periods of `z`. Relative to the boundary of a domain in
+    the plane, the harmonic 1-forms are `d u` for the functions `u` that
+    are discrete harmonic inside and constant on each boundary piece.
+
+    Args:
+        sc: The complex.
+        k: The degree, `0..n`.
+        M: A symmetric mass matrix on k-cochains.
+        relative_to: A subcomplex, such as `sc.boundary_cells()`.
+        rtol: The relative residual at which MINRES stops.
+
+    Returns:
+        `b_k(K, L)` primal k-cochains.
+
+    Raises:
+        As `cohomology_basis` with `relative_to`, if `M` is not
+        `N_k x N_k`, or as the absolute overload.
+    """
+    _require_subcomplex(sc, relative_to, "harmonic_basis")
+    return _harmonic(sc, k, M, relative_to.copy(), rtol)
+
+
+def _harmonic(
+    sc: SimplicialComplex,
+    k: Int,
+    M: CSRMatrix,
+    sub: Optional[CellSet],
+    rtol: Float64,
+) raises -> List[Cochain]:
+    """`h = z - d p` for each cocycle, with `p` off the subcomplex."""
+    var basis = _cohomology(sc, k, sub, "harmonic_basis")
     var m = sc[k].num_simplices
     if M.nrows != m or M.ncols != m:
         raise Error(
@@ -428,27 +580,21 @@ def harmonic_basis(
         )
     if k == 0 or len(basis) == 0:
         return basis.cocycles.copy()
-    ref Bt = sc[k].boundary
-    var rhs = List[RealArray](capacity=len(basis))
-    for ref z in basis.cocycles:
-        rhs.append(Bt @ (M @ z.v))
-    return _project(sc, k, basis, Bt @ (M @ sc[k - 1].d), rhs, rtol)
-
-
-def _project(
-    sc: SimplicialComplex,
-    k: Int,
-    basis: CohomologyBasis,
-    K: CSRMatrix,
-    rhs: List[RealArray],
-    rtol: Float64,
-) raises -> List[Cochain]:
-    """`h = z - d p` with `K p = rhs` for each cocycle `z`."""
-    ref D = sc[k - 1].d  # (k-1)-cochains -> k-cochains
+    var below = _outside(sc, k - 1, sub)
+    var free = List[Int]()  # the (k-1)-simplices p may live on
+    for i in range(sc[k - 1].num_simplices):
+        if len(below) == 0 or not below[i]:
+            free.append(i)
+    var rows = List[Int](capacity=m)
+    for i in range(m):
+        rows.append(i)
+    var D = sc[k - 1].d.select(rows, free)  # (k-1)-cochains -> k-cochains
+    var Dt = D.transpose()
+    var K = Dt @ (M @ D)
     var P = jacobi(K)
     var out = List[Cochain](capacity=len(basis))
-    for i in range(len(basis)):
-        var res = minres(K, rhs[i], M=P, rtol=rtol)
+    for ref z in basis.cocycles:
+        var res = minres(K, Dt @ (M @ z.v), M=P, rtol=rtol)
         if not res.converged():
             raise Error(
                 String(
@@ -459,7 +605,7 @@ def _project(
                 )
             )
         var dp = D @ res^.take_x()
-        var h = basis.cocycles[i].v.copy()
+        var h = z.v.copy()
         for t in range(h.size):
             h.unsafe_set(t, h.unsafe_get(t) - dp.unsafe_get(t))
         out.append(Cochain(sc, k, Primality.PRIMAL, h^))
@@ -520,6 +666,67 @@ def harmonic_basis[
     if M.complex and not M.complex.value().is_same(tc.sc):
         raise Error("harmonic_basis: M is on a different complex")
     return _typed[n, k](tc.sc, harmonic_basis(tc.sc, k, M.mat, rtol))
+
+
+def harmonic_basis[
+    n: Int, //, k: Int
+](
+    tc: TypedComplex[n], relative_to: CellSet, rtol: Float64 = 1e-12
+) raises -> List[TypedCochain[n, k, PRIMAL]]:
+    """The star-harmonic basis relative to a subcomplex as typed cochains;
+    see the untyped overload.
+
+    Parameters:
+        n: The complex dimension (inferred).
+        k: The degree.
+
+    Args:
+        tc: The complex.
+        relative_to: A subcomplex, such as `tc.sc.boundary_cells()`.
+        rtol: The relative residual at which MINRES stops.
+
+    Returns:
+        `b_k(K, L)` harmonic primal k-cochains vanishing on the subcomplex.
+
+    Raises:
+        As the untyped overload.
+    """
+    comptime assert 0 <= k and k <= n, "harmonic_basis: k must be in 0..n"
+    return _typed[n, k](tc.sc, harmonic_basis(tc.sc, k, relative_to, rtol))
+
+
+def harmonic_basis[
+    n: Int, k: Int
+](
+    tc: TypedComplex[n],
+    M: MatrixOp[n, k, PRIMAL, n - k, DUAL],
+    relative_to: CellSet,
+    rtol: Float64 = 1e-12,
+) raises -> List[TypedCochain[n, k, PRIMAL]]:
+    """The harmonic basis in a typed mass matrix, relative to a
+    subcomplex; see the untyped overload.
+
+    Parameters:
+        n: The complex dimension.
+        k: The degree.
+
+    Args:
+        tc: The complex.
+        M: The mass matrix, from primal k-cochains to dual (n-k)-cochains.
+        relative_to: A subcomplex, such as `tc.sc.boundary_cells()`.
+        rtol: The relative residual at which MINRES stops.
+
+    Returns:
+        `b_k(K, L)` harmonic primal k-cochains vanishing on the subcomplex.
+
+    Raises:
+        If `M` was built on another complex, or as the untyped overload.
+    """
+    if M.complex and not M.complex.value().is_same(tc.sc):
+        raise Error("harmonic_basis: M is on a different complex")
+    return _typed[n, k](
+        tc.sc, harmonic_basis(tc.sc, k, M.mat, relative_to, rtol)
+    )
 
 
 def _typed[
