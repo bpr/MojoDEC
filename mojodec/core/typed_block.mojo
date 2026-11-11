@@ -32,10 +32,22 @@ var y = A @ CochainPair(flux, pressure)
 optionally with some unknowns of each kind given.
 """
 
+from mojodec.core.operator import LinearOperator
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.typed import MatrixOp, TypedCochain
 from mojodec.core.utils import RealArray, real_vector
+
+
+def _add_product(
+    A: CSRMatrix, x: RealArray, x_off: Int, mut y: RealArray, y_off: Int
+):
+    """`y[y_off:] += A x[x_off:]`, the sizes checked by the caller."""
+    for i in range(A.nrows):
+        var s: Float64 = 0
+        for k in range(A.indptr[i], A.indptr[i + 1]):
+            s += A.data[k] * x.unsafe_get(x_off + A.indices[k])
+        y.unsafe_set(y_off + i, y.unsafe_get(y_off + i) + s)
 
 
 def _same_complex(
@@ -152,9 +164,12 @@ struct BlockOp[
     out1_p: Bool,
     out2_k: Int,
     out2_p: Bool,
-](Copyable, Movable, Writable):
+](Copyable, LinearOperator, Movable, Writable):
     """A 2 x 2 block of typed operators, from a pair of cochains of kinds
     `in1`, `in2` to a pair of kinds `out1`, `out2`.
+
+    As a `LinearOperator` it applies to the stacked values (first then
+    second) block by block, without assembling `to_csr()`.
 
     Parameters:
         n: The dimension of the complex.
@@ -232,6 +247,44 @@ struct BlockOp[
             The number of rows.
         """
         return self.a11.mat.nrows + self.a21.mat.nrows
+
+    def num_rows(self) -> Int:
+        """The number of equations, for `LinearOperator`.
+
+        Returns:
+            `num_equations()`.
+        """
+        return self.num_equations()
+
+    def num_cols(self) -> Int:
+        """The number of unknowns, for `LinearOperator`.
+
+        Returns:
+            `num_unknowns()`.
+        """
+        return self.num_unknowns()
+
+    def apply_into(self, x: RealArray, mut y: RealArray) raises:
+        """The operator applied to stacked unknowns, block by block.
+
+        Args:
+            x: The unknowns stacked, first then second
+                (`CochainPair.stacked()`).
+            y: The equations stacked, overwritten.
+
+        Raises:
+            If a length does not match.
+        """
+        if x.size != self.num_unknowns() or y.size != self.num_equations():
+            raise Error("BlockOp.apply_into: dimension mismatch")
+        var c1 = self.a11.mat.ncols
+        var r1 = self.a11.mat.nrows
+        for i in range(y.size):
+            y.unsafe_set(i, 0.0)
+        _add_product(self.a11.mat, x, 0, y, 0)
+        _add_product(self.a12.mat, x, c1, y, 0)
+        _add_product(self.a21.mat, x, 0, y, r1)
+        _add_product(self.a22.mat, x, c1, y, r1)
 
     def to_csr(self) raises -> CSRMatrix:
         """The whole operator as one sparse matrix, unknowns and equations

@@ -12,6 +12,7 @@ examples/MakeMesh/square_8.*
 examples/*/*.png
 examples/*/*.vtu
 examples/*/spectrum.txt
+examples/*/waves.txt
 # proptest example database (tests/test_properties.mojo)
 .proptest/
 # rattler-build output

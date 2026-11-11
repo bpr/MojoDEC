@@ -11,7 +11,7 @@
 # `pixi run examples-release` sets it to "-D ASSERT=none".
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
-all=(Ranking RipsComplex HodgeDecomposition DarcyFlow HeatConduction ResonantCavity Sphere Neighborhoods Neighborhoods3D MakeMesh)
+all=(Ranking RipsComplex HodgeDecomposition DarcyFlow HeatConduction ResonantCavity CavityWaves Sphere Neighborhoods Neighborhoods3D MakeMesh)
 
 run() {
     local name=$1

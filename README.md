@@ -21,8 +21,13 @@ Beyond PyDEC, MojoDEC adds:
 - the discrete flat, from vector fields to primal 1-cochains
 - Gaussian and mean curvature of triangulated surfaces
 - mesh quality measures (well-centeredness, shape regularity)
-- Euler characteristics and simplicial neighborhoods (star, closure, link,
-  boundary, interior) on every complex type
+- Euler characteristics, Betti numbers (absolute, of subcomplexes, and
+  relative), a homology-manifold check, and simplicial neighborhoods
+  (star, closure, link, boundary, interior) on every complex type
+- coherent orientation checks: complexes must be coherently oriented
+  pseudomanifolds, and `orient_coherently` fixes an orientable mesh
+- explicit leapfrog time stepping (Yee's scheme) with an exactly
+  conserved energy, for Maxwell's equations and other wave systems
 - cell subsets for boundary conditions: bitsets of primal or dual cells
   with set operations, boundary and coboundary, the mesh boundary in every
   dimension, and `exclude_subset` / `restrict_to_subset` on operators
@@ -38,7 +43,8 @@ Beyond PyDEC, MojoDEC adds:
   per-simplex allocation, and simplex lookup by binary search instead of
   per-level dictionaries
 - examples beyond PyDEC's: the spectrum of the Hodge Laplacian on the
-  sphere, and neighborhoods on 2D and 3D meshes
+  sphere, neighborhoods on 2D and 3D meshes, and Maxwell's equations
+  stepped in time in a cavity
 
 The algorithms follow the PyDEC paper: Bell & Hirani, *PyDEC: Software and
 Algorithms for Discretization of Exterior Calculus*, ACM Transactions on
@@ -99,6 +105,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 |---|---|
 | `mojodec/core/sparse.mojo` — `CSRMatrix` | `scipy.sparse.csr_matrix` (PyDEC's sparse matrices) |
 | `mojodec/core/diagonal.mojo` — `DiagonalOperator` | (new; PyDEC uses `scipy.sparse` diagonal matrices) |
+| `mojodec/core/operator.mojo` — `LinearOperator`, `Preconditioner`, `Identity` | `scipy.sparse.linalg.LinearOperator` |
 | `mojodec/core/subset.mojo` — `Subset` | (new) |
 | `mojodec/core/typed.mojo` — `TypedComplex`, `TypedCochain`, `MatrixOp`, `DiagonalOp` | (new) |
 | `mojodec/core/typed_block.mojo` — `BlockOp`, `CochainPair` | (new) |
@@ -117,7 +124,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/combinatorial.mojo` | `math/combinatorial.py`, `math/parity.py` |
 | `mojodec/routines/innerproduct.mojo` | `fem/innerproduct.py` |
 | `mojodec/routines/mesh_generation.mojo` | `mesh/generation.py`, `mesh/subdivision.py` |
-| `mojodec/routines/linalg.mojo` — `cg`, `lsqr`, `spsolve`, `eigh_generalized` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
+| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
 | `mojodec/routines/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh` | `numpy.linalg` (called by PyDEC) |
 | `mojodec/routines/io/` — `read_array`, `write_array`, `read_mesh`, `write_mesh`, `loadtxt` | `io/arrayio.py`, `io/meshio.py` |
 | `mojodec/routines/io/vtk.mojo` — `write_vtu`, `write_vtu_cubes`, `VTKField` | (new) |
@@ -131,6 +138,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/core/cell_set.mojo` — `CellSet`, `CellComplex` | (new) |
 | `mojodec/routines/topology.mojo` — `star_of`, `closure_of`, `link_of`, `boundary_of`, `interior_of` | (new) |
 | `mojodec/routines/homology.mojo` — `betti_numbers`, `relative_betti_numbers`, `non_manifold_cells` | (new) |
+| `mojodec/routines/time.mojo` — `Leapfrog`, `TypedLeapfrog` | (new) |
 | `mojodec/vis/draw.mojo` — `triplot`, `lineplot`, `lineplot2`, `simplex_quivers`, `cube_quivers` | `vis/draw.py` |
 
 ## Plotting
@@ -391,6 +399,41 @@ the published mathematics:
 - **The HeatConduction example**, steady heat flow through a plate of two
   materials meshed by Gmsh, whose physical groups supply the boundary
   conditions and the conductivity of each triangle.
+- **Leapfrog time stepping** (`Leapfrog`, `TypedLeapfrog`) for
+  `Mq q' = K p`, `Mp p' = -K^T q` with diagonal masses: Maxwell's
+  equations with `e` on edges and `b` on triangles, or the acoustic wave
+  equation. Each step is two sparse products, no solve. The system is
+  skew by construction, and the scheme conserves a staggered energy
+  `energy(q, p)` to rounding. The constructor raises unless the masses are
+  positive (Hodge stars are, on a well-centered mesh) and `dt` is below
+  the stability limit `max_stable_dt`, found by power iteration:
+
+  ```mojo
+  var K = P.T() @ tc.d[1, PRIMAL]().T() @ tc.star[2, PRIMAL]().to_matrix_op()
+  var lf = TypedLeapfrog(tc.star[1, PRIMAL](), tc.star[2, PRIMAL](), K, dt)
+  lf.step(e, b, steps=100)                 # e: primal 1, b: primal 2
+  ```
+
+  Mixing up the kinds (a mass that doesn't map its field to the dual
+  kind, or a `K` into the wrong kind) fails to compile.
+- **The CavityWaves example**, Maxwell's equations stepped in time in an
+  equilateral-triangle cavity.
+- **Operator traits, preconditioned CG, and MINRES.** `cg` and `minres`
+  take any `LinearOperator` (`CSRMatrix`, `DiagonalOperator`, the typed
+  ops, a `BlockOp` applied block by block) and, as `M=`, any
+  `Preconditioner`, a trait for symmetric positive definite operators
+  (`DiagonalOperator`, `jacobi(A)`, `Identity`). `minres` solves symmetric
+  indefinite systems, such as a mixed formulation's saddle-point
+  `BlockOp`, without assembling it:
+
+  ```mojo
+  var res = cg(A, b, M=jacobi(A), rtol=1e-10)   # typed: M maps A's output kind back
+  var x = minres(darcy, b, rtol=1e-12).take_x() # CochainPair of flux and pressure
+  ```
+
+  Both raise on an operator that is not symmetric (two probe products), so
+  a matrix such as `delta(d(.))`, self-adjoint only in the Hodge-star
+  inner product, cannot be passed by mistake.
 
 ## Differences from PyDEC
 
@@ -514,18 +557,25 @@ the published mathematics:
   `eigh_generalized` are dense, which suits the example sizes;
   `eigh_generalized(K, M)` also takes a diagonal `M` (a Hodge star) and
   then only rescales `K`, with no Cholesky factorization.
+- **Symmetric solvers check symmetry.** SciPy's `cg` accepts any matrix;
+  MojoDEC's `cg` and `minres` raise unless `u^T A w = w^T A u` on two
+  probe vectors. PyDEC's HodgeDecomposition passes `delta(d(.))`
+  (`star^-1 d^T star d`, not symmetric) to `cg`; MojoDEC's driver solves
+  the symmetric `(star d^T star d) alpha = star b` with `M = star^-1`,
+  which is CG in the star inner product, and gets the same harmonic space
+  (to a principal angle of 3e-6).
 
 ## Examples
 
 ```sh
-pixi run examples                      # all ten; figures saved as PNG files
+pixi run examples                      # all eleven; figures saved as PNG files
 pixi run examples DarcyFlow --show     # one, with its figures in windows
 ```
 
 Each writes its results to text files and draws PyDEC's figures to PNG
 files, so it runs without a display; `--show` also opens them in
 matplotlib windows. RipsComplex, HodgeDecomposition, DarcyFlow,
-HeatConduction, ResonantCavity, Sphere, and both Neighborhoods examples also write their fields to `.vtu` files for
+HeatConduction, ResonantCavity, CavityWaves, Sphere, and both Neighborhoods examples also write their fields to `.vtu` files for
 ParaView.
 [`examples/README.md`](examples/README.md) covers running them by hand,
 what each one produces, viewing the VTK files in ParaView, and plotting
@@ -539,6 +589,7 @@ from your own program.
 | DarcyFlow | pressures agree with the exact solution to 1e-14 |
 | HeatConduction | mesh and boundary pieces from a Gmsh file; the piecewise-linear temperature through two materials to 7e-15, and the heat in through the hot edge equals the heat out through the cold one and the exact 25/26 (not from PyDEC) |
 | ResonantCavity | eigenvalues 1, 1, 2, 4, 4, 5, 5, 8, 9, 9, 10, 10, 13, 13, … (the exact m²+n²) |
+| CavityWaves | resonances 0.9986, 0.9986, 2.987, 3.977, 3.977, 6.93, 6.93, 8.88 times (4π/3)² (the exact m²+mn+n² of the equilateral triangle); leapfrog from the lowest mode follows cos(ω_dt t) to 3e-12 over five periods, staggered energy constant to 2e-15 (not from PyDEC) |
 | Sphere | Hodge-Laplacian spectra near n(n+1) for 0-, 1-, and 2-forms; the 1-form spectrum is the 0- and 2-form spectra merged (to 3e-12); Gauss-Bonnet exact; Gaussian and mean curvature 1.02 and 1.0001 (not from PyDEC) |
 | Neighborhoods | interior links are hexagons (χ = 0), boundary links paths (χ = 1); Bd(Cl(St(v))) = Lk(v); every ring boundary has χ = 0; the square's boundary has 4n edges and an empty boundary (not from PyDEC) |
 | Neighborhoods3D | interior vertex links are spheres (χ = 2), boundary links disks (χ = 1); growing rings are balls (χ = 1) until they meet themselves around the hole (one pinched step), then the solid torus (χ = 0) bounded by a torus; χ(Bd R) = 2 χ(R) whenever Bd R is a surface (not from PyDEC) |
@@ -548,9 +599,10 @@ from your own program.
 2-cochains is nonsymmetric and indefinite. PyDEC's CG solve of that system
 does not converge (PyDEC's call to SciPy's `cg` returns `info > 0`), and
 the resulting "harmonic" forms are not harmonic. MojoDEC solves that
-system with LSQR.
+system with LSQR, and the 0-cochain system in its symmetric form with
+preconditioned CG (see *Symmetric solvers check symmetry* above).
 
-**DarcyFlow, HeatConduction, and ResonantCavity** are written with the
+**DarcyFlow, HeatConduction, ResonantCavity, and CavityWaves** are written with the
 typed layer (`TypedComplex`, typed operators and solves); the others use
 the untyped API, as PyDEC's drivers do.
 

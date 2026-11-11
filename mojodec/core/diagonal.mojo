@@ -19,13 +19,20 @@ var energy = sc[1].star.inner_product(omega.v, omega.v)       # omega^T S omega
 """
 
 from std.math import sqrt
+from mojodec.core.operator import Preconditioner
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.subset import Subset
 from mojodec.core.utils import RealArray, real_array, real_vector
 
 
-struct DiagonalOperator(Copyable, Movable, Sized, Writable):
-    """A square diagonal matrix, stored as its diagonal."""
+struct DiagonalOperator(Copyable, Movable, Preconditioner, Sized, Writable):
+    """A square diagonal matrix, stored as its diagonal.
+
+    It is a `Preconditioner` for `cg` and `minres` when its entries are
+    positive, as for `jacobi(A)` or an inverse Hodge star on a
+    well-centered mesh; the solvers stop with `StopReason.BREAKDOWN` when
+    a negative entry shows.
+    """
 
     var values: List[Float64]
     """The diagonal entries."""
@@ -263,6 +270,37 @@ struct DiagonalOperator(Copyable, Movable, Sized, Writable):
         for i in range(x.size):
             y.unsafe_set(i, self.values[i] * x.unsafe_get(i))
         return y^
+
+    def num_rows(self) -> Int:
+        """The dimension n, for `LinearOperator`.
+
+        Returns:
+            The number of diagonal entries.
+        """
+        return len(self.values)
+
+    def num_cols(self) -> Int:
+        """The dimension n, for `LinearOperator`.
+
+        Returns:
+            The number of diagonal entries.
+        """
+        return len(self.values)
+
+    def apply_into(self, x: RealArray, mut y: RealArray) raises:
+        """The product with a 1-D array, written into `y`.
+
+        Args:
+            x: A vector of length n.
+            y: A vector of length n, overwritten with the product.
+
+        Raises:
+            If `x` or `y` does not have length n.
+        """
+        self._check(x.size, "DiagonalOperator.apply_into")
+        self._check(y.size, "DiagonalOperator.apply_into")
+        for i in range(len(self.values)):
+            y.unsafe_set(i, self.values[i] * x.unsafe_get(i))
 
     def inner_product(self, a: RealArray, b: RealArray) raises -> Float64:
         """`a^T D b`, the inner product this operator defines when its

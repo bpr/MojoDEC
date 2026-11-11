@@ -23,9 +23,11 @@ from mojodec import (
     d,
     delta,
     eigh_generalized,
+    jacobi,
     laplace_beltrami,
     laplace_derham,
     lsqr,
+    minres,
     simplicial_grid_2d,
     spsolve,
     star,
@@ -255,6 +257,30 @@ def test_solvers() raises:
     with assert_raises(contains="different complexes"):
         _ = spsolve(A, other.cochain[2, DUAL]())
     # cg(A, f) does not compile: f is primal 0, A gives dual 2
+    # the preconditioner maps back: dual 2 -> primal 0
+    var J: DiagonalOp[2, 2, DUAL, 0, PRIMAL] = jacobi(A)
+    var pre = cg(A, b, M=J, rtol=1e-12)
+    assert_true(pre.converged())
+    var raw_pre = cg(A.mat, b.v, M=J.diag, rtol=1e-12)
+    assert_equal(pre.iterations, raw_pre.iterations)
+    for i in range(len(u)):
+        assert_equal(pre.x[i], raw_pre.x.unsafe_get(i))
+    # minres on the same singular system, plain and preconditioned
+    var mr = minres(A, b, rtol=1e-12)
+    assert_true(mr.converged())
+    var mr_raw = minres(A.mat, b.v, rtol=1e-12)
+    for i in range(len(u)):
+        assert_equal(mr.x[i], mr_raw.x.unsafe_get(i))
+    var mp = minres(A, b, M=J, rtol=1e-12)
+    assert_true(mp.converged())
+    var rm = A @ mp.x - b
+    for i in range(len(rm)):
+        # rtol=1e-12 in the M norm; M ~ 1/4 on this grid, |b| ~ 10
+        assert_almost_equal(rm[i], 0.0, atol=1e-10, rtol=0)
+    with assert_raises(contains="different complexes"):
+        _ = minres(A, other.cochain[2, DUAL]())
+    with assert_raises(contains="different complexes"):
+        _ = cg(A, b, M=jacobi(_stiffness(other)))
 
 
 def test_whitney_and_eigenproblems() raises:

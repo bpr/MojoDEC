@@ -46,7 +46,11 @@ def hodge_decomposition(
     d(delta(.)) on 2-cochains is nonsymmetric and indefinite. PyDEC's
     driver uses CG there, which does not converge (SciPy reports
     info > 0 and a residual larger than the right-hand side); LSQR solves
-    it. The alpha system is solved with CG as in PyDEC.
+    it. The alpha system is solved with CG as in PyDEC, but in the form CG
+    needs: delta(d(.)) = star^-1 K is not a symmetric matrix (only
+    self-adjoint in the star inner product), so it solves the symmetric
+    K alpha = star (delta omega), preconditioned by star^-1, which is CG
+    in the star inner product. PyDEC passes star^-1 K to CG directly.
     """
     var sc = omega.complex
     var p = omega.k
@@ -54,9 +58,10 @@ def hodge_decomposition(
     var beta = sc.get_cochain(p + 1)
 
     # solve for alpha
-    var A = delta(d(sc.get_cochain_basis(p - 1))).v.copy()
-    var b = delta(omega).v.copy()
-    alpha.v = cg(A, b, rtol=1e-8).take_x()
+    ref S = sc[p - 1].star
+    var A = S @ delta(d(sc.get_cochain_basis(p - 1))).v  # K = d^T star d
+    var b = S @ delta(omega).v
+    alpha.v = cg(A, b, M=sc[p - 1].star_inv, rtol=1e-8).take_x()
 
     # solve for beta
     A = d(delta(sc.get_cochain_basis(p + 1))).v.copy()

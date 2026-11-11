@@ -37,6 +37,7 @@ comptime __version__: String = "0.1.0"
 
 from mojodec.core.sparse import COOEntries, CSRMatrix
 from mojodec.core.diagonal import DiagonalOperator
+from mojodec.core.operator import Identity, LinearOperator, Preconditioner
 from mojodec.core.primality import Primality
 from mojodec.core.subset import Subset
 from mojodec.core.cell_set import CellComplex, CellSet
@@ -108,6 +109,8 @@ from mojodec.routines.innerproduct import (
 )
 from mojodec.routines.linalg import (
     cg,
+    jacobi,
+    minres,
     lsqr,
     spsolve,
     eigh_generalized,
@@ -118,6 +121,7 @@ from mojodec.routines.linalg import (
 from mojodec.routines.dense import (
     EighResult,
 )
+from mojodec.routines.time import Leapfrog, TypedLeapfrog
 from mojodec.routines.homology import (
     betti_numbers,
     non_manifold_cells,

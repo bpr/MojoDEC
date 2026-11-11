@@ -11,13 +11,23 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.diagonal import DiagonalOperator
+from mojodec.core.operator import Identity
 from mojodec.core.sparse import CSRMatrix
-from mojodec.core.utils import fget, fset, real_array, real_vector, norm2
+from mojodec.core.utils import (
+    RealArray,
+    fget,
+    fset,
+    real_array,
+    real_vector,
+    norm2,
+)
 from mojodec.routines.linalg import (
     StopReason,
     cg,
     eigh_generalized,
+    jacobi,
     lsqr,
+    minres,
     spsolve,
 )
 from mojodec.routines import dense
@@ -215,6 +225,190 @@ def test_cg_reports_nan_as_breakdown() raises:
     b.unsafe_set(1, 1.0)
     var res = cg(A, b)
     assert_true(res.stop == StopReason.BREAKDOWN)
+
+
+def _scaled_laplacian(n: Int) raises -> CSRMatrix:
+    """`D L D` for the 1-D Laplacian and `D` from 1 to 1000: symmetric
+    positive definite, with a diagonal that varies by a factor 10^6."""
+    var L = laplacian_1d(n)
+    var d = List[Float64]()
+    for i in range(n):
+        d.append(1.0 + 999.0 * Float64((i * 37) % n) / Float64(n))
+    var D = DiagonalOperator(d^)
+    return D @ L @ D
+
+
+def _rhs(n: Int) raises -> RealArray:
+    var b = real_vector(n)
+    for i in range(n):
+        b.unsafe_set(i, Float64((i * 7) % 11) - 5.0)
+    return b^
+
+
+def test_pcg() raises:
+    var n = 60
+    var A = _scaled_laplacian(n)
+    var b = _rhs(n)
+    var x = spsolve(A, b)
+    var plain = cg(A, b, rtol=1e-12)
+    var pre = cg(A, b, M=jacobi(A), rtol=1e-12)
+    assert_true(plain.converged())
+    assert_true(pre.converged())
+    # the diagonal scaling is what Jacobi undoes: 60 iterations, the
+    # dimension, against 173
+    assert_true(pre.iterations <= n)
+    assert_true(pre.iterations * 2 < plain.iterations)
+    var r = A @ pre.x - b
+    # the stopping test is on the true residual
+    assert_true(norm2(r) <= 1e-12 * norm2(b) * 1.01)
+    var xnorm = norm2(x)
+    for i in range(n):
+        # rtol=1e-12 times cond(D^-1 A D^-1)~1e3 relative to |x|
+        assert_almost_equal(
+            pre.x.unsafe_get(i), x.unsafe_get(i), atol=1e-8 * xnorm, rtol=0
+        )
+    # the identity preconditioner gives exactly the plain iterates
+    var same = cg(A, b, M=Identity(n), rtol=1e-12)
+    assert_equal(same.iterations, plain.iterations)
+    for i in range(n):
+        assert_equal(same.x.unsafe_get(i), plain.x.unsafe_get(i))
+    # any LinearOperator: a diagonal system converges in one step per value
+    var D = DiagonalOperator([1.0, 2.0, 4.0])
+    var bd = real_vector(3)
+    for i in range(3):
+        bd.unsafe_set(i, 1.0)
+    var xd = cg(D, bd, rtol=1e-14)
+    assert_true(xd.converged())
+    assert_almost_equal(xd.x.unsafe_get(2), 0.25, atol=1e-15, rtol=0)
+    # Jacobi on a diagonal system: exact in one iteration
+    assert_equal(cg(D, bd, M=jacobi(D.to_csr())).iterations, 1)
+
+
+def test_minres_indefinite() raises:
+    # the 1-D Laplacian shifted into the middle of its spectrum (0, 4)
+    var n = 80
+    var A = laplacian_1d(n) - CSRMatrix.identity(n) * 1.3
+    var b = _rhs(n)
+    var x = spsolve(A, b)
+    var res = minres(A, b, rtol=1e-12)
+    assert_true(res.converged())
+    assert_true(res.normal_residual_norm is None)
+    # residual_norm is recomputed from x; the recurrence stops at 1e-12
+    var r = A @ res.x - b
+    assert_almost_equal(res.residual_norm, norm2(r), atol=1e-14, rtol=0)
+    assert_true(res.residual_norm <= 2e-12 * norm2(b))
+    var xnorm = norm2(x)
+    for i in range(n):
+        # cond(A) ~ 1e3 (the smallest |eigenvalue| ~ 2e-3)
+        assert_almost_equal(
+            res.x.unsafe_get(i), x.unsafe_get(i), atol=1e-8 * xnorm, rtol=0
+        )
+    # cg cannot do this: p^T A p changes sign
+    assert_true(cg(A, b).stop == StopReason.BREAKDOWN)
+    # the residual never grows: a short run is no worse than a shorter one
+    var r5 = minres(A, b, maxiter=5)
+    var r10 = minres(A, b, maxiter=10)
+    assert_true(r5.stop == StopReason.MAX_ITER)
+    assert_equal(r10.iterations, 10)
+    assert_true(r10.residual_norm <= r5.residual_norm)
+    # b = 0: x = 0 at once
+    var z = minres(A, real_vector(n))
+    assert_true(z.converged())
+    assert_equal(z.iterations, 0)
+
+
+def test_minres_singular_consistent() raises:
+    # the Neumann Laplacian of a path: constants in the kernel
+    var n = 40
+    var r = List[Int]()
+    var c = List[Int]()
+    var v = List[Float64]()
+    for i in range(n - 1):
+        for e in [(i, i, 1.0), (i + 1, i + 1, 1.0), (i, i + 1, -1.0)]:
+            r.append(e[0])
+            c.append(e[1])
+            v.append(e[2])
+        r.append(i + 1)
+        c.append(i)
+        v.append(-1.0)
+    var A = CSRMatrix.from_coo(n, n, r, c, v)
+    var f = _rhs(n)
+    var b = A @ f  # in the range of A
+    var res = minres(A, b, rtol=1e-12)
+    assert_true(res.converged())
+    assert_true(res.residual_norm <= 2e-12 * norm2(b))
+    # from x0 = 0, the Krylov space is orthogonal to the kernel: x is the
+    # solution of least norm, f minus its mean
+    var mean: Float64 = 0
+    for i in range(n):
+        mean += f.unsafe_get(i) / Float64(n)
+    for i in range(n):
+        # cond ~ 1e3 on the range of A, times |f| ~ 20
+        assert_almost_equal(
+            res.x.unsafe_get(i), f.unsafe_get(i) - mean, atol=1e-8, rtol=0
+        )
+
+
+def test_preconditioned_minres() raises:
+    # D (L - 1.3 I) D: indefinite and badly scaled
+    var n = 60
+    var L = laplacian_1d(n) - CSRMatrix.identity(n) * 1.3
+    var d = List[Float64]()
+    for i in range(n):
+        d.append(1.0 + 99.0 * Float64((i * 37) % n) / Float64(n))
+    var D = DiagonalOperator(d^)
+    var A = D @ L @ D
+    var b = _rhs(n)
+    var plain = minres(A, b, rtol=1e-10)
+    var pre = minres(A, b, M=jacobi(A), rtol=1e-10)
+    assert_true(plain.converged())
+    assert_true(pre.converged())
+    # 60 iterations against 159
+    assert_true(pre.iterations * 2 < plain.iterations)
+    var x = spsolve(A, b)
+    var xnorm = norm2(x)
+    for i in range(n):
+        assert_almost_equal(
+            pre.x.unsafe_get(i), x.unsafe_get(i), atol=1e-5 * xnorm, rtol=0
+        )
+    # the identity preconditioner gives exactly the plain iterates
+    var same = minres(A, b, M=Identity(n), rtol=1e-10)
+    assert_equal(same.iterations, plain.iterations)
+    for i in range(n):
+        assert_equal(same.x.unsafe_get(i), plain.x.unsafe_get(i))
+
+
+def test_solver_input_checks() raises:
+    var n = 10
+    var A = laplacian_1d(n)
+    var b = _rhs(n)
+    # a non-symmetric matrix is refused before any iteration
+    var N = A.copy()
+    N.data[1] = -0.5  # entry (0, 1)
+    with assert_raises(contains="not symmetric"):
+        _ = cg(N, b)
+    with assert_raises(contains="not symmetric"):
+        _ = minres(N, b)
+    with assert_raises(contains="dimension mismatch"):
+        _ = minres(A, real_vector(n + 1))
+    with assert_raises(contains="not n x n"):
+        _ = minres(A, b, M=Identity(n + 1))
+    with assert_raises(contains="maxiter"):
+        _ = minres(A, b, maxiter=-1)
+    # an indefinite preconditioner shows as a breakdown
+    var neg = DiagonalOperator(List[Float64](length=n, fill=-1.0))
+    assert_true(cg(A, b, M=neg).stop == StopReason.BREAKDOWN)
+    assert_true(minres(A, b, M=neg).stop == StopReason.BREAKDOWN)
+    # Jacobi needs a square matrix with a nonzero diagonal
+    with assert_raises(contains="entry 1 is 0"):
+        _ = jacobi(
+            CSRMatrix.from_coo(2, 2, [0, 0, 1], [0, 1, 0], [1.0, 2.0, 2.0])
+        )
+    with assert_raises(contains="not square"):
+        _ = jacobi(CSRMatrix(2, 3))
+    # 1 / |a_ii|: positive for an indefinite matrix too
+    var J = jacobi(A * -2.0)
+    assert_equal(J[0], 0.25)
 
 
 def main() raises:

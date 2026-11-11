@@ -79,8 +79,8 @@ there); `mojodec/prelude.mojo` is the small common subset.
   keep the patch file in sync with any change there.
 - NuMojo's `linalg.solve` (no pivoting) and Jacobi `eigh` are unsuitable for
   DEC systems; use MojoDEC's own `routines/dense.mojo` (pivoted LU,
-  Householder/QL `eigh`) and `routines/linalg.mojo` (`cg`, `lsqr`, dense
-  `spsolve`, `eigh_generalized`).
+  Householder/QL `eigh`) and `routines/linalg.mojo` (`cg`, `minres`,
+  `lsqr`, dense `spsolve`, `eigh_generalized`).
 
 ### Known toolchain bugs
 
@@ -204,6 +204,25 @@ Key design points that span several files:
   per-cell link checks cost the size of the link). `ChainComplex` checks `B_k B_{k+1} = 0` and
   `d_k = B_{k+1}^T` when built. `len(cells)` on a `CellSet` counts cells;
   `len(cells.levels)` is the number of dimensions.
+- **Operators and Krylov solvers** (`core/operator.mojo`,
+  `routines/linalg.mojo`): `LinearOperator` is `num_rows`/`num_cols`/
+  `apply_into(x, mut y)` on `RealArray`; `CSRMatrix`, `DiagonalOperator`,
+  `Identity`, `MatrixOp`, `DiagonalOp`, and `BlockOp` (applied block by
+  block) implement it. `Preconditioner` is a method-less marker for
+  symmetric positive definite operators (`DiagonalOperator`, `DiagonalOp`,
+  `Identity`; never a general `CSRMatrix`). `cg` and `minres` are generic
+  over both, with `M=` keyword-only; the unpreconditioned overloads pass
+  `Identity`, which reproduces the old iterates bit for bit. Both raise on
+  a non-symmetric operator (`_require_symmetric`, two probe products) and
+  stop with `BREAKDOWN` on `r^T M r < 0`. Typed preconditioners map `A`'s
+  output kind back to its input kind (`jacobi(A)` does).
+- **Time stepping** (`routines/time.mojo`): `Leapfrog` takes diagonal
+  masses `Mq`, `Mp` and one coupling `K` and steps `Mq q' = K p`,
+  `Mp p' = -K^T q`, so the system is skew by construction; it raises on
+  non-positive masses (stars on meshes that are not well-centered) and on
+  `dt` at or above the stability limit (power iteration). `TypedLeapfrog`
+  infers its kinds from the operators and checks them with
+  `comptime assert`.
 - **`mojodec.vis`** uses matplotlib via Python interop and is intentionally
   *not* re-exported from `mojodec`, so non-plotting programs never load
   Python. `pyplot(interactive=show_requested())` uses Agg unless `--show`
@@ -273,8 +292,8 @@ uses meshes past every threshold; the other tests' meshes run serially.
 - The examples double as regression checks against PyDEC; README.md's
   Examples table lists the expected results (e.g. DarcyFlow pressures to
   1e-14, ResonantCavity eigenvalues m²+n², MakeMesh matches
-  `examples/MakeMesh/ExpectedOutput/`). DarcyFlow, HeatConduction, and
-  ResonantCavity use the typed layer. HeatConduction imposes Dirichlet rows
+  `examples/MakeMesh/ExpectedOutput/`). DarcyFlow, HeatConduction,
+  ResonantCavity, and CavityWaves use the typed layer. HeatConduction imposes Dirichlet rows
   with `exclude_subset(fixed.dual())` plus `tc.dual_diagonal[...]`
   restricted to the same cells; DarcyFlow solves the mixed `BlockOp` with
   `spsolve(..., values=, fixed_first=, fixed_second=)`, which reproduces

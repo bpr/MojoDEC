@@ -14,6 +14,7 @@ from mojodec import (
     CSRMatrix,
     MatrixOp,
     TypedComplex,
+    minres,
     simplicial_grid_2d,
     spsolve,
 )
@@ -121,6 +122,40 @@ def test_solve_whole_system() raises:
     var e = (x - x0).stacked()
     for i in range(e.size):
         assert_almost_equal(e.unsafe_get(i), 0.0, atol=5e-13, rtol=0)
+
+
+def test_minres_on_blocks() raises:
+    # the saddle-point Darcy system [[-star1, d1^T], [d1, 0]]: symmetric,
+    # indefinite, and non-singular (d1 is onto on a disk)
+    var tc = _grid(5)
+    var A = _darcy(tc)
+    var x0 = _pair(tc, 2)
+    var b = A @ x0
+    var res = minres(A, b, rtol=1e-13)
+    assert_true(res.converged())
+    var x = res^.take_x()  # CochainPair[2, 1, PRIMAL, 0, DUAL]
+    var direct = spsolve(A, b)
+    var e = (x - direct).stacked()
+    for i in range(e.size):
+        # rtol=1e-13 times cond(A) ~ 1e3, |x| ~ 30
+        assert_almost_equal(e.unsafe_get(i), 0.0, atol=1e-8, rtol=0)
+    # the blocks are applied one by one, the same as assembled
+    var y = A.to_csr() @ x0.stacked()
+    var z = b.stacked()
+    for i in range(y.size):
+        assert_almost_equal(
+            z.unsafe_get(i), y.unsafe_get(i), atol=1e-14, rtol=0
+        )
+    # a block system that is not symmetric is refused
+    var d1 = tc.d[1, PRIMAL]()
+    var N = BlockOp(
+        tc.star[1, PRIMAL]().to_matrix_op() * -1.0,
+        d1.T() * 2.0,
+        d1,
+        tc.zero[0, DUAL, 2, PRIMAL](),
+    )
+    with assert_raises(contains="not symmetric"):
+        _ = minres(N, b)
 
 
 def test_errors() raises:

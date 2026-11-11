@@ -44,6 +44,7 @@ The untyped core remains available through `complex()`, `untyped()`,
 from mojodec.core.cochain import Cochain
 from mojodec.core.diagonal import DiagonalOperator
 from mojodec.core.mesh import SimplicialMesh
+from mojodec.core.operator import LinearOperator, Preconditioner
 from mojodec.core.primality import Primality
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
@@ -1032,7 +1033,7 @@ def _join(
 
 struct MatrixOp[
     n: Int, in_k: Int, in_primal: Bool, out_k: Int, out_primal: Bool
-](Copyable, Movable, Writable):
+](Copyable, LinearOperator, Movable, Writable):
     """A sparse operator from `in_k`-cochains to `out_k`-cochains.
 
     Parameters:
@@ -1064,6 +1065,35 @@ struct MatrixOp[
         """
         self.mat = mat^
         self.complex = complex
+
+    def num_rows(self) -> Int:
+        """The number of output cells, for `LinearOperator`.
+
+        Returns:
+            The number of rows of `mat`.
+        """
+        return self.mat.num_rows()
+
+    def num_cols(self) -> Int:
+        """The number of input cells, for `LinearOperator`.
+
+        Returns:
+            The number of columns of `mat`.
+        """
+        return self.mat.num_cols()
+
+    def apply_into(self, x: RealArray, mut y: RealArray) raises:
+        """`mat` applied to raw values, for `LinearOperator` (the
+        untyped solvers); `@` applies it to cochains.
+
+        Args:
+            x: One value per input cell.
+            y: One value per output cell, overwritten.
+
+        Raises:
+            If a length does not match.
+        """
+        self.mat.apply_into(x, y)
 
     def __matmul__(
         self, c: TypedCochain[Self.n, Self.in_k, Self.in_primal]
@@ -1350,7 +1380,7 @@ struct MatrixOp[
 
 struct DiagonalOp[
     n: Int, in_k: Int, in_primal: Bool, out_k: Int, out_primal: Bool
-](Copyable, Movable, Writable):
+](Copyable, Movable, Preconditioner, Writable):
     """A diagonal operator from `in_k`-cochains to `out_k`-cochains with as
     many cells, such as a Hodge star.
 
@@ -1383,6 +1413,35 @@ struct DiagonalOp[
         """
         self.diag = diag^
         self.complex = complex
+
+    def num_rows(self) -> Int:
+        """The number of output cells, for `LinearOperator`.
+
+        Returns:
+            The number of rows of `diag`.
+        """
+        return self.diag.num_rows()
+
+    def num_cols(self) -> Int:
+        """The number of input cells, for `LinearOperator`.
+
+        Returns:
+            The number of columns of `diag`.
+        """
+        return self.diag.num_cols()
+
+    def apply_into(self, x: RealArray, mut y: RealArray) raises:
+        """`diag` applied to raw values, for `LinearOperator` (the
+        untyped solvers); `@` applies it to cochains.
+
+        Args:
+            x: One value per input cell.
+            y: One value per output cell, overwritten.
+
+        Raises:
+            If a length does not match.
+        """
+        self.diag.apply_into(x, y)
 
     def __matmul__(
         self, c: TypedCochain[Self.n, Self.in_k, Self.in_primal]

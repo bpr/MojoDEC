@@ -21,6 +21,7 @@ Conventions:
 import numojo as nm
 from numojo.prelude import *
 
+from mojodec.core.operator import LinearOperator
 from mojodec.core.parallel import parallel_ranges
 from mojodec.core.subset import Subset
 from mojodec.core.utils import (
@@ -73,7 +74,7 @@ struct COOEntries(Copyable, Movable):
         return len(self.rows)
 
 
-struct CSRMatrix(Copyable, Movable, Writable):
+struct CSRMatrix(Copyable, LinearOperator, Movable, Writable):
     """A sparse matrix in compressed sparse row format."""
 
     var nrows: Int
@@ -796,6 +797,34 @@ struct CSRMatrix(Copyable, Movable, Writable):
             for k in range(ip[unsafe_offset=i], ip[unsafe_offset=i + 1]):
                 s += dv[unsafe_offset=k] * xp[unsafe_offset=ix[unsafe_offset=k]]
             yp[unsafe_offset=i] = s
+
+    def num_rows(self) -> Int:
+        """The number of rows, for `LinearOperator`.
+
+        Returns:
+            `nrows`.
+        """
+        return self.nrows
+
+    def num_cols(self) -> Int:
+        """The number of columns, for `LinearOperator`.
+
+        Returns:
+            `ncols`.
+        """
+        return self.ncols
+
+    def apply_into(self, x: RealArray, mut y: RealArray) raises:
+        """`matvec_into`, for `LinearOperator`.
+
+        Args:
+            x: A vector of length `ncols`.
+            y: A vector of length `nrows`, overwritten with the product.
+
+        Raises:
+            If `x.size` differs from `ncols` or `y.size` from `nrows`.
+        """
+        self.matvec_into(x, y)
 
     def _matvec_parallel(self, x: RealArray, mut y: RealArray):
         """`matvec_into` by blocks of rows on every core (sizes checked)."""

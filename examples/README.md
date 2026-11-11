@@ -3,7 +3,8 @@
 Versions of PyDEC's six example programs, plus `Sphere`, a check of the
 Hodge Laplacian's spectrum on the sphere, `Neighborhoods`
 and `Neighborhoods3D`, tours of stars, links, and boundaries in 2D and 3D,
-and `HeatConduction`, which solves a problem set up in Gmsh. Each one computes
+`HeatConduction`, which solves a problem set up in Gmsh, and
+`CavityWaves`, Maxwell's equations stepped in time. Each one computes
 something on a complex, prints a summary, writes its
 results to text files or the terminal, and draws its figures with matplotlib. Eight of them
 also write VTK files for ParaView.
@@ -13,14 +14,14 @@ also write VTK files for ParaView.
 From the repository root, after `pixi install`:
 
 ```sh
-pixi run examples                      # all ten, figures saved as PNG files
+pixi run examples                      # all eleven, figures saved as PNG files
 pixi run examples DarcyFlow            # just one
 pixi run examples DarcyFlow --show     # ... and open its figures in windows
-pixi run examples --show               # all ten, showing every figure
+pixi run examples --show               # all eleven, showing every figure
 ```
 
 The examples are `Ranking`, `RipsComplex`, `HodgeDecomposition`,
-`DarcyFlow`, `HeatConduction`, `ResonantCavity`, `Sphere`, `Neighborhoods`, `Neighborhoods3D`, and `MakeMesh`. Each runs in its own
+`DarcyFlow`, `HeatConduction`, `ResonantCavity`, `CavityWaves`, `Sphere`, `Neighborhoods`, `Neighborhoods3D`, and `MakeMesh`. Each runs in its own
 directory and writes its output there. The task builds the vendored NuMojo
 first, so the first run takes a minute longer.
 
@@ -65,6 +66,7 @@ show the figures, and the PNG files are still written.
 | DarcyFlow | Darcy flow through a square: pressures and fluxes | `pressures.txt` | `pressures.png` (vs. exact), `flux.png` (velocity field) | `darcy.vtu` |
 | HeatConduction | steady heat flow through a plate of two materials, meshed by Gmsh: its physical groups give the hot, cold, and insulated edges and the material regions | `temperature.txt` | `temperature.png` (over the plate), `profile.png` (vs. exact, along x) | `heat.vtu` |
 | ResonantCavity | eigenvalues of the curl-curl operator on a square cavity, and one eigenmode | `eigenvalues.txt`, `mode3.txt` | `eigenvalues.png`, `mode3.png` | `mode3.vtu` |
+| CavityWaves | resonances of an equilateral-triangle cavity, then its lowest mode stepped in time by the leapfrog | `waves.txt` (amplitude and energies over time) | `amplitude.png` (vs. cos(ω_dt t)), `energy.png` (staggered vs. co-located energy) | `waves.vtu` (`E0`, `Bz_quarter`) |
 | Sphere | Hodge-Laplacian spectra of 0-, 1-, and 2-forms on an icosphere vs. the spherical harmonics' n(n+1); Gauss-Bonnet and curvature checks | `spectrum.txt` | `spectrum.png` | `sphere.vtu` |
 | Neighborhoods | stars, links, and boundaries of vertices, an edge, growing rings of triangles, and the whole mesh on a grid of the square, checking that links are polygons or paths and that Bd(Cl(St(v))) = Lk(v) | printed | `neighborhoods.png` | `neighborhoods.vtu` |
 | Neighborhoods3D | the same on PyDEC's tetrahedral solid torus: vertex links are spheres or disks, and the growing rings are balls until they wrap around (pinched once) into the solid torus, whose boundary is a torus | printed | `neighborhoods3d.png` (vertex links, Euler characteristics of the rings) | `neighborhoods3d.vtu`, `links.vtu` |

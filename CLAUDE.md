@@ -14,6 +14,9 @@ AGENTS.md.
   calling a change done.
 - After touching `third_party/numojo`, run `pixi run numojo` and update
   `third_party/numojo-mojo-1.3.patch`.
+- A new user-visible feature gets a page (or section) in `docs/guide/`:
+  the mathematics, the API, examples, and pitfalls; `pixi run docs-site`
+  must still build.
 - After changing doc strings, run `pixi run doc-check`; if it improved,
   `pixi run doc-check --update` lowers the baseline.
 - After changing geometry, solvers or I/O, run the examples and compare
@@ -29,4 +32,5 @@ AGENTS.md.
 | MojoDEC ↔ PyDEC file mapping, differences  | README.md                               |
 | Expected example results                   | README.md, Examples table               |
 | Doc string style                           | `docs/writing-docs.md`                  |
+| User guide: the math behind features       | `docs/guide/`                           |
 | Vendored NuMojo patch                      | `third_party/README.md`                 |
