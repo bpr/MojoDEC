@@ -10,6 +10,9 @@ The two maps between differential forms and cochains; not in PyDEC.
 - `derham_map` (R) takes a k-form to the k-cochain of its integrals over
   the oriented k-simplices, by Grundmann–Möller quadrature. By Stokes'
   theorem `R(d omega) = d R(omega)`.
+- `l2_projection` takes a k-form to the cochain whose Whitney form is
+  closest to it in L2 (`whitney_load` gives the right-hand side), and
+  `l2_error` measures `||W c - omega||`.
 - `whitney_form` (W) evaluates the Whitney form of a cochain at a point of
   an element: `W c = sum_sigma c_sigma W_sigma`, with
   `W_sigma = k! sum_i (-1)^i lambda_{s_i} dlambda_{s_0} ^ ... (no s_i) ... ^ dlambda_{s_k}`
@@ -32,10 +35,12 @@ var w = whitney_form(c, 0, [0.2, 0.3, 0.5])        # components at a point
 ```
 """
 
+from std.math import sqrt
+
 from mojodec.core.cochain import Cochain
 from mojodec.core.primality import Primality
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.typed import PRIMAL, TypedCochain, TypedComplex
+from mojodec.core.typed import DUAL, PRIMAL, TypedCochain, TypedComplex
 from mojodec.core.utils import (
     RealArray,
     cols_of,
@@ -45,6 +50,8 @@ from mojodec.core.utils import (
     real_vector,
 )
 from mojodec.routines.geometry import barycentric_gradients
+from mojodec.routines.innerproduct import whitney_innerproduct
+from mojodec.routines.linalg import cg, jacobi
 from mojodec.routines.quadrature import grundmann_moeller
 
 
@@ -285,58 +292,16 @@ def whitney_form(
         raise Error(
             String("whitney_form: barycentric coordinates sum to ", total)
         )
-    ref V = sc.vertices()
-    var N = cols_of(V)
-    var verts = List[Int](capacity=n + 1)
-    var pts = real_array(n + 1, N)
-    for j in range(n + 1):
-        verts.append(Int(top.simplices.unsafe_get(element * (n + 1) + j)))
-        for col in range(N):
-            fset(pts, j, col, fget(V, verts[j], col))
-    var grads = barycentric_gradients(pts)
-    var sets = form_index_sets(N, k)
-    var out = List[Float64](length=len(sets), fill=0.0)
-    var kfact: Float64 = 1
-    for j in range(2, k + 1):
-        kfact *= Float64(j)
-    ref level = sc[k]
-    var face = List[Int](length=k + 1, fill=0)
-    var local = List[Int](capacity=k + 1)
-    for i in range(k + 1):
-        local.append(i)
-    var vecs = List[Float64](length=k * N, fill=0.0)
-    while True:
-        # the face with local vertices `local`, sorted like the element
-        for j in range(k + 1):
-            face[j] = verts[local[j]]
-        var row = level.find_vertices(face)
-        var cs = c.v.unsafe_get(row)
-        if level.simplex_parity.unsafe_get(row) == 1:
-            cs = -cs  # the value is on the oppositely oriented simplex
-        if cs != 0:
-            for i in range(k + 1):
-                var coef = kfact * barycentric[local[i]]
-                if i % 2 == 1:
-                    coef = -coef
-                # the wedge of the other k gradients
-                var r = 0
-                for j in range(k + 1):
-                    if j == i:
-                        continue
-                    for col in range(N):
-                        vecs[r * N + col] = fget(grads, local[j], col)
-                    r += 1
-                for I in range(len(sets)):
-                    out[I] += cs * coef * _minor(vecs, k, N, sets[I])
-        # next k-face of the element
-        var p = k
-        while p >= 0 and local[p] == n - k + p:
-            p -= 1
-        if p < 0:
-            break
-        local[p] += 1
-        for j in range(p + 1, k + 1):
-            local[j] = local[j - 1] + 1
+    var e = _WhitneyElement(sc, k, element)
+    var out = List[Float64](length=e.ncomp, fill=0.0)
+    var w = List[Float64](length=e.ncomp, fill=0.0)
+    for f in range(len(e.rows)):
+        var cs = c.v.unsafe_get(e.rows[f])
+        if cs == 0:
+            continue
+        e.basis(f, barycentric, w)
+        for I in range(e.ncomp):
+            out[I] += cs * w[I]
     return out^
 
 
@@ -407,3 +372,388 @@ def _minor(vecs: List[Float64], k: Int, N: Int, cols: List[Int]) -> Float64:
             for c in range(p, k):
                 a[r * k + c] -= f * a[p * k + c]
     return det
+
+
+struct _WhitneyElement(Movable):
+    """The Whitney k-forms of one element's k-faces, ready to evaluate:
+    `W_f = sign_f k! sum_i (-1)^i lambda_{l_i} wedges[f][i]`, the wedge of
+    the other gradients being constant in the element."""
+
+    var rows: List[Int]
+    """The global index of each local k-face in `sc[k]`."""
+    var locals: List[List[Int]]
+    """Each face's local vertex numbers in the element."""
+    var wedges: List[List[List[Float64]]]
+    """`[face][i]`: the components of the wedge of the face's gradients
+    other than the i-th, times `sign_f k! (-1)^i`."""
+    var ncomp: Int
+    """The number of components of a k-form on `R^N`."""
+    var verts: List[Int]
+    """The element's vertices, sorted."""
+    var volume: Float64
+    """The element's unsigned volume."""
+
+    def __init__(out self, sc: SimplicialComplex, k: Int, element: Int) raises:
+        var n = sc.complex_dimension()
+        ref V = sc.vertices()
+        var N = cols_of(V)
+        ref top = sc[n]
+        self.verts = List[Int](capacity=n + 1)
+        var pts = real_array(n + 1, N)
+        for j in range(n + 1):
+            self.verts.append(
+                Int(top.simplices.unsafe_get(element * (n + 1) + j))
+            )
+            for col in range(N):
+                fset(pts, j, col, fget(V, self.verts[j], col))
+        self.volume = abs(top.primal_volume.unsafe_get(element))
+        var grads = barycentric_gradients(pts)
+        var sets = form_index_sets(N, k)
+        self.ncomp = len(sets)
+        var kfact: Float64 = 1
+        for j in range(2, k + 1):
+            kfact *= Float64(j)
+        ref level = sc[k]
+        self.rows = List[Int]()
+        self.locals = List[List[Int]]()
+        self.wedges = List[List[List[Float64]]]()
+        var face = List[Int](length=k + 1, fill=0)
+        var local = List[Int](capacity=k + 1)
+        for i in range(k + 1):
+            local.append(i)
+        var vecs = List[Float64](length=k * N, fill=0.0)
+        while True:
+            for j in range(k + 1):
+                face[j] = self.verts[local[j]]
+            var row = level.find_vertices(face)
+            # the cochain's value is on the oppositely oriented simplex
+            # where the parity is 1 (elements keep the mesh's orientation)
+            var sign: Float64 = (
+                -1.0 if level.simplex_parity.unsafe_get(row) == 1 else 1.0
+            )
+            var per_i = List[List[Float64]]()
+            for i in range(k + 1):
+                var coef = sign * kfact * (-1.0 if i % 2 == 1 else 1.0)
+                var r = 0
+                for j in range(k + 1):
+                    if j == i:
+                        continue
+                    for col in range(N):
+                        vecs[r * N + col] = fget(grads, local[j], col)
+                    r += 1
+                var comps = List[Float64](capacity=len(sets))
+                for I in range(len(sets)):
+                    comps.append(coef * _minor(vecs, k, N, sets[I]))
+                per_i.append(comps^)
+            self.rows.append(row)
+            self.locals.append(local.copy())
+            self.wedges.append(per_i^)
+            var p = k
+            while p >= 0 and local[p] == n - k + p:
+                p -= 1
+            if p < 0:
+                break
+            local[p] += 1
+            for j in range(p + 1, k + 1):
+                local[j] = local[j - 1] + 1
+
+    def basis(self, f: Int, barycentric: List[Float64], mut out: List[Float64]):
+        """The components of face `f`'s Whitney form at a point."""
+        for I in range(self.ncomp):
+            out[I] = 0
+        ref loc = self.locals[f]
+        for i in range(len(loc)):
+            var lam = barycentric[loc[i]]
+            ref w = self.wedges[f][i]
+            for I in range(self.ncomp):
+                out[I] += lam * w[I]
+
+
+def _point(
+    sc: SimplicialComplex,
+    verts: List[Int],
+    barycentric: List[Float64],
+    mut x: List[Float64],
+):
+    """The Cartesian point with the given barycentric coordinates."""
+    ref V = sc.vertices()
+    for col in range(len(x)):
+        var p: Float64 = 0
+        for j in range(len(verts)):
+            p += barycentric[j] * fget(V, verts[j], col)
+        x[col] = p
+
+
+def _check_components(got: Int, want: Int, who: String) raises:
+    if got != want:
+        raise Error(
+            String(who, ": omega gave ", got, " components, expected ", want)
+        )
+
+
+def whitney_load[
+    F: def(List[Float64]) raises -> List[Float64]
+](sc: SimplicialComplex, k: Int, degree: Int, omega: F) raises -> RealArray:
+    """The L2 inner products of a k-form with the Whitney k-forms:
+    `b_sigma = int <omega, W_sigma>`, over the mesh.
+
+    The right-hand side of a Galerkin problem with Whitney forms, and of
+    the L2 projection (`l2_projection`): `M c = b` with `M` the Whitney
+    mass matrix `whitney_innerproduct(sc, k)`. Integrated element by
+    element with the Grundmann–Möller rule of the given degree, exact
+    when the components of `omega` are polynomials of degree at most
+    `degree - 1` (the Whitney forms add one).
+
+    Parameters:
+        F: The form's type: a function or closure.
+
+    Args:
+        sc: The complex.
+        k: The degree of the form, `0..n`.
+        degree: The quadrature degree, `0..21`.
+        omega: The form's components at a point (as for `derham_map`).
+
+    Returns:
+        One value per k-simplex, in the order of `sc[k]`.
+
+    Raises:
+        If `k` or `degree` is out of range, `omega` gives the wrong number
+        of components, an element is degenerate, or `omega` raises.
+    """
+    var n = sc.complex_dimension()
+    if k < 0 or k > n:
+        raise Error(String("whitney_load: k = ", k, " is outside 0..", n))
+    var rule = grundmann_moeller(n, degree)
+    var N = cols_of(sc.vertices())
+    var out = real_vector(sc[k].num_simplices)
+    var x = List[Float64](length=N, fill=0.0)
+    var bary = List[Float64](length=n + 1, fill=0.0)
+    var w = List[Float64]()
+    for t in range(sc[n].num_simplices):
+        var e = _WhitneyElement(sc, k, t)
+        if len(w) != e.ncomp:
+            w = List[Float64](length=e.ncomp, fill=0.0)
+        for q in range(len(rule)):
+            for j in range(n + 1):
+                bary[j] = rule.points.unsafe_get(q * (n + 1) + j)
+            _point(sc, e.verts, bary, x)
+            var om = omega(x)
+            _check_components(len(om), e.ncomp, "whitney_load")
+            var scale = e.volume * rule.weights.unsafe_get(q)
+            for f in range(len(e.rows)):
+                e.basis(f, bary, w)
+                var ip: Float64 = 0
+                for I in range(e.ncomp):
+                    ip += om[I] * w[I]
+                var r = e.rows[f]
+                out.unsafe_set(r, out.unsafe_get(r) + scale * ip)
+    return out^
+
+
+def l2_projection[
+    F: def(List[Float64]) raises -> List[Float64]
+](
+    sc: SimplicialComplex,
+    k: Int,
+    degree: Int,
+    omega: F,
+    rtol: Float64 = 1e-12,
+) raises -> Cochain:
+    """The L2 projection of a k-form onto the Whitney k-forms.
+
+    The cochain `c` whose Whitney form is closest to `omega` in the L2
+    norm: `M c = b`, with `M = whitney_innerproduct(sc, k)` and
+    `b = whitney_load(sc, k, degree, omega)`, solved by conjugate
+    gradients with a Jacobi preconditioner (the Whitney mass matrix is
+    uniformly well conditioned on shape-regular meshes). Unlike the de
+    Rham map, it does not commute with `d`, but its error is the smallest
+    possible: `||W c - omega|| <= ||W R omega - omega||`.
+
+    ```mojo
+    var c = l2_projection(sc, 1, 5, omega)
+    print(l2_error(c, 7, omega))
+    ```
+
+    Parameters:
+        F: The form's type: a function or closure.
+
+    Args:
+        sc: The complex.
+        k: The degree of the form, `0..n`.
+        degree: The quadrature degree of the load vector.
+        omega: The form's components at a point.
+        rtol: The relative residual at which CG stops.
+
+    Returns:
+        A primal k-cochain.
+
+    Raises:
+        If an argument is out of range, `omega` raises or gives the wrong
+        number of components, or CG does not converge.
+    """
+    var b = whitney_load(sc, k, degree, omega)
+    var M = whitney_innerproduct(sc, k)
+    var res = cg(M, b, M=jacobi(M), rtol=rtol)
+    if not res.converged():
+        raise Error(
+            String(
+                "l2_projection: CG stopped (",
+                res.stop,
+                ") after ",
+                res.iterations,
+                " iterations, residual ",
+                res.residual_norm,
+            )
+        )
+    return Cochain(sc, k, Primality.PRIMAL, res^.take_x())
+
+
+def l2_error[
+    F: def(List[Float64]) raises -> List[Float64]
+](c: Cochain, degree: Int, omega: F) raises -> Float64:
+    """`||W c - omega||`, the L2 distance between a cochain's Whitney form
+    and a k-form over the mesh.
+
+    Integrated element by element with the Grundmann–Möller rule of the
+    given degree; the squared difference of a polynomial form of degree
+    `p` has degree `2 max(p, 1)`.
+
+    Parameters:
+        F: The form's type: a function or closure.
+
+    Args:
+        c: A primal k-cochain.
+        degree: The quadrature degree.
+        omega: The form's components at a point.
+
+    Returns:
+        The L2 norm of the difference.
+
+    Raises:
+        If `c` is dual, `degree` is out of range, `omega` gives the wrong
+        number of components, or `omega` raises.
+    """
+    if c.primality() != Primality.PRIMAL:
+        raise Error("l2_error: the cochain must be primal")
+    ref sc = c.complex
+    var n = sc.complex_dimension()
+    var k = c.k
+    var rule = grundmann_moeller(n, degree)
+    var N = cols_of(sc.vertices())
+    var x = List[Float64](length=N, fill=0.0)
+    var bary = List[Float64](length=n + 1, fill=0.0)
+    var w = List[Float64]()
+    var total: Float64 = 0
+    for t in range(sc[n].num_simplices):
+        var e = _WhitneyElement(sc, k, t)
+        if len(w) != e.ncomp:
+            w = List[Float64](length=e.ncomp, fill=0.0)
+        var acc = List[Float64](length=e.ncomp, fill=0.0)
+        var part: Float64 = 0
+        for q in range(len(rule)):
+            for j in range(n + 1):
+                bary[j] = rule.points.unsafe_get(q * (n + 1) + j)
+            _point(sc, e.verts, bary, x)
+            var om = omega(x)
+            _check_components(len(om), e.ncomp, "l2_error")
+            for I in range(e.ncomp):
+                acc[I] = -om[I]
+            for f in range(len(e.rows)):
+                var cs = c.v.unsafe_get(e.rows[f])
+                if cs == 0:
+                    continue
+                e.basis(f, bary, w)
+                for I in range(e.ncomp):
+                    acc[I] += cs * w[I]
+            var sq: Float64 = 0
+            for I in range(e.ncomp):
+                sq += acc[I] * acc[I]
+            part += rule.weights.unsafe_get(q) * sq
+        total += e.volume * part
+    return sqrt(total)
+
+
+def whitney_load[
+    n: Int, //, k: Int, F: def(List[Float64]) raises -> List[Float64]
+](tc: TypedComplex[n], degree: Int, omega: F) raises -> TypedCochain[
+    n, n - k, DUAL
+]:
+    """The load vector as a dual (n-k)-cochain, the kind
+    `whitney_innerproduct[k](tc)` gives; see the untyped overload.
+
+    Parameters:
+        n: The complex dimension (inferred).
+        k: The degree of the form.
+        F: The form's type.
+
+    Args:
+        tc: The complex.
+        degree: The quadrature degree.
+        omega: The form's components at a point.
+
+    Returns:
+        `b_sigma = int <omega, W_sigma>` for every k-simplex.
+
+    Raises:
+        As the untyped overload.
+    """
+    comptime assert 0 <= k and k <= n, "whitney_load: k must be in 0..n"
+    return TypedCochain[n, n - k, DUAL](
+        tc.sc, whitney_load(tc.sc, k, degree, omega)
+    )
+
+
+def l2_projection[
+    n: Int, //, k: Int, F: def(List[Float64]) raises -> List[Float64]
+](
+    tc: TypedComplex[n], degree: Int, omega: F, rtol: Float64 = 1e-12
+) raises -> TypedCochain[n, k, PRIMAL]:
+    """The L2 projection as a typed primal k-cochain; see the untyped
+    overload.
+
+    Parameters:
+        n: The complex dimension (inferred).
+        k: The degree of the form.
+        F: The form's type.
+
+    Args:
+        tc: The complex.
+        degree: The quadrature degree of the load vector.
+        omega: The form's components at a point.
+        rtol: The relative residual at which CG stops.
+
+    Returns:
+        The cochain whose Whitney form is L2-closest to `omega`.
+
+    Raises:
+        As the untyped overload.
+    """
+    comptime assert 0 <= k and k <= n, "l2_projection: k must be in 0..n"
+    var c = l2_projection(tc.sc, k, degree, omega, rtol)
+    return TypedCochain[n, k, PRIMAL](tc.sc, c.v.copy())
+
+
+def l2_error[
+    n: Int, k: Int, F: def(List[Float64]) raises -> List[Float64]
+](c: TypedCochain[n, k, PRIMAL], degree: Int, omega: F) raises -> Float64:
+    """`||W c - omega||` for a typed cochain; see the untyped overload.
+
+    Parameters:
+        n: The complex dimension.
+        k: The degree.
+        F: The form's type.
+
+    Args:
+        c: The cochain.
+        degree: The quadrature degree.
+        omega: The form's components at a point.
+
+    Returns:
+        The L2 norm of the difference.
+
+    Raises:
+        As the untyped overload.
+    """
+    return l2_error(
+        Cochain(c.complex, k, Primality.PRIMAL, c.v.copy()), degree, omega
+    )

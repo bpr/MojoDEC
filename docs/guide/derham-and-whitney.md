@@ -164,6 +164,52 @@ search for the element containing a point; you give the element.
   degree-2 rule, and matches `whitney_innerproduct` to $10^{-13}$ for
   every k on a perturbed mesh.
 
+## The L² projection
+
+$W R \omega$ interpolates: it matches $\omega$'s integrals over the
+simplices exactly. The **L² projection** $P\omega$ is instead the
+cochain whose Whitney form is closest to $\omega$ in the $L^2$ norm.
+Setting the error orthogonal to every Whitney form gives the normal
+equations
+
+$$
+\sum_\tau \Big( \int \langle W_\sigma, W_\tau \rangle \Big) c_\tau = \int \langle \omega, W_\sigma \rangle
+\quad \text{for every } \sigma,
+\qquad\text{that is}\qquad M c = b .
+$$
+
+Here $M$ is the Whitney mass matrix, `whitney_innerproduct(sc, k)`, and
+$b$ is the **load vector**, `whitney_load(sc, k, degree, omega)`, integrated
+element by element with the Grundmann–Möller rule. `l2_projection` solves
+the system with conjugate gradients and a Jacobi preconditioner. On
+shape-regular meshes the Whitney mass matrix is spectrally equivalent to
+its diagonal, so CG converges in a number of iterations independent of the
+mesh size. It raises if CG does not converge.
+
+```mojo
+var c = l2_projection(sc, 1, 5, omega)       # best L2 fit by Whitney 1-forms
+print(l2_error(c, 7, omega))                  # ||W c - omega||
+```
+
+How it compares with $R$:
+- **Best approximation.** $\|W P\omega - \omega\| \le \|W R\omega - \omega\|$
+  always. The convergence tests check this on every mesh, degree, and
+  dimension.
+- **Not a cochain map.** $P$ does not commute with $d$, so a discrete
+  derivative of $P\omega$ is not $P(d\omega)$.
+- **Same for constants and for top degree.** Constants are Whitney forms,
+  so $P\omega = R\omega$ for them. For $k = n$, both give each element's
+  mean of $\omega$, so they coincide.
+
+`l2_error(c, degree, omega)` computes $\|W c - \omega\|$ by quadrature
+over the elements. For a smooth $\omega$, use a degree about twice that of
+the integrand's polynomial approximation; the convergence tests use 7.
+
+The load vector is also the right-hand side of any Galerkin problem with
+Whitney forms. In the typed layer, `whitney_load[k](tc, ...)` is a
+`TypedCochain[n, n - k, DUAL]`, the kind `whitney_innerproduct[k](tc)`
+produces, so it pairs with the typed mass and stiffness operators.
+
 ## Using them
 
 **Putting a field on a mesh.** Two examples:
@@ -186,9 +232,9 @@ var g = derham_map(sc, 1, 3, flux)
 quiver plot or a VTK cell field.
 
 **Measuring discretization error.** For a manufactured solution $u$,
-compare the discrete solution with $R u$: both are cochains, so the error
-is a cochain too, and the Whitney mass matrix gives its $L^2$ norm. The
-convergence tests planned next do this.
+`l2_error(u_h, degree, u)` gives $\|W u_h - u\|$. Comparing it with the
+error of `l2_projection` (the best possible) separates the method's error
+from the approximation limit; see [Convergence](convergence.md).
 
 **Typed overloads.** `derham_map[k](tc, degree, omega)` returns a
 `TypedCochain[n, k, PRIMAL]`, and `whitney_form` takes one.
@@ -223,4 +269,6 @@ convergence tests planned next do this.
 - `test_whitney_properties`: partition of unity, $d W = W d$, $W R
   \omega = \omega$ for constant forms.
 - `test_mass_matrices_match_whitney_innerproduct`.
+- `test_load_projection_and_error`: for constant forms, the load vector is
+  $M R\omega$, the projection is $R\omega$, and both errors vanish.
 - `test_typed_and_errors`.

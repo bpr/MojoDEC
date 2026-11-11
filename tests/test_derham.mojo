@@ -15,9 +15,14 @@ from mojodec import (
     form_index_sets,
     icosphere,
     kuhn_grid,
+    l2_error,
+    l2_projection,
     whitney_form,
     whitney_innerproduct,
+    whitney_load,
 )
+from std.math import sqrt
+
 from mojodec.core.cochain import Cochain
 from mojodec.core.primality import Primality
 from mojodec.core.utils import cols_of, fget, fset, real_array, real_vector
@@ -366,6 +371,51 @@ def test_mass_matrices_match_whitney_innerproduct() raises:
                 )
 
 
+def test_load_projection_and_error() raises:
+    # constant forms are Whitney forms (W R omega = omega), so their load
+    # vector is M R omega, their projection R omega, and both errors vanish
+    var sc = _box()
+    for k in range(4):
+        var deg = k
+
+        def const(x: List[Float64]) raises {deg} -> List[Float64]:
+            if deg == 1:
+                return [0.5, -1.0, 2.0]
+            if deg == 2:
+                return [1.0, 0.25, -3.0]
+            return [1.0]
+
+        var r = derham_map(sc, k, 0, const)
+        var b = whitney_load(sc, k, 1, const)
+        var Mr = whitney_innerproduct(sc, k) @ r.v
+        for i in range(b.size):
+            assert_almost_equal(
+                b.unsafe_get(i), Mr.unsafe_get(i), atol=1e-14, rtol=0
+            )
+        var p = l2_projection(sc, k, 1, const)
+        for i in range(p.v.size):
+            # CG to rtol 1e-12; the mass matrix is well conditioned
+            assert_almost_equal(
+                p.v.unsafe_get(i), r.v.unsafe_get(i), atol=1e-11, rtol=0
+            )
+        assert_true(l2_error(r, 2, const) < 1e-13)
+
+    def one(x: List[Float64]) -> List[Float64]:
+        return [1.0]
+
+    def c1(x: List[Float64]) -> List[Float64]:
+        return [0.5, -1.0, 2.0]
+
+    # the error of the zero cochain is the form's norm: int_box 1 = 3
+    assert_almost_equal(
+        l2_error(sc.get_cochain(0), 0, one), sqrt(3.0), atol=1e-14, rtol=0
+    )
+    with assert_raises(contains="omega gave 1 components, expected 3"):
+        _ = whitney_load(sc, 1, 1, one)
+    with assert_raises(contains="omega gave 3 components, expected 1"):
+        _ = l2_error(sc.get_cochain(0), 1, c1)
+
+
 def test_typed_and_errors() raises:
     var m = kuhn_grid([3, 3], [1.0, 2.0])
     var tc = TypedComplex[2](m.vertices, m.elements)
@@ -382,6 +432,14 @@ def test_typed_and_errors() raises:
     var b = whitney_form(plain, 4, bary)
     assert_equal(a[0], b[0])
     assert_equal(a[1], b[1])
+    # the load vector is a dual (n-k)-cochain, what the typed mass matrix
+    # gives; the projection a primal k-cochain
+    var load = whitney_load[1](tc, 3, g)  # TypedCochain[2, 1, DUAL]
+    var raw_load = whitney_load(tc.sc, 1, 3, g)
+    for i in range(len(load)):
+        assert_equal(load[i], raw_load.unsafe_get(i))
+    var proj = l2_projection[1](tc, 3, g)  # TypedCochain[2, 1, PRIMAL]
+    assert_true(l2_error(proj, 5, g) <= l2_error(typed, 5, g))
     with assert_raises(contains="omega gave 2 components"):
         _ = derham_map(tc.sc, 2, 1, g)
     with assert_raises(contains="k = 3 is outside 0..2"):

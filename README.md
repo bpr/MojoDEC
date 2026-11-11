@@ -140,7 +140,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/homology.mojo` — `betti_numbers`, `relative_betti_numbers`, `non_manifold_cells` | (new) |
 | `mojodec/routines/time.mojo` — `Leapfrog`, `TypedLeapfrog` | (new) |
 | `mojodec/routines/quadrature.mojo` — `grundmann_moeller`, `QuadratureRule`, `integrate_simplices` | (new) |
-| `mojodec/routines/derham.mojo` — `derham_map`, `whitney_form`, `form_index_sets` | (new) |
+| `mojodec/routines/derham.mojo` — `derham_map`, `whitney_form`, `l2_projection`, `whitney_load`, `l2_error`, `form_index_sets` | (new) |
 | `mojodec/vis/draw.mojo` — `triplot`, `lineplot`, `lineplot2`, `simplex_quivers`, `cube_quivers` | `vis/draw.py` |
 
 ## Plotting
@@ -453,6 +453,13 @@ the published mathematics:
   `R d = d R` to rounding), and evaluate a cochain's Whitney form at a
   point of an element (`R W = id`, `d W = W d`; the Whitney inner products
   built from it match `whitney_innerproduct`).
+- **L² projection and convergence tests** (`l2_projection`,
+  `whitney_load`, `l2_error`): the best L² fit of a form by Whitney forms
+  (Jacobi-preconditioned CG on the mass matrix), the Galerkin load vector,
+  and `||W c - omega||`. `tests/test_convergence.mojo` checks the rates on
+  Kuhn grids in 1–3D for every degree: 2 for 0-forms, 1 above, the
+  projection never worse than `W R`, and Poisson's equation second order
+  within 5 times the best approximation.
 - **Backward errors of eigenpairs.** `eig.residuals(K, M)` gives each
   pair's `||K x - lambda M x|| / ((||K|| + |lambda| ||M||) ||x||)`, the
   relative change of `K` and `M` that would make it exact: scale-free, so

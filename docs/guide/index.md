@@ -20,8 +20,12 @@ how to use it, and what can go wrong.
   limit, and integrating functions over the simplices of a mesh.
 - **[The de Rham map and Whitney forms](derham-and-whitney.md)**: forms
   as component lists, integrating a form into a cochain (`derham_map`),
-  evaluating a cochain's Whitney form (`whitney_form`), orientation, and
-  why `R d = d R`, `R W = id`, and `d W = W d`.
+  evaluating a cochain's Whitney form (`whitney_form`), the L²
+  projection (`l2_projection`, `whitney_load`, `l2_error`), orientation,
+  and why `R d = d R`, `R W = id`, and `d W = W d`.
+- **[Convergence](convergence.md)**: the rates Whitney forms reach (and
+  why), measured for projection, interpolation, and Poisson's equation in
+  1–3D, and what the convergence tests assert.
 - **[Linear solvers](linear-solvers.md)**: putting DEC systems in
   symmetric form, the `LinearOperator` and `Preconditioner` traits,
   conjugate gradients and preconditioning, MINRES for saddle points,

@@ -125,7 +125,10 @@ from mojodec.routines.time import Leapfrog, TypedLeapfrog
 from mojodec.routines.derham import (
     derham_map,
     form_index_sets,
+    l2_error,
+    l2_projection,
     whitney_form,
+    whitney_load,
 )
 from mojodec.routines.quadrature import (
     QuadratureRule,

@@ -244,6 +244,11 @@ Key design points that span several files:
   the same. `tests/test_derham.mojo` checks R d = d R, R W = id from every
   element of a face, d W = W d, and the mass matrices against
   `whitney_innerproduct`.
+  `_WhitneyElement` precomputes an element's Whitney basis (wedge minors
+  of the gradients, signs) for `whitney_form`, `whitney_load`, and
+  `l2_error`; `l2_projection` solves `M c = b` with Jacobi-PCG and raises
+  if CG stops. `tests/test_convergence.mojo` holds the rate tests
+  (thresholds just below the measured rates in `docs/guide/convergence.md`).
 - **Time stepping** (`routines/time.mojo`): `Leapfrog` takes diagonal
   masses `Mq`, `Mp` and one coupling `K` and steps `Mq q' = K p`,
   `Mp p' = -K^T q`, so the system is skew by construction; it raises on
