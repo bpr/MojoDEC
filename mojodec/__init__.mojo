@@ -129,6 +129,8 @@ from mojodec.routines.homology import (
 )
 from mojodec.routines.mesh_generation import (
     CubeGrid,
+    flat_torus,
+    kuhn_grid,
     simplicial_grid_2d,
     cube_grid,
     triangulate_ncube,

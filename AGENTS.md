@@ -216,6 +216,19 @@ Key design points that span several files:
   a non-symmetric operator (`_require_symmetric`, two probe products) and
   stop with `BREAKDOWN` on `r^T M r < 0`. Typed preconditioners map `A`'s
   output kind back to its input kind (`jacobi(A)` does).
+  `EighResult.residuals(K, M)` (and `TypedEighResult`'s) gives each
+  pair's normwise backward error with norms from 30 power steps (lower
+  bounds, so the errors err high); dense arrays are wrapped in a private
+  `_Dense` operator. Pass sparse `K` to keep it at n sparse products.
+- **Kuhn grids and flat tori** (`routines/mesh_generation.mojo`):
+  `kuhn_grid(dims[, lengths])` cuts each cell into d! simplices (one per
+  axis permutation, odd ones with the last two vertices swapped);
+  `flat_torus` is the same grid glued periodically (at least 3 cells per
+  axis) and placed in R^(2d), each axis on a circle of radius
+  `h / (2 sin(pi / n))` so the chords have length h and the complex is
+  exactly flat. All simplices of a cell share the cell center as
+  circumcenter, so diagonal simplices have zero dual volume: test with
+  `whitney_innerproduct`, not `star_inv`.
 - **Time stepping** (`routines/time.mojo`): `Leapfrog` takes diagonal
   masses `Mq`, `Mp` and one coupling `K` and steps `Mq q' = K p`,
   `Mp p' = -K^T q`, so the system is skew by construction; it raises on

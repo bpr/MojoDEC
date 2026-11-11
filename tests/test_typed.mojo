@@ -316,6 +316,16 @@ def test_whitney_and_eigenproblems() raises:
         _ = eig0.mode(len(eig0))
     with assert_raises(contains="different complexes"):
         _ = eigh_generalized(K, whitney_innerproduct[1](_grid(4)))
+    # backward errors: a few hundred ulps at most, for every pair
+    var eta = eig.residuals(K, M1)
+    var eta0 = eig0.residuals(S @ tc.laplacian[0, PRIMAL](), S)
+    assert_equal(eta.size, len(eig))
+    for i in range(eta.size):
+        assert_true(eta.unsafe_get(i) < 1e-13)
+    for i in range(eta0.size):
+        assert_true(eta0.unsafe_get(i) < 1e-13)
+    with assert_raises(contains="different complexes"):
+        _ = eig.residuals(K, whitney_innerproduct[1](_grid(4)))
 
 
 struct _Census(TypedComplexVisitor):

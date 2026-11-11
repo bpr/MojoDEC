@@ -83,6 +83,7 @@ def main() raises:
     var expected = List[List[Float64]]()
     var first_mode = real_vector(0)
     var full = List[RealArray]()
+    var worst_eta: Float64 = 0  # largest backward error of any eigenpair
     with open("spectrum.txt", "w") as f:
         f.write("# k index computed expected\n")
         print("\nfirst", NUM, "eigenvalues of the Hodge Laplacian:")
@@ -90,7 +91,11 @@ def main() raises:
         for k in range(3):
             ref star = sc[k].star
             var L = laplace_derham(sc.get_cochain_basis(k)).v.copy()
-            var eig = eigh_generalized((star @ L).todense(), star)
+            var K = star @ L
+            var eig = eigh_generalized(K.todense(), star)
+            var eta = eig.residuals(K, star)  # sparse K: n products, cheap
+            for i in range(eta.size):
+                worst_eta = max(worst_eta, eta.unsafe_get(i))
             var values = List[Float64]()
             for i in range(NUM):
                 values.append(eig.values.unsafe_get(i))
@@ -112,6 +117,9 @@ def main() raises:
                 line += ")   "
             print(line)
     print("wrote spectrum.txt")
+    print("largest backward error of any eigenpair:", worst_eta)
+    if worst_eta > 1e-12:
+        raise Error("the eigensolver lost accuracy")
 
     # d d = 0 splits 1-forms into exact and coexact parts, and the sphere has
     # no harmonic 1-forms, so the 1-form spectrum is the nonzero 0-form and

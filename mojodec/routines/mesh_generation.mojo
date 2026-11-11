@@ -7,10 +7,26 @@ Mesh generation and subdivision (`mojodec.routines.mesh_generation`).
 =====================================================================
 Largely inspired by `pydec.mesh.generation` and `pydec.mesh.subdivision`, plus
 `icosahedron` and `icosphere`, closed surfaces for testing on curved
-domains.
+domains, and `kuhn_grid` and `flat_torus`, boxes and flat tori of any
+dimension.
+
+`kuhn_grid` splits each box of a grid into d! simplices, one per order of
+the axes (Kuhn's or Freudenthal's triangulation): from a corner, step
+along the axes in that order. The simplices are right-angled, so some
+circumcentric dual volumes are zero (the hypotenuses in 2D); use the
+Whitney inner products there, not the diagonal Hodge star's inverse.
+`flat_torus` glues opposite faces of the same grid and places it in
+R^(2d), each axis on a circle sized so the mesh is exactly the flat torus:
+a closed manifold with Betti numbers `binomial(d, k)`.
+
+```mojo
+var sc = SimplicialComplex(kuhn_grid([4, 4, 4]))        # 384 tetrahedra
+var torus = SimplicialComplex(flat_torus([8, 8]))       # in R^4
+print(torus.betti_numbers())                            # [1, 2, 1]
+```
 """
 
-from std.math import sqrt
+from std.math import cos, isfinite, pi, sin, sqrt
 
 import numojo as nm
 from numojo.prelude import *
@@ -447,3 +463,263 @@ def orient_coherently(mesh: SimplicialMesh) raises -> SimplicialMesh:
             iset(out.elements, t, K - 2, iget(out.elements, t, K - 1))
             iset(out.elements, t, K - 1, a)
     return out^
+
+
+def kuhn_grid(dims: List[Int]) raises -> SimplicialMesh:
+    """`kuhn_grid(dims, lengths)` with the unit cube `[0, 1]^d`.
+
+    Args:
+        dims: Cells along each axis.
+
+    Returns:
+        The mesh.
+
+    Raises:
+        As the overload with `lengths`.
+    """
+    return kuhn_grid(dims, List[Float64](length=len(dims), fill=1.0))
+
+
+def kuhn_grid(dims: List[Int], lengths: List[Float64]) raises -> SimplicialMesh:
+    """A box split into simplices by Kuhn's triangulation, in any dimension.
+
+    The box `[0, L_0] x ... x [0, L_{d-1}]` is cut into `dims[a]` cells
+    along axis `a`, and each cell into `d!` simplices, one per permutation
+    `p` of the axes: from the cell's lowest corner, step along axis `p[0]`,
+    then `p[1]`, and so on to the opposite corner. Neighboring cells cut
+    their shared faces the same way, so the simplices form a conforming
+    mesh, every one positively oriented (odd permutations are listed with
+    their last two vertices swapped). In 2D every square is cut along the
+    same diagonal, as in `simplicial_grid_2d`.
+
+    The simplices are right-angled: in 2D the circumcenter of each
+    triangle is the midpoint of its hypotenuse, so the hypotenuse's dual
+    edge has length zero, and similar zero dual volumes occur in every
+    dimension. The diagonal Hodge star has zeros there and its inverse is
+    infinite; use `whitney_innerproduct`. With it, the 0-form stiffness
+    `d0^T W_1 d0` is exactly the finite-difference Laplacian (the
+    `2d + 1`-point stencil) times the cell volume.
+
+    ```mojo
+    var mesh = kuhn_grid([4, 2], [2.0, 1.0])    # 16 triangles on [0,2] x [0,1]
+    ```
+
+    Args:
+        dims: Cells along each axis, `d = len(dims) >= 1`, each at least 1.
+        lengths: The side lengths `L_a` of the box.
+
+    Returns:
+        The mesh: `prod(dims[a] + 1)` vertices with axis 0 varying fastest
+        (as `cube_grid`), and `d! prod(dims)` elements, cell by cell.
+
+    Raises:
+        If `dims` is empty or has an entry below 1, or `lengths` has the
+        wrong length or an entry that is not positive and finite.
+    """
+    var h = _spacing(dims, lengths, 1, "kuhn_grid")
+    var d = len(dims)
+    var vdims = List[Int](capacity=d)
+    for a in range(d):
+        vdims.append(dims[a] + 1)
+    var nv = 1
+    for a in range(d):
+        nv *= vdims[a]
+    var vertices = real_array(nv, d)
+    for v in range(nv):
+        var rem = v
+        for a in range(d):
+            fset(vertices, v, a, Float64(rem % vdims[a]) * h[a])
+            rem //= vdims[a]
+    return SimplicialMesh(vertices, _kuhn_elements(dims, vdims, False))
+
+
+def flat_torus(dims: List[Int]) raises -> SimplicialMesh:
+    """`flat_torus(dims, lengths)` with periods 1.
+
+    Args:
+        dims: Cells along each axis.
+
+    Returns:
+        The mesh.
+
+    Raises:
+        As the overload with `lengths`.
+    """
+    return flat_torus(dims, List[Float64](length=len(dims), fill=1.0))
+
+
+def flat_torus(
+    dims: List[Int], lengths: List[Float64]
+) raises -> SimplicialMesh:
+    """The flat d-torus `R^d / (L_0 Z x ... x L_{d-1} Z)`, triangulated as a
+    periodic `kuhn_grid` and embedded isometrically in `R^(2d)`.
+
+    Opposite faces of the grid are glued, so vertex `i` along axis `a` is
+    vertex `i mod dims[a]`. A flat torus has no isometric embedding in
+    `R^d`; axis `a` goes on a circle in its own plane (coordinates `2a`,
+    `2a + 1`, the Clifford embedding), with radius
+    `r_a = h_a / (2 sin(pi / dims[a]))`, so that each step along the axis,
+    a chord of the circle, has exactly the grid spacing `h_a = L_a /
+    dims[a]`. The axes' planes are orthogonal, so every simplex has the
+    edge lengths and angles of its flat counterpart: the mesh is the flat
+    torus exactly, not an approximation of it (its total volume is
+    `prod(L_a)`).
+
+    It is a closed, orientable manifold with Betti numbers
+    `binomial(d, k)`, the constant forms `dx^I` being the harmonic ones,
+    and the Laplacian on functions has the eigenvalues
+    `(2 pi)^2 sum_a (m_a / L_a)^2`. Like `kuhn_grid`, it has zero dual
+    volumes; use the Whitney inner products.
+
+    ```mojo
+    var sc = SimplicialComplex(flat_torus([6, 6, 6]))   # a 3-torus in R^6
+    print(sc.betti_numbers())                         # [1, 3, 3, 1]
+    ```
+
+    Args:
+        dims: Cells along each axis, `d = len(dims) >= 1`, each at least 3
+            (with 2, the two neighbors of a vertex along an axis would be
+            the same vertex).
+        lengths: The periods `L_a`.
+
+    Returns:
+        The mesh: `prod(dims)` vertices in `R^(2d)` (vertex numbering as in
+        `kuhn_grid`, without the last layer of each axis) and
+        `d! prod(dims)` elements.
+
+    Raises:
+        If `dims` is empty or has an entry below 3, or `lengths` has the
+        wrong length or an entry that is not positive and finite.
+    """
+    var h = _spacing(dims, lengths, 3, "flat_torus")
+    var d = len(dims)
+    var nv = 1
+    for a in range(d):
+        nv *= dims[a]
+    var vertices = real_array(nv, 2 * d)
+    for v in range(nv):
+        var rem = v
+        for a in range(d):
+            var i = rem % dims[a]
+            rem //= dims[a]
+            var n = Float64(dims[a])
+            var r = h[a] / (2 * sin(pi / n))
+            var t = 2 * pi * Float64(i) / n
+            fset(vertices, v, 2 * a, r * cos(t))
+            fset(vertices, v, 2 * a + 1, r * sin(t))
+    return SimplicialMesh(vertices, _kuhn_elements(dims, dims, True))
+
+
+def _spacing(
+    dims: List[Int], lengths: List[Float64], min_cells: Int, who: String
+) raises -> List[Float64]:
+    """Check the arguments of `kuhn_grid`/`flat_torus`; the cell sizes."""
+    var d = len(dims)
+    if d == 0:
+        raise Error(who, ": dims is empty")
+    for a in range(d):
+        if dims[a] < min_cells:
+            raise Error(
+                String(
+                    who,
+                    ": dims[",
+                    a,
+                    "] = ",
+                    dims[a],
+                    ", need at least ",
+                    min_cells,
+                    " cells per axis",
+                )
+            )
+    if len(lengths) != d:
+        raise Error(
+            String(who, ": ", len(lengths), " lengths for ", d, " axes")
+        )
+    var h = List[Float64](capacity=d)
+    for a in range(d):
+        if not (lengths[a] > 0) or not isfinite(lengths[a]):
+            raise Error(
+                String(
+                    who, ": lengths[", a, "] = ", lengths[a], " is not positive"
+                )
+            )
+        h.append(lengths[a] / Float64(dims[a]))
+    return h^
+
+
+def _kuhn_elements(
+    dims: List[Int], vdims: List[Int], periodic: Bool
+) raises -> IntArray:
+    """The Kuhn simplices of every cell; vertex `(i_0, ...)` is
+    `sum i_a * prod_{b<a} vdims[b]`, coordinates taken modulo `dims` when
+    `periodic`."""
+    var d = len(dims)
+    var stride = List[Int](length=d, fill=1)
+    for a in range(1, d):
+        stride[a] = stride[a - 1] * vdims[a - 1]
+    var perms = List[List[Int]]()
+    var odd = List[Bool]()
+    _permutations(d, perms, odd)
+    var ncells = 1
+    for a in range(d):
+        ncells *= dims[a]
+    var elements = int_array(ncells * len(perms), d + 1)
+    var corner = List[Int](length=d, fill=0)
+    var pos = List[Int](length=d, fill=0)
+    var row = 0
+    for _ in range(ncells):
+        for q in range(len(perms)):
+            for a in range(d):
+                pos[a] = corner[a]
+            var ids = List[Int](capacity=d + 1)
+            for k in range(d + 1):
+                if k > 0:
+                    pos[perms[q][k - 1]] += 1
+                var v = 0
+                for a in range(d):
+                    var i = pos[a] % dims[a] if periodic else pos[a]
+                    v += i * stride[a]
+                ids.append(v)
+            if odd[q]:  # det of the edge vectors is the permutation's sign
+                ids.swap_elements(d - 1, d)
+            for k in range(d + 1):
+                iset(elements, row, k, ids[k])
+            row += 1
+        # the next cell, axis 0 fastest
+        for a in range(d):
+            corner[a] += 1
+            if corner[a] < dims[a]:
+                break
+            corner[a] = 0
+    return elements^
+
+
+def _permutations(d: Int, mut perms: List[List[Int]], mut odd: List[Bool]):
+    """All permutations of `0..d-1` in lexicographic order, with parities."""
+    var p = List[Int](capacity=d)
+    for i in range(d):
+        p.append(i)
+    while True:
+        perms.append(p.copy())
+        var inversions = 0
+        for i in range(d):
+            for j in range(i + 1, d):
+                if p[i] > p[j]:
+                    inversions += 1
+        odd.append(inversions % 2 == 1)
+        # next permutation
+        var i = d - 2
+        while i >= 0 and p[i] >= p[i + 1]:
+            i -= 1
+        if i < 0:
+            return
+        var j = d - 1
+        while p[j] <= p[i]:
+            j -= 1
+        p.swap_elements(i, j)
+        var lo = i + 1
+        var hi = d - 1
+        while lo < hi:
+            p.swap_elements(lo, hi)
+            lo += 1
+            hi -= 1

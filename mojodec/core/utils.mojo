@@ -132,6 +132,29 @@ def real_array_from_rows(rows: List[List[Float64]]) raises -> RealArray:
     return a^
 
 
+def probe_vector(n: Int, seed: UInt64) raises -> RealArray:
+    """A fixed, irregular vector with entries in [-1, 1), for checks and
+    estimates that need a start vector with no special structure (the
+    symmetry check of `cg`, the norm estimates of `EighResult.residuals`).
+
+    Args:
+        n: The length.
+        seed: Selects the vector; the same seed gives the same vector.
+
+    Returns:
+        The vector, from a linear congruential generator.
+
+    Raises:
+        If NuMojo cannot allocate the array.
+    """
+    var x = real_vector(n)
+    var s: UInt64 = 0x9E3779B97F4A7C15 ^ seed
+    for i in range(n):
+        s = s * 6364136223846793005 + 1442695040888963407
+        x.unsafe_set(i, Float64((s >> 11) & 0xFFFFF) / 524288.0 - 1.0)
+    return x^
+
+
 def real_vector_from_list(values: List[Float64]) raises -> RealArray:
     """Build a 1-D real array from a list.
 

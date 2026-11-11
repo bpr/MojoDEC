@@ -31,6 +31,7 @@ from mojodec.routines.linalg import (
     spsolve,
 )
 from mojodec.routines import dense
+from mojodec.routines.dense import EighResult
 
 
 def laplacian_1d(n: Int) raises -> CSRMatrix:
@@ -409,6 +410,59 @@ def test_solver_input_checks() raises:
     # 1 / |a_ii|: positive for an indefinite matrix too
     var J = jacobi(A * -2.0)
     assert_equal(J[0], 0.25)
+
+
+def test_eigen_residuals() raises:
+    # backward-stable solvers: tiny backward errors for every pair
+    nm.random.seed(5)
+    var n = 40
+    var B = nm.random.rand[f64](Shape(n, n))
+    var A = nm.zeros[f64](Shape(n, n))
+    var m = List[Float64]()
+    var M = nm.zeros[f64](Shape(n, n))
+    for i in range(n):
+        for j in range(n):
+            A.unsafe_set(i * n + j, fget(B, i, j) + fget(B, j, i))
+        m.append(0.5 + Float64(i % 7))
+        M.unsafe_set(i * n + i, m[i])
+    var std = dense.eigh(A)
+    var gen = eigh_generalized(A, M)
+    var dia = eigh_generalized(A, DiagonalOperator(m.copy()))
+    var e1 = std.residuals(A)
+    var e2 = gen.residuals(A, M)
+    var e3 = dia.residuals(A, DiagonalOperator(m.copy()))
+    var e4 = dia.residuals(CSRMatrix.from_dense(A), DiagonalOperator(m.copy()))
+    for i in range(n):
+        # n eps = 9e-15
+        assert_true(e1.unsafe_get(i) < 1e-14)
+        assert_true(e2.unsafe_get(i) < 1e-14)
+        assert_true(e3.unsafe_get(i) < 1e-14)
+        assert_equal(e3.unsafe_get(i), e4.unsafe_get(i))
+    # the definition, on a pair that is off: K = diag(1, 2, 3), M = I,
+    # x = e_0 and lambda = 1.5: |1 - 1.5| / ((3 + 1.5) * 1) = 1/9
+    var K = CSRMatrix.from_coo(3, 3, [0, 1, 2], [0, 1, 2], [1.0, 2.0, 3.0])
+    var vals = real_vector(3)
+    vals.unsafe_set(0, 1.5)
+    vals.unsafe_set(1, 2.0)
+    vals.unsafe_set(2, 3.0)
+    var vecs = real_array(3, 3)
+    for i in range(3):
+        fset(vecs, i, i, 1.0)
+    var fake = EighResult(vals^, vecs^)
+    var eta = fake.residuals(K, DiagonalOperator.identity(3))
+    # ||K|| from 30 power steps: below 3 by a relative (2/3)^60 ~ 3e-11,
+    # so eta is above 1/9 by about that much
+    assert_true(eta.unsafe_get(0) >= 1.0 / 9.0)
+    assert_almost_equal(eta.unsafe_get(0), 1.0 / 9.0, atol=1e-11, rtol=0)
+    assert_equal(eta.unsafe_get(1), 0.0)
+    assert_equal(eta.unsafe_get(2), 0.0)
+    # the matrices must match the eigenpairs
+    with assert_raises(contains="K is not 3 x 3"):
+        _ = fake.residuals(A)
+    with assert_raises(contains="M is not 3 x 3"):
+        _ = fake.residuals(K, DiagonalOperator.identity(4))
+    var empty = dense.eigh(real_array(0, 0))
+    assert_equal(empty.residuals(real_array(0, 0)).size, 0)
 
 
 def main() raises:

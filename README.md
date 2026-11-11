@@ -125,7 +125,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/innerproduct.mojo` | `fem/innerproduct.py` |
 | `mojodec/routines/mesh_generation.mojo` | `mesh/generation.py`, `mesh/subdivision.py` |
 | `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
-| `mojodec/routines/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh` | `numpy.linalg` (called by PyDEC) |
+| `mojodec/routines/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh`, `EighResult.residuals` | `numpy.linalg` (called by PyDEC) |
 | `mojodec/routines/io/` — `read_array`, `write_array`, `read_mesh`, `write_mesh`, `loadtxt` | `io/arrayio.py`, `io/meshio.py` |
 | `mojodec/routines/io/vtk.mojo` — `write_vtu`, `write_vtu_cubes`, `VTKField` | (new) |
 | `mojodec/routines/io/ply.mojo` — `read_ply`, `write_ply` | (new) |
@@ -434,6 +434,19 @@ the published mathematics:
   Both raise on an operator that is not symmetric (two probe products), so
   a matrix such as `delta(d(.))`, self-adjoint only in the Hodge-star
   inner product, cannot be passed by mistake.
+- **Kuhn grids and flat tori** (`kuhn_grid`, `flat_torus`) in any
+  dimension: each box cell split into d! simplices, and the periodic
+  version embedded in R^(2d) so that it is exactly the flat torus (Betti
+  numbers `binomial(d, k)`, Laplacian eigenvalues in closed form). The
+  circumcentric dual is the dual cube grid, so diagonal simplices have
+  zero dual volume; with Whitney forms the 0-form stiffness is exactly the
+  finite-difference Laplacian, which the tests check entry by entry.
+- **Backward errors of eigenpairs.** `eig.residuals(K, M)` gives each
+  pair's `||K x - lambda M x|| / ((||K|| + |lambda| ||M||) ||x||)`, the
+  relative change of `K` and `M` that would make it exact: scale-free, so
+  one threshold (a modest multiple of n times 2.2e-16) serves every
+  problem. It takes sparse or typed operators, so the check costs n
+  sparse products. Sphere and ResonantCavity report it (5e-15, 7e-15).
 
 ## Differences from PyDEC
 
@@ -588,9 +601,9 @@ from your own program.
 | HodgeDecomposition | four harmonic 1-cochains with `|d h|, |δ h|` ≈ 0 (see below) |
 | DarcyFlow | pressures agree with the exact solution to 1e-14 |
 | HeatConduction | mesh and boundary pieces from a Gmsh file; the piecewise-linear temperature through two materials to 7e-15, and the heat in through the hot edge equals the heat out through the cold one and the exact 25/26 (not from PyDEC) |
-| ResonantCavity | eigenvalues 1, 1, 2, 4, 4, 5, 5, 8, 9, 9, 10, 10, 13, 13, … (the exact m²+n²) |
+| ResonantCavity | eigenvalues 1, 1, 2, 4, 4, 5, 5, 8, 9, 9, 10, 10, 13, 13, … (the exact m²+n²); largest backward error 7e-15 |
 | CavityWaves | resonances 0.9986, 0.9986, 2.987, 3.977, 3.977, 6.93, 6.93, 8.88 times (4π/3)² (the exact m²+mn+n² of the equilateral triangle); leapfrog from the lowest mode follows cos(ω_dt t) to 3e-12 over five periods, staggered energy constant to 2e-15 (not from PyDEC) |
-| Sphere | Hodge-Laplacian spectra near n(n+1) for 0-, 1-, and 2-forms; the 1-form spectrum is the 0- and 2-form spectra merged (to 3e-12); Gauss-Bonnet exact; Gaussian and mean curvature 1.02 and 1.0001 (not from PyDEC) |
+| Sphere | Hodge-Laplacian spectra near n(n+1) for 0-, 1-, and 2-forms; the 1-form spectrum is the 0- and 2-form spectra merged (to 3e-12); Gauss-Bonnet exact; Gaussian and mean curvature 1.02 and 1.0001; largest backward error of any eigenpair 5e-15 (not from PyDEC) |
 | Neighborhoods | interior links are hexagons (χ = 0), boundary links paths (χ = 1); Bd(Cl(St(v))) = Lk(v); every ring boundary has χ = 0; the square's boundary has 4n edges and an empty boundary (not from PyDEC) |
 | Neighborhoods3D | interior vertex links are spheres (χ = 2), boundary links disks (χ = 1); growing rings are balls (χ = 1) until they meet themselves around the hole (one pinched step), then the solid torus (χ = 0) bounded by a torus; χ(Bd R) = 2 χ(R) whenever Bd R is a surface (not from PyDEC) |
 | MakeMesh | writes a mesh and reads it back; matches `ExpectedOutput/` |

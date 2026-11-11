@@ -17,8 +17,12 @@ from std.math import sqrt
 import numojo as nm
 from numojo.prelude import *
 
+from mojodec.core.operator import Identity, LinearOperator
 from mojodec.core.utils import (
     RealArray,
+    dot,
+    norm2,
+    probe_vector,
     real_array,
     real_vector,
     rows_of,
@@ -73,6 +77,194 @@ struct EighResult(Copyable, Movable):
         """
         self.values = values^
         self.vectors = vectors^
+
+    def residuals[
+        KOp: LinearOperator, MOp: LinearOperator
+    ](self, K: KOp, M: MOp) raises -> RealArray:
+        """The backward error of each eigenpair of `K x = lambda M x`.
+
+        For eigenpair `(lambda, x)`,
+
+            eta = ||K x - lambda M x|| / ((||K|| + |lambda| ||M||) ||x||),
+
+        the smallest relative perturbation of `K` and `M` (in the 2-norm)
+        for which the pair is exact. A backward-stable solver gives values
+        of a modest multiple of `n` times the machine epsilon (2.2e-16);
+        anything much larger means the pair is not to be trusted. The
+        norms `||K||` and `||M||` are estimated from below by power
+        iteration, so `eta` errs on the large side.
+
+        ```mojo
+        var eig = eigh_generalized(K, M)
+        var eta = eig.residuals(K, M)          # one per eigenpair
+        ```
+
+        Parameters:
+            KOp: The type of `K`: `CSRMatrix`, a typed operator, or any
+                other `LinearOperator`.
+            MOp: The type of `M`, such as `DiagonalOperator`.
+
+        Args:
+            K: The `n x n` matrix of the problem.
+            M: The `n x n` mass matrix of the problem.
+
+        Returns:
+            One backward error per eigenpair, in the order of `values`.
+
+        Raises:
+            If `K` or `M` is not `n x n`, `n` the number of eigenpairs.
+        """
+        return _residuals(self.values, self.vectors, K, M)
+
+    def residuals(self, K: RealArray, M: RealArray) raises -> RealArray:
+        """The backward errors for dense `K` and `M`; see the generic
+        overload.
+
+        Args:
+            K: The `n x n` matrix of the problem.
+            M: The `n x n` mass matrix of the problem.
+
+        Returns:
+            One backward error per eigenpair.
+
+        Raises:
+            If `K` or `M` is not `n x n`.
+        """
+        return _residuals(self.values, self.vectors, _Dense(K), _Dense(M))
+
+    def residuals[
+        MOp: LinearOperator
+    ](self, K: RealArray, M: MOp) raises -> RealArray:
+        """The backward errors for a dense `K` and another mass matrix,
+        such as a Hodge star; see the generic overload.
+
+        Parameters:
+            MOp: The type of `M`.
+
+        Args:
+            K: The `n x n` matrix of the problem.
+            M: The `n x n` mass matrix of the problem.
+
+        Returns:
+            One backward error per eigenpair.
+
+        Raises:
+            If `K` or `M` is not `n x n`.
+        """
+        return _residuals(self.values, self.vectors, _Dense(K), M)
+
+    def residuals(self, A: RealArray) raises -> RealArray:
+        """The backward errors of the standard problem `A x = lambda x`,
+        as `eigh` solves it; see the generic overload.
+
+        Args:
+            A: The `n x n` matrix of the problem.
+
+        Returns:
+            One backward error `||A x - lambda x|| / (||A|| + |lambda|)
+            ||x||` per eigenpair.
+
+        Raises:
+            If `A` is not `n x n`.
+        """
+        return _residuals(
+            self.values, self.vectors, _Dense(A), Identity(self.values.size)
+        )
+
+
+struct _Dense(LinearOperator):
+    """A dense square or rectangular matrix as a `LinearOperator` (a copy)."""
+
+    var a: RealArray
+    var rows: Int
+    var cols: Int
+
+    def __init__(out self, a: RealArray) raises:
+        if a.ndim != 2:
+            raise Error("expected a matrix")
+        self.a = a.copy()
+        self.rows = rows_of(a)
+        self.cols = cols_of(a)
+
+    def num_rows(self) -> Int:
+        return self.rows
+
+    def num_cols(self) -> Int:
+        return self.cols
+
+    def apply_into(self, x: RealArray, mut y: RealArray) raises:
+        if x.size != self.cols or y.size != self.rows:
+            raise Error("dense matrix: dimension mismatch")
+        for i in range(self.rows):
+            var s: Float64 = 0
+            var off = i * self.cols
+            for j in range(self.cols):
+                s += self.a.unsafe_get(off + j) * x.unsafe_get(j)
+            y.unsafe_set(i, s)
+
+
+def _residuals[
+    KOp: LinearOperator, MOp: LinearOperator
+](values: RealArray, vectors: RealArray, K: KOp, M: MOp) raises -> RealArray:
+    """The backward error of each eigenpair (`vectors` holds them as
+    columns); see `EighResult.residuals`."""
+    var n = values.size
+    if K.num_rows() != n or K.num_cols() != n:
+        raise Error(
+            String("residuals: K is not ", n, " x ", n, " (one per eigenpair)")
+        )
+    if M.num_rows() != n or M.num_cols() != n:
+        raise Error(
+            String("residuals: M is not ", n, " x ", n, " (one per eigenpair)")
+        )
+    var out = real_vector(n)
+    if n == 0:
+        return out^
+    var nK = _norm_lower_bound(K)
+    var nM = _norm_lower_bound(M)
+    var x = real_vector(n)
+    var kx = real_vector(n)
+    var mx = real_vector(n)
+    for j in range(n):
+        for i in range(n):
+            x.unsafe_set(i, vectors.unsafe_get(i * n + j))
+        K.apply_into(x, kx)
+        M.apply_into(x, mx)
+        var lam = values.unsafe_get(j)
+        var r: Float64 = 0
+        for i in range(n):
+            var t = kx.unsafe_get(i) - lam * mx.unsafe_get(i)
+            r += t * t
+        r = sqrt(r)
+        var denom = (nK + abs(lam) * nM) * norm2(x)
+        if denom > 0:
+            out.unsafe_set(j, r / denom)
+        else:  # K = M = 0, or x = 0: exact only if nothing is left over
+            out.unsafe_set(j, 0.0 if r == 0 else Float64.MAX)
+    return out^
+
+
+def _norm_lower_bound[Op: LinearOperator](A: Op) raises -> Float64:
+    """`max ||A x|| / ||x||` over 30 power-iteration steps: a lower bound on
+    the 2-norm, close to it for a symmetric `A` (within a few percent
+    unless the top singular values are clustered, where any of them will
+    do)."""
+    var n = A.num_cols()
+    var x = probe_vector(n, 3)
+    var y = real_vector(A.num_rows())
+    var best: Float64 = 0
+    for _ in range(30):
+        var nx = norm2(x)
+        if nx == 0:
+            break
+        A.apply_into(x, y)
+        var ny = norm2(y)
+        best = max(best, ny / nx)
+        if ny == 0 or y.size != x.size:
+            break
+        for i in range(n):
+            x.unsafe_set(i, y.unsafe_get(i) / ny)
+    return best
 
 
 def lu_factor(A: RealArray) raises -> LUFactors:

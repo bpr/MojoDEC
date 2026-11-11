@@ -53,6 +53,7 @@ from mojodec.core.utils import (
     axpy,
     dot,
     norm2,
+    probe_vector,
     real_array,
     real_vector,
     rows_of,
@@ -514,16 +515,6 @@ def jacobi(A: CSRMatrix) raises -> DiagonalOperator:
     return DiagonalOperator(out^)
 
 
-def _probe(n: Int, seed: UInt64) raises -> RealArray:
-    """A fixed, irregular vector with entries in [-1, 1)."""
-    var x = real_vector(n)
-    var s: UInt64 = 0x9E3779B97F4A7C15 ^ seed
-    for i in range(n):
-        s = s * 6364136223846793005 + 1442695040888963407
-        x.unsafe_set(i, Float64((s >> 11) & 0xFFFFF) / 524288.0 - 1.0)
-    return x^
-
-
 def _require_symmetric[Op: LinearOperator](A: Op, who: String) raises:
     """Raise unless `u^T A w = w^T A u` on two probe vectors, to rounding.
 
@@ -533,8 +524,8 @@ def _require_symmetric[Op: LinearOperator](A: Op, who: String) raises:
     var n = A.num_rows()
     if n == 0:
         return
-    var u = _probe(n, 1)
-    var w = _probe(n, 2)
+    var u = probe_vector(n, 1)
+    var w = probe_vector(n, 2)
     var Au = real_vector(n)
     var Aw = real_vector(n)
     A.apply_into(u, Au)
@@ -825,6 +816,69 @@ struct TypedEighResult[n: Int, k: Int, primal: Bool](Movable, Sized):
         for r in range(m):
             v.unsafe_set(r, self.vectors.unsafe_get(r * m + i))
         return TypedCochain[Self.n, Self.k, Self.primal](self.complex, v^)
+
+    def residuals[
+        out_k: Int, out_primal: Bool
+    ](
+        self,
+        K: MatrixOp[Self.n, Self.k, Self.primal, out_k, out_primal],
+        M: MatrixOp[Self.n, Self.k, Self.primal, out_k, out_primal],
+    ) raises -> RealArray:
+        """The backward error of each eigenpair, with a sparse mass matrix;
+        see `EighResult.residuals`.
+
+        Parameters:
+            out_k: The degree of the cochains `K` and `M` give.
+            out_primal: Whether the cochains `K` and `M` give are primal.
+
+        Args:
+            K: The operator of the problem.
+            M: The mass matrix of the problem.
+
+        Returns:
+            One backward error per eigenpair.
+
+        Raises:
+            If `K` or `M` is on another complex than the eigenvectors, or
+            not square of the right size.
+        """
+        _typed_complex(K.complex, self.complex, "residuals")
+        _typed_complex(M.complex, self.complex, "residuals")
+        return dense._residuals(self.values, self.vectors, K, M)
+
+    def residuals[
+        out_k: Int, out_primal: Bool
+    ](
+        self,
+        K: MatrixOp[Self.n, Self.k, Self.primal, out_k, out_primal],
+        M: DiagonalOp[Self.n, Self.k, Self.primal, out_k, out_primal],
+    ) raises -> RealArray:
+        """The backward error of each eigenpair, with a diagonal mass
+        matrix such as a Hodge star; see `EighResult.residuals`.
+
+        ```mojo
+        var eig = eigh_generalized(K, tc.star[1, PRIMAL]())
+        var eta = eig.residuals(K, tc.star[1, PRIMAL]())
+        ```
+
+        Parameters:
+            out_k: The degree of the cochains `K` and `M` give.
+            out_primal: Whether the cochains `K` and `M` give are primal.
+
+        Args:
+            K: The operator of the problem.
+            M: The mass matrix of the problem.
+
+        Returns:
+            One backward error per eigenpair.
+
+        Raises:
+            If `K` or `M` is on another complex than the eigenvectors, or
+            not square of the right size.
+        """
+        _typed_complex(K.complex, self.complex, "residuals")
+        _typed_complex(M.complex, self.complex, "residuals")
+        return dense._residuals(self.values, self.vectors, K, M)
 
 
 def _typed_complex(

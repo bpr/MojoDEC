@@ -54,6 +54,14 @@ def main() raises:
 
     # eigenvalues and eigenvectors of K x = lambda M x
     var eig = eigh_generalized(K_int, M_int)
+    # how far each pair is from exact for K_int and M_int, relatively
+    var eta = eig.residuals(K_int, M_int)
+    var worst_eta: Float64 = 0
+    for i in range(eta.size):
+        worst_eta = max(worst_eta, eta.unsafe_get(i))
+    print("largest backward error of any eigenpair:", worst_eta)
+    if worst_eta > 1e-12:
+        raise Error("the eigensolver lost accuracy")
 
     var NUM_EIGS = 50  # number of eigenvalues to report
     var values = List[Float64]()
