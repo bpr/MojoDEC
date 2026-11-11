@@ -1,6 +1,6 @@
 from std.math import sqrt
 from std.os import setenv, unsetenv
-from std.sys import num_physical_cores
+from std.sys import num_logical_cores, num_physical_cores
 from std.testing import (
     TestSuite,
     assert_almost_equal,
@@ -9,6 +9,8 @@ from std.testing import (
     assert_true,
 )
 
+import numojo as nm
+from numojo.prelude import *
 from mojodec import (
     SimplicialComplex,
     SimplicialMesh,
@@ -110,6 +112,60 @@ def test_parallel_dual_volumes_match_serial() raises:
     _check_dual_volumes_match_serial(_jittered([12, 12, 12], True))
 
 
+def _with_unused_vertices(
+    mesh: SimplicialMesh, extra: Int
+) raises -> SimplicialMesh:
+    """The same mesh behind `extra` unused vertices: vertex i becomes
+    i + extra, which keeps every sorted face in the same order."""
+    var nv = mesh.vertices.shape[0]
+    var d = mesh.vertices.shape[1]
+    var V = nm.zeros[DType.float64](Shape(nv + extra, d))
+    for i in range(nv):
+        for a in range(d):
+            fset(V, i + extra, a, fget(mesh.vertices, i, a))
+    var E = mesh.elements.copy()
+    for e in range(E.shape[0]):
+        for j in range(E.shape[1]):
+            iset(E, e, j, iget(mesh.elements, e, j) + extra)
+    return SimplicialMesh(V, E)
+
+
+def _check_unused_vertices(mesh: SimplicialMesh) raises:
+    # dual volumes and Whitney matrices behind unused vertices: the dual
+    # walk's vertex blocks are by vertex id, which unused vertices push
+    # past the number of 0-simplices, and Whitney's k = 0 rows are level-0
+    # indices, not vertex ids
+    var shifted = _with_unused_vertices(mesh, 3)
+    for threads in ["1", ""]:
+        if threads:
+            _ = setenv("MOJODEC_NUM_THREADS", threads)
+        var want = _dual_volumes(mesh)
+        var got = _dual_volumes(shifted)
+        _ = unsetenv("MOJODEC_NUM_THREADS")
+        for k in range(len(want)):
+            assert_equal(len(want[k]), len(got[k]))
+            for i in range(len(want[k])):
+                assert_equal(want[k][i], got[k][i])
+        # Whitney matrices too: their k = 0 rows are level-0 indices
+        var sc = SimplicialComplex(mesh.vertices, mesh.elements)
+        var shifted_sc = SimplicialComplex(shifted.vertices, shifted.elements)
+        if threads:
+            _ = setenv("MOJODEC_NUM_THREADS", threads)
+        for k in range(len(sc)):
+            var A = whitney_innerproduct(sc, k)
+            var B = whitney_innerproduct(shifted_sc, k)
+            assert_true(A.indptr == B.indptr)
+            assert_true(A.indices == B.indices)
+            assert_true(A.data == B.data)
+        _ = unsetenv("MOJODEC_NUM_THREADS")
+
+
+def test_unused_vertices() raises:
+    _check_unused_vertices(_jittered([60, 60], False))
+    _check_unused_vertices(_jittered([12, 12, 12], True))
+    _check_unused_vertices(_jittered([4, 4], False))
+
+
 def test_parallel_ranges_covers_once() raises:
     var n = 100_003
     var hits = List[Int](length=n, fill=0)
@@ -134,7 +190,7 @@ def test_parallel_ranges_covers_once() raises:
 
 
 def test_num_threads_env_caps_chunks() raises:
-    var cores = num_physical_cores()
+    var cores = num_logical_cores()
     _ = setenv("MOJODEC_NUM_THREADS", "1")
     assert_equal(num_chunks(100_000, 0), 1)
     _ = setenv("MOJODEC_NUM_THREADS", "2")
@@ -146,6 +202,12 @@ def test_num_threads_env_caps_chunks() raises:
     assert_equal(num_chunks(100_000, 0), cores)
     _ = unsetenv("MOJODEC_NUM_THREADS")
     assert_equal(num_chunks(100_000, 0), cores)
+    # memory-bound loops: one chunk per physical core, capped the same way
+    var physical = num_physical_cores()
+    assert_equal(num_chunks(100_000, 0, memory_bound=True), physical)
+    _ = setenv("MOJODEC_NUM_THREADS", "2")
+    assert_equal(num_chunks(100_000, 0, memory_bound=True), min(2, physical))
+    _ = unsetenv("MOJODEC_NUM_THREADS")
 
 
 def test_large_geometry() raises:

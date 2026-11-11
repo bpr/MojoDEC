@@ -1137,7 +1137,9 @@ struct SimplicialComplex(
             self[dim].dual_volume = real_vector(self[dim].num_simplices)
         var walk = _DualWalk(self)
         var num_top = self[n].num_simplices
-        var nv = self[0].num_simplices
+        # vertex ids index the mesh's vertices, which may include unused
+        # ones, so they can exceed the number of 0-simplices
+        var nv = rows_of(self.vertices())
         # Each chunk owns a block of vertices [lo, hi) and, at every level,
         # the faces whose first (smallest) vertex is in it. A top simplex
         # containing a face contains that vertex, so the chunk sees every
@@ -1421,6 +1423,9 @@ struct _DualWalk(Copyable, Movable):
     var dual: List[_FloatPtr]
     """Per level: the dual volumes being summed."""
     var fact: List[Float64]
+    var vertex_index: List[Int]
+    """The level-0 index of each vertex id; empty when every vertex is
+    used, as the ids are then the indices."""
 
     def __init__(out self, sc: SimplicialComplex) raises:
         self.n = sc.complex_dimension()
@@ -1465,6 +1470,13 @@ struct _DualWalk(Copyable, Movable):
                 ]()
             )
         self.fact = _factorials(self.n + 1)
+        self.vertex_index = List[Int]()
+        ref vertices = sc[0].simplices
+        var nv = rows_of(sc.vertices())
+        if rows_of(vertices) != nv:
+            self.vertex_index = List[Int](length=nv, fill=-1)
+            for i in range(rows_of(vertices)):
+                self.vertex_index[Int(vertices.unsafe_get(i))] = i
 
     def run(self, lo: Int, hi: Int):
         """Add every piece whose face has its first vertex in `[lo, hi)`;
@@ -1542,6 +1554,11 @@ struct _DualWalk(Copyable, Movable):
         tab.gidx[unsafe_offset=size - 1] = t
         for j in range(w):
             tab.gidx[unsafe_offset=1 << j] = Int(top[unsafe_offset=t * w + j])
+        if self.vertex_index:
+            for j in range(w):
+                tab.gidx[unsafe_offset=1 << j] = self.vertex_index.unsafe_get(
+                    tab.gidx[unsafe_offset=1 << j]
+                )
         # faces from the top down: the row of an L-simplex in d_{L-1}
         # names its (L-1)-faces; edges' faces are the vertices above
         for L in range(n, 1, -1):

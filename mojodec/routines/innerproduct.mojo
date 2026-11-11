@@ -174,7 +174,6 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
         raise Error(
             "whitney_innerproduct: the complex was built without geometry"
         )
-    var rc = massmatrix_rowcols(sc, k)
 
     # precomputation on the reference simplex
     var scale_integration = factorial(k) ** 2 / Float64((p + 2) * (p + 1))
@@ -235,9 +234,46 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
     var tpp = term_pair.unsafe_ptr()
     var tcp = term_coef.unsafe_ptr()
 
-    var data = List[Float64](length=len(rc.rows), fill=0)
-    var datap = data.unsafe_ptr()
     ref top = sc[p]
+    var num_top = top.num_simplices
+    var data = List[Float64](length=num_top * nfp, fill=0)
+    var datap = data.unsafe_ptr()
+    # The k-face indices of each top simplex, in the order of k_faces, as
+    # `massmatrix_rowcols` finds them, but from the rows of d: faces are
+    # named by bit masks of vertex positions in the (sorted) top simplex,
+    # and the row of an L-simplex in d_{L-1} lists its faces by increasing
+    # index; levels below the top are in lexicographic order, so entry q
+    # omits the vertex of rank L - q.
+    var w = p + 1
+    var size = 1 << w
+    var pop = List[Int](length=size, fill=0)
+    var bitpos = List[Int](length=size * w, fill=0)
+    for M in range(size):
+        var r = 0
+        for j in range(w):
+            if (M >> j) & 1 == 1:
+                bitpos[M * w + r] = j
+                r += 1
+        pop[M] = r
+    var face_mask = List[Int](capacity=num_k_faces)
+    for ref f in k_faces:
+        var M = 0
+        for v in f:
+            M |= 1 << v
+        face_mask.append(M)
+    var d_indptr = List[Pointer[Int, MutUntrackedOrigin]]()
+    var d_indices = List[Pointer[Int, MutUntrackedOrigin]]()
+    for L in range(p):
+        d_indptr.append(
+            sc[L].d.indptr.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        )
+        d_indices.append(
+            sc[L]
+            .d.indices.unsafe_ptr()
+            .unsafe_origin_cast[MutUntrackedOrigin]()
+        )
+    var faces = List[Int](length=num_top * num_k_faces, fill=0)
+    var facesp = faces.unsafe_ptr()
     var Xp = sc.vertices().unsafe_ptr()
     var Sp = top.simplices.unsafe_ptr()
     var volp = top.primal_volume.unsafe_ptr()
@@ -245,7 +281,6 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
     # serially), each with its own scratch; a chunk records its first
     # degenerate simplex, raised after the loop
     comptime SERIAL_BELOW = 4096
-    var num_top = top.num_simplices
     var degenerate = List[Int](
         length=num_chunks(num_top, SERIAL_BELOW), fill=-1
     )
@@ -271,6 +306,15 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
         Sp,
         volp,
         badp,
+        w,
+        size,
+        num_k_faces,
+        imm pop,
+        imm bitpos,
+        imm face_mask,
+        imm d_indptr,
+        imm d_indices,
+        facesp,
     }:
         var edges = List[Float64](length=p * dim, fill=0)
         var frame = List[Float64](length=p * p, fill=0)
@@ -282,7 +326,26 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
         var Dp = grads.unsafe_ptr()
         var mp = minors.unsafe_ptr()
         var dp = dets.unsafe_ptr()
+        var gidx = List[Int](length=size, fill=0)
+        var gp = gidx.unsafe_ptr()
         for i in range(lo, hi):
+            gp[unsafe_offset=size - 1] = i
+            for L in range(p, k, -1):
+                var ip = d_indptr[L - 1]
+                var ix = d_indices[L - 1]
+                for M in range(size):
+                    if pop.unsafe_get(M) != L + 1:
+                        continue
+                    var base = ip[unsafe_offset=gp[unsafe_offset=M]]
+                    for q in range(L + 1):
+                        var bit = bitpos.unsafe_get(M * w + L - q)
+                        gp[unsafe_offset=M ^ (1 << bit)] = ix[
+                            unsafe_offset=base + q
+                        ]
+            for a in range(num_k_faces):
+                facesp[unsafe_offset=i * num_k_faces + a] = gp[
+                    unsafe_offset=face_mask.unsafe_get(a)
+                ]
             if k > 0:
                 var v0 = Int(Sp[unsafe_offset=i * (p + 1)])
                 for r in range(p):
@@ -335,8 +398,129 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
                     "whitney_innerproduct: top simplex ", i, " is degenerate"
                 )
             )
-    var N = sc[k].num_simplices
-    return CSRMatrix.from_coo(N, N, rc.rows, rc.cols, data)
+    if k == p:
+        # one entry per top simplex, on the diagonal
+        var A = CSRMatrix(num_top, num_top)
+        var ip = A.indptr.unsafe_ptr()
+        A.indices = List[Int](length=num_top, fill=0)
+        var ixp = A.indices.unsafe_ptr()
+        for i in range(num_top):
+            ip[unsafe_offset=i + 1] = i + 1
+            ixp[unsafe_offset=i] = i
+        A.data = data^
+        return A^
+    return _assemble(sc[k].num_simplices, num_k_faces, faces, data)
+
+
+def _assemble(
+    N: Int, fps: Int, faces: List[Int], values: List[Float64]
+) raises -> CSRMatrix:
+    """The `N x N` matrix of the local matrices of the top simplices:
+    top simplex `s` adds `values[(s * fps + a) * fps + b]` at `(faces[s *
+    fps + a], faces[s * fps + b])`.
+
+    The same matrix, bit for bit, as `CSRMatrix.from_coo` of the triplets
+    listed simplex-major (`massmatrix_rowcols`' order): each entry sums its
+    terms in increasing `s`, starting from the first. Rows are assembled
+    in parallel, each from the top simplices containing its face.
+    """
+    var num_top = len(faces) // fps if fps > 0 else 0
+    var fp = faces.unsafe_ptr()
+    var vp = values.unsafe_ptr()
+    # the top simplices containing each face, in increasing order: entry
+    # s * fps + a for face faces[s * fps + a]
+    var start = List[Int](length=N + 1, fill=0)
+    var sp = start.unsafe_ptr()
+    for e in range(num_top * fps):
+        var r = fp[unsafe_offset=e]
+        sp[unsafe_offset=r + 1] = sp[unsafe_offset=r + 1] + 1
+    for r in range(N):
+        sp[unsafe_offset=r + 1] = sp[unsafe_offset=r + 1] + sp[unsafe_offset=r]
+    var incidence = List[Int](length=num_top * fps, fill=0)
+    var ip = incidence.unsafe_ptr()
+    var next = start.copy()
+    var np = next.unsafe_ptr()
+    for e in range(num_top * fps):
+        var r = fp[unsafe_offset=e]
+        var at = np[unsafe_offset=r]
+        ip[unsafe_offset=at] = e
+        np[unsafe_offset=r] = at + 1
+    # Row r has at most fps entries per top simplex: assemble it into
+    # slots fps * start[r] ..., sorted by column, then compact. Terms are
+    # taken in increasing s, as from_coo's stable sort orders them.
+    var cols = List[Int](length=num_top * fps * fps, fill=0)
+    var vals = List[Float64](length=num_top * fps * fps, fill=0)
+    var counts = List[Int](length=N, fill=0)
+    var cp = cols.unsafe_ptr()
+    var valp = vals.unsafe_ptr()
+    var cnp = counts.unsafe_ptr()
+
+    def rows(chunk: Int, lo: Int, hi: Int) {fps, fp, vp, sp, ip, cp, valp, cnp}:
+        for r in range(lo, hi):
+            var base = sp[unsafe_offset=r] * fps
+            var n = 0
+            for j in range(sp[unsafe_offset=r], sp[unsafe_offset=r + 1]):
+                var e = ip[unsafe_offset=j]
+                var s = e // fps
+                for b in range(fps):
+                    var c = fp[unsafe_offset=s * fps + b]
+                    var v = vp[unsafe_offset=e * fps + b]
+                    # find c among the n sorted columns so far
+                    var at = n
+                    while at > 0 and cp[unsafe_offset=base + at - 1] > c:
+                        at -= 1
+                    if at > 0 and cp[unsafe_offset=base + at - 1] == c:
+                        valp[unsafe_offset=base + at - 1] = (
+                            valp[unsafe_offset=base + at - 1] + v
+                        )
+                        continue
+                    var m = n
+                    while m > at:
+                        cp[unsafe_offset=base + m] = cp[
+                            unsafe_offset=base + m - 1
+                        ]
+                        valp[unsafe_offset=base + m] = valp[
+                            unsafe_offset=base + m - 1
+                        ]
+                        m -= 1
+                    cp[unsafe_offset=base + at] = c
+                    valp[unsafe_offset=base + at] = v
+                    n += 1
+            cnp[unsafe_offset=r] = n
+
+    comptime SERIAL_BELOW = 4096
+    parallel_ranges(N, SERIAL_BELOW, rows)
+    var indptr = List[Int](length=N + 1, fill=0)
+    var pp = indptr.unsafe_ptr()
+    for r in range(N):
+        pp[unsafe_offset=r + 1] = pp[unsafe_offset=r] + cnp[unsafe_offset=r]
+    var nnz = indptr[N]
+    var indices = List[Int](length=nnz, fill=0)
+    var data = List[Float64](length=nnz, fill=0)
+    var ixp = indices.unsafe_ptr()
+    var dp = data.unsafe_ptr()
+
+    def compact(chunk: Int, lo: Int, hi: Int) {fps, sp, cp, valp, pp, ixp, dp}:
+        for r in range(lo, hi):
+            var src = sp[unsafe_offset=r] * fps
+            var dst = pp[unsafe_offset=r]
+            for j in range(pp[unsafe_offset=r + 1] - dst):
+                ixp[unsafe_offset=dst + j] = cp[unsafe_offset=src + j]
+                dp[unsafe_offset=dst + j] = valp[unsafe_offset=src + j]
+
+    parallel_ranges(N, SERIAL_BELOW, compact)
+    _ = start^
+    _ = incidence^
+    _ = next^
+    _ = cols^
+    _ = vals^
+    _ = counts^
+    # canonical by construction (sorted, no duplicates)
+    var A = CSRMatrix(N, N)
+    A.indptr = indptr^
+    A.indices = indices^
+    A.data = data^
+    return A^
 
 
 def regular_cube_innerproduct(

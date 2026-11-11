@@ -5,8 +5,9 @@
 """
 Parallel loops (`mojodec.core.parallel`).
 =========================================
-`parallel_ranges` splits a loop into one chunk per physical core and runs
-them on MAX's thread pool (`max.algorithm.parallelize`), the only use of
+`parallel_ranges` splits a loop into one chunk per logical core (per
+physical core for loops marked `memory_bound`, such as sparse
+matrix-vector products) and runs them on MAX's thread pool (`max.algorithm.parallelize`), the only use of
 MAX in MojoDEC. A call costs about 200 microseconds however little work it
 does, so loops below a caller-chosen size run serially on the calling
 thread.
@@ -25,7 +26,7 @@ parallel_ranges(n, 50_000, body)
 Setting the environment variable `MOJODEC_NUM_THREADS` to a positive
 integer caps the number of chunks (so `MOJODEC_NUM_THREADS=1` runs every
 loop serially, as single-threaded benchmarks need); unset, or not a
-positive integer, it leaves one chunk per physical core.
+positive integer, it leaves one chunk per logical (or physical) core.
 
 The body must not raise, and chunks must write to disjoint memory. A loop
 that can fail records it at its chunk index (there are `num_chunks(n,
@@ -33,37 +34,46 @@ serial_below)` of them) and raises after `parallel_ranges` returns.
 """
 
 from std.os import getenv
-from std.sys import num_physical_cores
+from std.sys import num_logical_cores, num_physical_cores
 
 from max.algorithm import parallelize
 
 
-def num_chunks(n: Int, serial_below: Int) -> Int:
+def num_chunks(n: Int, serial_below: Int, *, memory_bound: Bool = False) -> Int:
     """The number of chunks `parallel_ranges` splits a loop into.
 
     Args:
         n: The number of iterations.
         serial_below: Loops of fewer iterations run as one chunk.
+        memory_bound: Whether the loop is limited by memory bandwidth
+            (one chunk per physical core) rather than by arithmetic (one
+            per logical core).
 
     Returns:
-        0 when `n <= 0`; 1 when `n < serial_below`; else the number of
-        physical cores (or `MOJODEC_NUM_THREADS`, if smaller), at most `n`.
+        0 when `n <= 0`; 1 when `n < serial_below`; else
+        `max_threads(memory_bound=memory_bound)`, at most `n`.
     """
     if n <= 0:
         return 0
     if n < serial_below:
         return 1
-    return max(1, min(n, max_threads()))
+    return max(1, min(n, max_threads(memory_bound=memory_bound)))
 
 
-def max_threads() -> Int:
+def max_threads(*, memory_bound: Bool = False) -> Int:
     """The most chunks a parallel loop is split into.
 
+    Args:
+        memory_bound: Count physical cores instead of logical ones: a
+            second hardware thread on a core speeds up arithmetic but not
+            streaming through memory, and its chunk costs a thread.
+
     Returns:
-        The number of physical cores, or the value of the environment
-        variable `MOJODEC_NUM_THREADS` when it is a smaller positive integer.
+        The number of logical cores (physical cores when `memory_bound`),
+        or the value of the environment variable `MOJODEC_NUM_THREADS`
+        when it is a smaller positive integer.
     """
-    var cores = num_physical_cores()
+    var cores = num_physical_cores() if memory_bound else num_logical_cores()
     var s = getenv("MOJODEC_NUM_THREADS")
     if not s:
         return cores
@@ -78,7 +88,7 @@ def max_threads() -> Int:
 
 def parallel_ranges[
     F: def(Int, Int, Int) -> None
-](n: Int, serial_below: Int, body: F):
+](n: Int, serial_below: Int, body: F, *, memory_bound: Bool = False):
     """Run `body(chunk, lo, hi)` over `0..n` split into `num_chunks(n,
     serial_below)` contiguous chunks, in parallel when there is more than
     one.
@@ -92,8 +102,10 @@ def parallel_ranges[
             that they take less than a few hundred microseconds.
         body: Called with each chunk's index and half-open range; must not
             raise.
+        memory_bound: Whether the loop is limited by memory bandwidth, as
+            for `num_chunks`.
     """
-    var chunks = num_chunks(n, serial_below)
+    var chunks = num_chunks(n, serial_below, memory_bound=memory_bound)
     if chunks == 0:
         return
     if chunks == 1:

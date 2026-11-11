@@ -844,7 +844,7 @@ struct CSRMatrix(Copyable, LinearOperator, Movable, Writable):
                     )
                 yp[unsafe_offset=i] = s
 
-        parallel_ranges(self.nrows, 0, rows)
+        parallel_ranges(self.nrows, 0, rows, memory_bound=True)
 
     def __mul__(self, s: Float64) -> Self:
         """Every entry multiplied by `s`.

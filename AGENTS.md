@@ -310,17 +310,25 @@ Key design points that span several files:
 ### Parallel loops
 
 `parallel_ranges(n, serial_below, body)` (`core/parallel.mojo`) runs
-`body(chunk, lo, hi)` on one chunk per physical core, or serially when
+`body(chunk, lo, hi)` on one chunk per logical core (per physical core
+with `memory_bound=True`, which the matvec passes: a second hardware
+thread speeds up arithmetic, not memory streams), or serially when
 `n < serial_below`. A MAX `parallelize` call costs about 200 µs whatever the
 work (POSIX threads cost 20–50 µs), so thresholds are set where the serial
 loop takes a few hundred µs: matvec at `PARALLEL_NNZ` (1M stored entries),
 circumcenters and primal volumes at 50k simplices, `whitney_innerproduct`
-at 4096 top simplices. `MOJODEC_NUM_THREADS=k` caps the chunks at k (1 runs
+at 4096 top simplices (element loop and row assembly), dual volumes at
+4096 top simplices. `MOJODEC_NUM_THREADS=k` caps the chunks at k (1 runs
 everything serially, for single-threaded benchmarks). Bodies must not
 raise: record failures per chunk and raise afterwards. Keep a hot serial loop out of a function that also
 holds the parallel branch (`CSRMatrix._matvec_parallel` is separate): in
-the same function the serial loop ran about 15% slower. Dual volumes stay
-serial (each top simplex adds into shared faces). `tests/test_parallel.mojo`
+the same function the serial loop ran about 15% slower. Loops that sum
+into shared entries stay bit for bit serial by ownership: each chunk owns
+a block of outputs and adds only to those, in the serial order (dual
+volumes: faces by first vertex id, which can exceed the number of
+0-simplices when vertices are unused; `whitney_innerproduct`: matrix rows,
+each summed over its top simplices in increasing order, as `from_coo`
+would). `tests/test_parallel.mojo`
 uses meshes past every threshold; the other tests' meshes run serially.
 
 ## Coding standards
