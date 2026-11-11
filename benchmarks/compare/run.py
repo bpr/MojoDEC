@@ -39,6 +39,9 @@ PYDEC_URL = "https://github.com/hirani/pydec.git"
 PYDEC_REV = "c181202c70e79794dcc8fa4577537a4eb4987b2a"
 
 LIBS = ["mojodec", "pydec", "dexterior", "formoniq"]
+# PyDEC's geometry is pure Python and takes minutes on the large meshes,
+# so it runs only when asked for (--libs mojodec,pydec,...)
+DEFAULT_LIBS = ["mojodec", "dexterior", "formoniq"]
 MULTITHREADED = {"mojodec", "formoniq"}
 LABELS = {"mojodec": "MojoDEC", "pydec": "PyDEC", "dexterior": "dexterior",
           "formoniq": "formoniq"}
@@ -270,13 +273,47 @@ def tables(records, libs, meta):
     return "\n".join(lines)
 
 
+def load(path):
+    """The metadata and records of a results file."""
+    with open(path) as f:
+        first, *rest = f.read().splitlines()
+    return json.loads(first), [json.loads(l) for l in rest]
+
+
+def comparison(old, new):
+    """MojoDEC's times in `new` against `old`, phase by phase: new / old,
+    so below 1 is faster. Checks that changed are marked `check!`."""
+    def index(records):
+        return {(r["mesh"], r["phase"], r["threads"]): r for r in records
+                if r.get("lib") == "mojodec" and "error" not in r}
+    a, b = index(old), index(new)
+    lines = ["### MojoDEC against the earlier run (new / old)", "",
+             "| mesh | phase | threads | old | new | ratio |",
+             "|---|---|---|---:|---:|---:|"]
+    for key in sorted(b, key=lambda k: (k[0].split("_")[0] != "tri",
+                                        int(k[0].split("_")[1]), k[1], k[2])):
+        if key not in a:
+            continue
+        ra, rb = a[key], b[key]
+        ratio = rb["ms"] / ra["ms"] if ra["ms"] > 0 else float("nan")
+        flag = "" if ra.get("check") == rb.get("check") else " check!"
+        lines.append(f"| {key[0]} | {key[1]} | {key[2]} | {fmt_ms(ra['ms'])} "
+                     f"| {fmt_ms(rb['ms'])} | {ratio:.2f}{flag} |")
+    return "\n".join(lines) + "\n"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--repeats", type=int, default=3)
-    ap.add_argument("--libs", default=",".join(LIBS))
+    ap.add_argument("--libs", default=",".join(DEFAULT_LIBS),
+                    help="comma-separated; pydec is not run unless named "
+                    "here (a full PyDEC run takes about 12 minutes)")
     ap.add_argument("--meshes", default="")
     ap.add_argument("--timeout", type=float, default=3600,
                     help="seconds per library and mesh")
+    ap.add_argument("--compare", metavar="OLD_JSONL",
+                    help="after the run (or with --report, for that run), "
+                    "print MojoDEC's times against an earlier run's")
     ap.add_argument("--report", metavar="JSONL",
                     help="only print the tables of an earlier run")
     args = ap.parse_args()
@@ -286,11 +323,10 @@ def main():
             sys.exit(f"unknown library {lib}; choose from {LIBS}")
 
     if args.report:
-        with open(args.report) as f:
-            first, *rest = f.read().splitlines()
-        meta = json.loads(first)
-        records = [json.loads(l) for l in rest]
+        meta, records = load(args.report)
         print(tables(records, meta.get("libs", LIBS), meta))
+        if args.compare:
+            print(comparison(load(args.compare)[1], records))
         return
 
     pydec = prepare(libs)
@@ -315,6 +351,8 @@ def main():
                         out.write(json.dumps(rec) + "\n")
                         out.flush()
     text = tables(records, libs, meta)
+    if args.compare:
+        text += "\n" + comparison(load(args.compare)[1], records)
     (RESULTS / f"{stamp}.md").write_text(text + "\n")
     print(text)
     print(f"\nwrote {jsonl} and {jsonl.with_suffix('.md')}", file=sys.stderr)

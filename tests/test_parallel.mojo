@@ -11,16 +11,103 @@ from std.testing import (
 
 from mojodec import (
     SimplicialComplex,
+    SimplicialMesh,
+    kuhn_grid,
     simplicial_grid_2d,
     whitney_innerproduct,
 )
 from mojodec.core.parallel import num_chunks, parallel_ranges
 from mojodec.core.sparse import PARALLEL_NNZ
-from mojodec.core.utils import fget, fset, iget, real_vector
+from mojodec.core.utils import fget, fset, iget, iset, real_vector
 
 # The meshes here are large enough for the parallel paths: 80k triangles
 # for circumcenters and volumes (50k), 5000 for Whitney (4096), and a
 # Laplacian with over 1M stored entries for matvec.
+
+
+def _lcg(mut state: UInt64) -> Float64:
+    """The next value in [-1, 1) of a 64-bit linear congruential generator."""
+    state = state * 6364136223846793005 + 1442695040888963407
+    return Float64(state >> 11) / Float64(1 << 53) * 2.0 - 1.0
+
+
+def _jittered(dims: List[Int], shuffle: Bool) raises -> SimplicialMesh:
+    """A Kuhn grid with interior vertices moved up to 5% of a cell (so it is
+    not well-centered and some dual pieces are negative); with `shuffle`,
+    the vertex numbers are permuted, so vertex blocks are scattered."""
+    var mesh = kuhn_grid(dims)
+    var d = len(dims)
+    var nv = mesh.vertices.shape[0]
+    var state: UInt64 = 12345
+    for i in range(nv):
+        var interior = True
+        for a in range(d):
+            var x = fget(mesh.vertices, i, a)
+            var h = 1.0 / Float64(dims[a])
+            if x < 0.5 * h or x > 1.0 - 0.5 * h:
+                interior = False
+        if interior:
+            for a in range(d):
+                var h = 1.0 / Float64(dims[a])
+                fset(
+                    mesh.vertices,
+                    i,
+                    a,
+                    fget(mesh.vertices, i, a) + 0.05 * h * _lcg(state),
+                )
+    if not shuffle:
+        return mesh^
+    # Fisher-Yates permutation p; vertex i becomes p[i]
+    var p = List[Int](length=nv, fill=0)
+    for i in range(nv):
+        p[i] = i
+    for i in range(nv - 1, 0, -1):
+        var j = Int((_lcg(state) + 1.0) * 0.5 * Float64(i + 1)) % (i + 1)
+        var t = p[i]
+        p[i] = p[j]
+        p[j] = t
+    var V = mesh.vertices.copy()
+    for i in range(nv):
+        for a in range(d):
+            fset(V, p[i], a, fget(mesh.vertices, i, a))
+    var E = mesh.elements.copy()
+    for e in range(E.shape[0]):
+        for j in range(d + 1):
+            iset(E, e, j, p[iget(mesh.elements, e, j)])
+    return SimplicialMesh(V, E)
+
+
+def _dual_volumes(mesh: SimplicialMesh) raises -> List[List[Float64]]:
+    var sc = SimplicialComplex(mesh.vertices, mesh.elements)
+    var out = List[List[Float64]]()
+    for k in range(len(sc)):
+        var level = List[Float64]()
+        for i in range(sc[k].num_simplices):
+            level.append(sc[k].dual_volume.unsafe_get(i))
+        out.append(level^)
+    return out^
+
+
+def _check_dual_volumes_match_serial(mesh: SimplicialMesh) raises:
+    _ = setenv("MOJODEC_NUM_THREADS", "1")
+    var serial = _dual_volumes(mesh)
+    _ = unsetenv("MOJODEC_NUM_THREADS")
+    var parallel = _dual_volumes(mesh)
+    assert_equal(len(serial), len(parallel))
+    for k in range(len(serial)):
+        assert_equal(len(serial[k]), len(parallel[k]))
+        for i in range(len(serial[k])):
+            # bit for bit: each face's pieces are added in the serial order
+            assert_equal(serial[k][i], parallel[k][i])
+
+
+def test_parallel_dual_volumes_match_serial() raises:
+    # past the 4096 top simplices where the walk goes parallel
+    _check_dual_volumes_match_serial(_jittered([60, 60], False))
+    _check_dual_volumes_match_serial(_jittered([12, 12, 12], False))
+    # scattered vertex numbers: every block touches most of the mesh
+    _check_dual_volumes_match_serial(_jittered([60, 60], True))
+    _check_dual_volumes_match_serial(_jittered([12, 12, 12], True))
 
 
 def test_parallel_ranges_covers_once() raises:

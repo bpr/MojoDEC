@@ -7,7 +7,8 @@ fast library that gets a different answer shows up as different, not as
 faster.
 
 ```sh
-pixi run bench-compare                       # everything, best of 3
+pixi run bench-compare                       # all but PyDEC, best of 3
+pixi run bench-compare --libs mojodec,pydec,dexterior,formoniq  # with PyDEC (~12 min)
 pixi run bench-compare --meshes tri_100,tet_10 --libs mojodec,formoniq
 pixi run bench-compare --report build/compare/results/<time>.jsonl
 ```

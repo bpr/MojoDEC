@@ -1121,25 +1121,44 @@ struct SimplicialComplex(
         time, so a piece's volume is the previous one times the new edge's
         distance from the span of the others, over the new dimension.
 
+        From 4096 top simplices the walk runs in parallel: each chunk owns
+        a block of vertices and the faces whose first vertex is in it, and
+        walks the top simplices touching its block, so no two chunks write
+        the same entry and every sum is added in the serial order (the
+        results are the same as the serial walk's, bit for bit).
+
         Needs the circumcenters of every level.
 
         Raises:
             If the circumcenters have not been computed.
         """
         var n = self.complex_dimension()
-        var E = self.embedding_dimension()
         for dim in range(len(self)):
             self[dim].dual_volume = real_vector(self[dim].num_simplices)
-        ref top = self[n]
-        # q[j*E : (j+1)*E] is the j-th orthonormalized edge of the chain
-        var q = List[Float64](length=max(n, 1) * E, fill=0)
-        var fact = _factorials(n + 1)
-        var unused = List[Float64]()
-        for t in range(top.num_simplices):
-            # the dual of a top simplex is its circumcenter: unit volume
-            top.dual_volume.unsafe_set(t, top.dual_volume.unsafe_get(t) + 1)
-            if n > 0:
-                self._add_dual_pieces(n, t, t, 1.0, 1.0, q, fact, unused, 0)
+        var walk = _DualWalk(self)
+        var num_top = self[n].num_simplices
+        var nv = self[0].num_simplices
+        # Each chunk owns a block of vertices [lo, hi) and, at every level,
+        # the faces whose first (smallest) vertex is in it. A top simplex
+        # containing a face contains that vertex, so the chunk sees every
+        # piece of the faces it owns by walking the top simplices with a
+        # vertex in its block; it adds pieces to its own faces only, in
+        # the serial order, so the sums are bit for bit the serial ones.
+        comptime SERIAL_BELOW = 4096
+        var chunks = num_chunks(num_top, SERIAL_BELOW)
+        if chunks <= 1:
+            walk.run(0, nv)
+            return
+        var bounds = _vertex_blocks(self[n].simplices, nv, chunks)
+        var bp = bounds.unsafe_ptr()
+
+        def blocks(chunk: Int, lo: Int, hi: Int) {walk, bp}:
+            for c in range(lo, hi):
+                walk.run(bp[unsafe_offset=c], bp[unsafe_offset=c + 1])
+
+        parallel_ranges(chunks, 0, blocks)
+        _ = bounds^
+        _ = walk^
 
     def dual_edge_piece_values(self) raises -> RealArray:
         """The pieces `|*e ^ t|` of each edge's dual cell inside each top
@@ -1374,6 +1393,296 @@ struct SimplicialComplex(
                 else:
                     pb = j
         return pa * (n + 1) - pa * (pa + 1) // 2 + (pb - pa - 1)
+
+
+comptime _IntPtr = Pointer[Scalar[DType.int], MutUntrackedOrigin]
+comptime _FloatPtr = Pointer[Float64, MutUntrackedOrigin]
+
+
+struct _DualWalk(Copyable, Movable):
+    """The dual-volume walk of `compute_dual_volume` over raw pointers into
+    the levels of a complex, so that it can run in a parallel loop (it
+    cannot raise). The pointers are only valid while the complex lives.
+    """
+
+    var n: Int
+    var E: Int
+    var num_top: Int
+    var simplices: List[_IntPtr]
+    """Per level: the sorted vertex rows."""
+    var indptr: List[Pointer[Int, MutUntrackedOrigin]]
+    """Per level k: row pointers of `d_k` (rows: (k+1)-simplices)."""
+    var indices: List[Pointer[Int, MutUntrackedOrigin]]
+    """Per level k: column indices of `d_k`."""
+    var bary: List[_FloatPtr]
+    """Per level: barycentric circumcenters."""
+    var center: List[_FloatPtr]
+    """Per level: Cartesian circumcenters."""
+    var dual: List[_FloatPtr]
+    """Per level: the dual volumes being summed."""
+    var fact: List[Float64]
+
+    def __init__(out self, sc: SimplicialComplex) raises:
+        self.n = sc.complex_dimension()
+        self.E = sc.embedding_dimension()
+        self.num_top = sc[self.n].num_simplices
+        self.simplices = List[_IntPtr]()
+        self.indptr = List[Pointer[Int, MutUntrackedOrigin]]()
+        self.indices = List[Pointer[Int, MutUntrackedOrigin]]()
+        self.bary = List[_FloatPtr]()
+        self.center = List[_FloatPtr]()
+        self.dual = List[_FloatPtr]()
+        for k in range(self.n + 1):
+            ref level = sc[k]
+            self.simplices.append(
+                level.simplices.unsafe_ptr().unsafe_origin_cast[
+                    MutUntrackedOrigin
+                ]()
+            )
+            self.indptr.append(
+                level.d.indptr.unsafe_ptr().unsafe_origin_cast[
+                    MutUntrackedOrigin
+                ]()
+            )
+            self.indices.append(
+                level.d.indices.unsafe_ptr().unsafe_origin_cast[
+                    MutUntrackedOrigin
+                ]()
+            )
+            self.bary.append(
+                level.bary_circumcenter.unsafe_ptr().unsafe_origin_cast[
+                    MutUntrackedOrigin
+                ]()
+            )
+            self.center.append(
+                level.circumcenter.unsafe_ptr().unsafe_origin_cast[
+                    MutUntrackedOrigin
+                ]()
+            )
+            self.dual.append(
+                level.dual_volume.unsafe_ptr().unsafe_origin_cast[
+                    MutUntrackedOrigin
+                ]()
+            )
+        self.fact = _factorials(self.n + 1)
+
+    def run(self, lo: Int, hi: Int):
+        """Add every piece whose face has its first vertex in `[lo, hi)`;
+        `run(0, num_vertices)` is the whole serial walk.
+
+        Each top simplex's faces are named by bit masks of its vertex
+        positions: the walk first gathers every face's index, circumcenter,
+        and barycentric circumcenter into small local tables (independent
+        loads, each face once), then enumerates the chains locally. Row
+        `M` of `d` lists the faces of `M` in increasing index, which for a
+        sorted simplex means entry `p` omits the vertex of rank `dim - p`;
+        the chains are visited in that order, as `_add_dual_pieces` does,
+        so every sum is added in the same order with the same arithmetic.
+        """
+        var n = self.n
+        var w = n + 1
+        var E = self.E
+        var size = 1 << w
+        var top = self.simplices[n]
+        var q = List[Float64](length=max(n, 1) * E, fill=0)
+        var gidx = List[Int](length=size, fill=0)
+        var cen = List[Float64](length=size * E, fill=0)
+        var lbary = List[Float64](length=size * w, fill=0)
+        # bitpos[M * w + r]: the position of the r-th set bit of M
+        var bitpos = List[Int](length=size * w, fill=0)
+        var pop = List[Int](length=size, fill=0)
+        for M in range(size):
+            var r = 0
+            for j in range(w):
+                if (M >> j) & 1 == 1:
+                    bitpos[M * w + r] = j
+                    r += 1
+            pop[M] = r
+        var tab = _LocalTables(
+            q.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+            gidx.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+            cen.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+            lbary.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+            bitpos.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        )
+        for t in range(self.num_top):
+            # skip top simplices without a vertex in the block: none of
+            # their faces is owned
+            var touches = False
+            for j in range(w):
+                var v = Int(top[unsafe_offset=t * w + j])
+                if v >= lo and v < hi:
+                    touches = True
+                    break
+            if not touches:
+                continue
+            # the dual of a top simplex is its circumcenter: unit volume
+            var first = Int(top[unsafe_offset=t * w])
+            if first >= lo and first < hi:
+                var dp = self.dual[n]
+                dp[unsafe_offset=t] = dp[unsafe_offset=t] + 1
+            if n == 0:
+                continue
+            self._gather(t, size, pop, tab)
+            self._walk(size - 1, n, 1.0, 1.0, tab, t, lo, hi)
+        _ = q^
+        _ = gidx^
+        _ = cen^
+        _ = lbary^
+        _ = bitpos^
+
+    def _gather(self, t: Int, size: Int, pop: List[Int], tab: _LocalTables):
+        """Fill the local tables of top simplex `t`: every face's global
+        index, circumcenter, and (from triangles up) barycentric
+        circumcenter, by mask."""
+        var n = self.n
+        var w = n + 1
+        var E = self.E
+        var top = self.simplices[n]
+        tab.gidx[unsafe_offset=size - 1] = t
+        for j in range(w):
+            tab.gidx[unsafe_offset=1 << j] = Int(top[unsafe_offset=t * w + j])
+        # faces from the top down: the row of an L-simplex in d_{L-1}
+        # names its (L-1)-faces; edges' faces are the vertices above
+        for L in range(n, 1, -1):
+            var ip = self.indptr[L - 1]
+            var ix = self.indices[L - 1]
+            for M in range(size):
+                if pop[M] != L + 1:
+                    continue
+                var base = ip[unsafe_offset=tab.gidx[unsafe_offset=M]]
+                for p in range(L + 1):
+                    var bit = tab.bitpos[unsafe_offset=M * w + (L - p)]
+                    tab.gidx[unsafe_offset=M ^ (1 << bit)] = ix[
+                        unsafe_offset=base + p
+                    ]
+        for M in range(1, size):
+            var L = pop[M] - 1
+            var g = tab.gidx[unsafe_offset=M]
+            var c = self.center[L]
+            for k in range(E):
+                tab.cen[unsafe_offset=M * E + k] = c[unsafe_offset=g * E + k]
+            if L >= 2:
+                var b = self.bary[L]
+                for r in range(L + 1):
+                    tab.bary[unsafe_offset=M * w + r] = b[
+                        unsafe_offset=g * (L + 1) + r
+                    ]
+
+    def _walk(
+        self,
+        M: Int,
+        dim: Int,
+        sign: Float64,
+        vol: Float64,
+        tab: _LocalTables,
+        t: Int,
+        lo: Int,
+        hi: Int,
+    ):
+        """`_add_dual_pieces` on the local tables, restricted to the faces
+        owned by `[lo, hi)`; the arithmetic is the same, term for term."""
+        var n = self.n
+        var w = n + 1
+        var E = self.E
+        var m = n - dim
+        var top = self.simplices[n]
+        var fdual = self.dual[dim - 1]
+        var q = tab.q
+        var full = (1 << w) - 1
+        var scale = self.fact.unsafe_get(m + 1)
+        for p in range(dim + 1):
+            # entry p of the row omits the vertex of rank dim - p
+            var r = dim - p
+            var child = M ^ (1 << tab.bitpos[unsafe_offset=M * w + r])
+            var f = tab.gidx[unsafe_offset=child]
+            # faces of f start at or after f's first vertex: past the
+            # block, nothing below is owned
+            var first = Int(
+                top[unsafe_offset=t * w + tab.bitpos[unsafe_offset=child * w]]
+            )
+            if first >= hi:
+                continue
+            # sign from the parent's barycentric coordinate at the vertex
+            # opposite the face (an edge's are both 1/2)
+            var b: Float64 = 0.5
+            if dim >= 2:
+                b = tab.bary[unsafe_offset=M * w + r]
+            var s = sign * (
+                -1.0 if b < 0 or (b == 0 and _is_negative_zero(b)) else 1.0
+            )
+            # new edge from the root circumcenter, orthogonalized against q
+            for k in range(E):
+                q[unsafe_offset=m * E + k] = (
+                    tab.cen[unsafe_offset=child * E + k]
+                    - tab.cen[unsafe_offset=full * E + k]
+                )
+            for j in range(m):
+                var proj: Float64 = 0
+                for k in range(E):
+                    proj += (
+                        q[unsafe_offset=j * E + k] * q[unsafe_offset=m * E + k]
+                    )
+                for k in range(E):
+                    q[unsafe_offset=m * E + k] = q[unsafe_offset=m * E + k] - (
+                        proj * q[unsafe_offset=j * E + k]
+                    )
+            var h2: Float64 = 0
+            for k in range(E):
+                h2 += q[unsafe_offset=m * E + k] * q[unsafe_offset=m * E + k]
+            var h = sqrt(h2)
+            if h > 0:
+                for k in range(E):
+                    q[unsafe_offset=m * E + k] = q[unsafe_offset=m * E + k] / (
+                        h
+                    )
+            var new_vol = vol * h
+            if first >= lo:
+                fdual[unsafe_offset=f] = (
+                    fdual[unsafe_offset=f] + s * new_vol / scale
+                )
+            if dim > 1:
+                self._walk(child, dim - 1, s, new_vol, tab, t, lo, hi)
+
+
+@fieldwise_init
+struct _LocalTables(Copyable, Movable):
+    """Scratch tables of one top simplex for `_DualWalk`, indexed by face
+    mask (see `_DualWalk.run`)."""
+
+    var q: _FloatPtr
+    """The chain's orthonormalized edges, `n x E`."""
+    var gidx: Pointer[Int, MutUntrackedOrigin]
+    """Global index of each face."""
+    var cen: _FloatPtr
+    """Circumcenter of each face, `E` per mask."""
+    var bary: _FloatPtr
+    """Barycentric circumcenter of each face, `n + 1` slots per mask."""
+    var bitpos: Pointer[Int, MutUntrackedOrigin]
+    """Position of the r-th set bit of each mask, `n + 1` slots per mask."""
+
+
+def _vertex_blocks(top: IntArray, nv: Int, chunks: Int) -> List[Int]:
+    """Boundaries `0 = b_0 <= ... <= b_chunks = nv` of vertex blocks holding
+    about equal numbers of (top simplex, vertex) incidences."""
+    var w = cols_of(top)
+    var N = rows_of(top)
+    var degree = List[Int](length=nv, fill=0)
+    var tp = top.unsafe_ptr()
+    for i in range(N * w):
+        var v = Int(tp[unsafe_offset=i])
+        degree.unsafe_set(v, degree.unsafe_get(v) + 1)
+    var bounds = List[Int](length=chunks + 1, fill=nv)
+    bounds.unsafe_set(0, 0)
+    var total = N * w
+    var acc = 0
+    var c = 1
+    for v in range(nv):
+        while c < chunks and acc * chunks >= c * total:
+            bounds.unsafe_set(c, v)
+            c += 1
+        acc += degree.unsafe_get(v)
+    return bounds^
 
 
 def _factorials(n: Int) -> List[Float64]:
