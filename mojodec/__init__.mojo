@@ -122,6 +122,11 @@ from mojodec.routines.dense import (
     EighResult,
 )
 from mojodec.routines.time import Leapfrog, TypedLeapfrog
+from mojodec.routines.derham import (
+    derham_map,
+    form_index_sets,
+    whitney_form,
+)
 from mojodec.routines.quadrature import (
     QuadratureRule,
     grundmann_moeller,

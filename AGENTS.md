@@ -236,6 +236,14 @@ Key design points that span several files:
   `def(List[Float64]) raises -> Float64` functions or closures taking
   Cartesian coordinates. `integrate_simplices` integrates densities
   (unsigned volume), not k-forms.
+- **de Rham map and Whitney forms** (`routines/derham.mojo`): forms are
+  component lists over increasing index sets in lexicographic order
+  (`form_index_sets`). Both maps orient k-simplices by sorted vertices
+  but the elements by the mesh (`simplex_parity`, negated when 1), as
+  the cochains of `sc[k]` are; hand-written top-degree integrals must do
+  the same. `tests/test_derham.mojo` checks R d = d R, R W = id from every
+  element of a face, d W = W d, and the mass matrices against
+  `whitney_innerproduct`.
 - **Time stepping** (`routines/time.mojo`): `Leapfrog` takes diagonal
   masses `Mq`, `Mp` and one coupling `K` and steps `Mq q' = K p`,
   `Mp p' = -K^T q`, so the system is skew by construction; it raises on

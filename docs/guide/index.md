@@ -18,6 +18,10 @@ how to use it, and what can go wrong.
 - **[Quadrature](quadrature.md)**: Grundmann–Möller rules on simplices
   of any dimension and odd degree, their negative weights and the degree
   limit, and integrating functions over the simplices of a mesh.
+- **[The de Rham map and Whitney forms](derham-and-whitney.md)**: forms
+  as component lists, integrating a form into a cochain (`derham_map`),
+  evaluating a cochain's Whitney form (`whitney_form`), orientation, and
+  why `R d = d R`, `R W = id`, and `d W = W d`.
 - **[Linear solvers](linear-solvers.md)**: putting DEC systems in
   symmetric form, the `LinearOperator` and `Preconditioner` traits,
   conjugate gradients and preconditioning, MINRES for saddle points,

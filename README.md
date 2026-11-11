@@ -140,6 +140,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/homology.mojo` — `betti_numbers`, `relative_betti_numbers`, `non_manifold_cells` | (new) |
 | `mojodec/routines/time.mojo` — `Leapfrog`, `TypedLeapfrog` | (new) |
 | `mojodec/routines/quadrature.mojo` — `grundmann_moeller`, `QuadratureRule`, `integrate_simplices` | (new) |
+| `mojodec/routines/derham.mojo` — `derham_map`, `whitney_form`, `form_index_sets` | (new) |
 | `mojodec/vis/draw.mojo` — `triplot`, `lineplot`, `lineplot2`, `simplex_quivers`, `cube_quivers` | `vis/draw.py` |
 
 ## Plotting
@@ -446,6 +447,12 @@ the published mathematics:
   Grundmann–Möller rules for any dimension and odd degree up to 21, exact
   for polynomials of that degree, applied to one simplex or to every
   k-simplex of a complex with a function or closure as the integrand.
+- **The de Rham map and Whitney forms** (`derham_map`, `whitney_form`):
+  integrate a k-form, given as a function or closure of its components,
+  over every k-simplex into a cochain (exact for polynomial forms, so
+  `R d = d R` to rounding), and evaluate a cochain's Whitney form at a
+  point of an element (`R W = id`, `d W = W d`; the Whitney inner products
+  built from it match `whitney_innerproduct`).
 - **Backward errors of eigenpairs.** `eig.residuals(K, M)` gives each
   pair's `||K x - lambda M x|| / ((||K|| + |lambda| ||M||) ||x||)`, the
   relative change of `K` and `M` that would make it exact: scale-free, so
