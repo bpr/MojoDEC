@@ -46,11 +46,21 @@ sequence; every element checked positively oriented):
 |---|---:|---:|
 | `tri_100`, `tri_200`, `tri_400` | 10k, 40k, 161k | 20k, 80k, 320k triangles |
 | `tet_10`, `tet_20`, `tet_40` | 1.3k, 9.3k, 69k | 6k, 48k, 384k tetrahedra |
+| `tri_400_shuffled`, `tet_40_shuffled` | as `tri_400`, `tet_40` | as `tri_400`, `tet_40` |
 
 The jitter matters: an exact Kuhn grid has dual volumes that are exactly
 zero and circumcenters that coincide, special cases a real mesh never
 hits. The jittered meshes are not well-centered, so some signed dual
 volumes are negative.
+
+A Kuhn grid numbers its vertices in spatial order, which every loop over
+vertices or faces benefits from (neighbouring numbers, neighbouring
+memory), and which MojoDEC's parallel dual-volume walk relies on: it
+splits the work by blocks of vertex numbers, and walks each top simplex
+once per block it touches. The `_shuffled` meshes are the same meshes
+with their vertex numbers randomly permuted (element order kept), as a
+mesh file with an incoherent numbering would be. Their checks differ
+from the unshuffled ones' only in the last bits (sums in another order).
 
 ## Phases
 

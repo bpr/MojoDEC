@@ -162,3 +162,53 @@ Where the time goes now, on `tet_40`:
 - **First calls** still pay page faults the warm benchmark does not see:
   a fresh `SimplicialComplex(V, E)` on `tet_40` took 244 ms against the
   203 ms best of three.
+
+## Shuffled vertex numbers
+
+A Kuhn grid numbers its vertices in spatial order. `tet_40_shuffled` and
+`tri_400_shuffled` are the same meshes with their vertex numbers randomly
+permuted (element order kept), the worst a mesh file can do. The results
+are the same up to the last bits (sums in another order), and every check
+still agrees across libraries. MojoDEC's times (best of 4 alternating
+rounds, `ca6c9f9`, same laptop), shuffled over ordered:
+
+| `tet_40` | 1 thread | all cores |
+|---|---:|---:|
+| topology | 172 → 447 ms (2.6×) | 68 → 200 ms (3.0×) |
+| geometry | 690 → 770 ms (1.1×) | 154 → 281 ms (1.8×) |
+| … dual walk | 454 → 539 ms (1.2×) | 78 → 200 ms (2.6×) |
+| build | 823 → 1191 ms (1.45×) | 194 → 439 ms (2.3×) |
+| Whitney k = 0, 1, 2, 3 | 2.5×, 1.75×, 1.26×, 1.0× | 1.7×, 1.35×, 1.4×, 1.2–1.4× (13–18 ms, noisy) |
+
+`tri_400` is alike: build 1.8× on one thread and 2.5× on all cores.
+
+Two costs, both from numbering:
+
+- **The dual walk repeats work.** Each chunk walks every top simplex with
+  a vertex in its block of vertex numbers. With 16 chunks a tetrahedron
+  is walked 3.64 times on average when shuffled, against 1.38 ordered
+  (triangles 2.82 against 1.04), so the walk on all cores takes 2.6× as
+  long; on one thread there is a single block and only locality is lost.
+- **Locality everywhere else.** Face numbers follow vertex numbers, and the
+  loops that run in face order (topology's bucket sorts, the Whitney rows
+  for k = 0, 1) read per-element data scattered over the whole mesh.
+  Topology on one thread: the bucket sorts take 2–2.5× as long, and
+  `require_distinct_simplices` 1.6 → 48 ms, since the sorted element rows
+  are no longer in increasing order and it falls back to a sort. Whitney
+  k = n runs in element order and is unaffected.
+
+The other libraries slow down too (dexterior's build 1.46 → 1.93 s,
+formoniq's topology 1.7×, its Whitney 1.1–1.3×), so MojoDEC still leads,
+by 1.6× (dexterior's build) to 19× (formoniq).
+
+**Renumbering fixes most of it.** The shuffled meshes renumbered in Morton
+order of their vertex coordinates (vertices only, elements kept in their
+order) against the ordered ones: geometry 1.03× on one thread and 0.93× on
+all cores (the walk revisits 1.18 times per tetrahedron, fewer than the
+grid's lexicographic numbering), Whitney 1.0–1.15× on one thread except
+k = 0 on `tet_40` (1.48×), build 1.1×. Topology is still 1.2–1.5×, as the
+element order no longer matches the vertex order; sorting the elements
+too (by their first vertex, say) would be needed for that. So an opt-in
+`reorder_vertices` (Morton or Hilbert, elements sorted to match) is worth
+doing for meshes from files; a different split of the dual walk alone
+would fix only the walk.

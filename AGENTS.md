@@ -328,7 +328,11 @@ a block of outputs and adds only to those, in the serial order (dual
 volumes: faces by first vertex id, which can exceed the number of
 0-simplices when vertices are unused; `whitney_innerproduct`: matrix rows,
 each summed over its top simplices in increasing order, as `from_coo`
-would). Allocate a body's scratch with `chunk_scratch(n, fill)`, never a
+would). Ownership by vertex blocks assumes the vertex numbering is
+spatially coherent: with randomly numbered vertices a tetrahedron touches
+3.6 blocks instead of 1.4 and the 3D walk on all cores takes 2.6× as long
+(`tet_40_shuffled` in `benchmarks/compare`; see the guide's performance
+page). Allocate a body's scratch with `chunk_scratch(n, fill)`, never a
 bare `List(length=...)`: two chunks' small lists can share a cache line,
 and writing them in an inner loop (false sharing) made the 3D dual walk
 slower on two threads than on one; helpers called per element take

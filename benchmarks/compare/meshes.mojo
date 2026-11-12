@@ -9,6 +9,13 @@ vertices moved by up to 5% of the cell size (a fixed pseudo-random
 sequence), so no dual volume is exactly zero and no two circumcenters tie.
 The jitter keeps every element positively oriented, which is checked here.
 
+A Kuhn grid numbers its vertices in spatial order. `tri_400_shuffled` and
+`tet_40_shuffled` are `tri_400` and `tet_40` with their vertex numbers
+randomly permuted (same geometry, same element order), as a mesh read
+from a file with an incoherent numbering would be: MojoDEC's parallel
+dual-volume walk splits work by blocks of vertex numbers, so this is its
+worst case.
+
 Files go to `<dir>/<name>.vertices.arr` (float64) and
 `<dir>/<name>.elements.arr` (int64), in PyDEC's binary array format, with
 `<dir>/meshes.txt` listing `name dim num_vertices num_elements`.
@@ -25,7 +32,7 @@ from std.os.path import exists
 import numojo as nm
 from numojo.prelude import *
 from mojodec import *
-from mojodec.core.utils import fget, fset, iget
+from mojodec.core.utils import fget, fset, iget, iset
 
 
 struct Lcg(Movable):
@@ -41,6 +48,11 @@ struct Lcg(Movable):
         """A value in [-1, 1)."""
         self.state = self.state * 6364136223846793005 + 1442695040888963407
         return Float64(self.state >> 11) / Float64(1 << 53) * 2.0 - 1.0
+
+    def below(mut self, n: Int) -> Int:
+        """A value in [0, n)."""
+        self.state = self.state * 6364136223846793005 + 1442695040888963407
+        return Int((self.state >> 11) % UInt64(n))
 
 
 def jittered_kuhn(dim: Int, n: Int) raises -> SimplicialMesh:
@@ -63,6 +75,32 @@ def jittered_kuhn(dim: Int, n: Int) raises -> SimplicialMesh:
                 fset(mesh.vertices, i, a, x + 0.05 * h * rng.uniform())
     _require_positive(mesh, dim)
     return mesh^
+
+
+def shuffled(mesh: SimplicialMesh, seed: UInt64) raises -> SimplicialMesh:
+    """`mesh` with its vertex numbers randomly permuted (Fisher-Yates):
+    vertex `i` becomes `p[i]`. Element rows keep their order, and each
+    row's vertices their positions, so orientations are unchanged."""
+    var nv = mesh.vertices.shape[0]
+    var d = mesh.vertices.shape[1]
+    var p = List[Int](length=nv, fill=0)
+    for i in range(nv):
+        p[i] = i
+    var rng = Lcg(seed)
+    for i in range(nv - 1, 0, -1):
+        var j = rng.below(i + 1)
+        var t = p[i]
+        p[i] = p[j]
+        p[j] = t
+    var V = mesh.vertices.copy()
+    for i in range(nv):
+        for a in range(d):
+            fset(V, p[i], a, fget(mesh.vertices, i, a))
+    var E = mesh.elements.copy()
+    for e in range(E.shape[0]):
+        for j in range(E.shape[1]):
+            iset(E, e, j, p[iget(mesh.elements, e, j)])
+    return SimplicialMesh(V, E)
 
 
 def _require_positive(mesh: SimplicialMesh, dim: Int) raises:
@@ -97,20 +135,27 @@ def main() raises:
     if not exists(dir):
         makedirs(dir)
     var index = String()
-    # (dimension, cells per axis): 20k/80k/320k triangles, 6k/48k/384k tets
-    var specs: List[Tuple[Int, Int]] = [
-        (2, 100),
-        (2, 200),
-        (2, 400),
-        (3, 10),
-        (3, 20),
-        (3, 40),
+    # (dimension, cells per axis, shuffled vertex numbers):
+    # 20k/80k/320k triangles, 6k/48k/384k tets
+    var specs: List[Tuple[Int, Int, Bool]] = [
+        (2, 100, False),
+        (2, 200, False),
+        (2, 400, False),
+        (2, 400, True),
+        (3, 10, False),
+        (3, 20, False),
+        (3, 40, False),
+        (3, 40, True),
     ]
     for spec in specs:
         var dim = spec[0]
         var n = spec[1]
         var name = ("tri_" if dim == 2 else "tet_") + String(n)
         var mesh = jittered_kuhn(dim, n)
+        if spec[2]:
+            name += "_shuffled"
+            mesh = shuffled(mesh, UInt64(7000 + 1000 * dim + n))
+            _require_positive(mesh, dim)
         write_array(dir + "/" + name + ".vertices.arr", mesh.vertices)
         write_array(dir + "/" + name + ".elements.arr", mesh.elements)
         index += (

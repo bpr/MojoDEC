@@ -4,7 +4,8 @@
                            [--meshes tri_100,tet_10,...] [--timeout S]
 
 Steps (each skipped when its output exists):
-1. write the meshes (meshes.mojo) to build/compare/meshes;
+1. write the meshes (meshes.mojo) to build/compare/meshes (again when
+   --meshes names one that meshes.txt does not list);
 2. build mojodec_bench.mojo (release, -D ASSERT=none) and the Rust crate
    (dexterior, formoniq; pinned in rust/Cargo.toml);
 3. clone PyDEC at PYDEC_REV into build/compare/pydec and apply
@@ -55,8 +56,16 @@ def sh(cmd, **kw):
     subprocess.run(cmd, check=True, **kw)
 
 
-def prepare(libs):
-    if not (MESHES / "meshes.txt").exists():
+def listed_meshes():
+    index = MESHES / "meshes.txt"
+    if not index.exists():
+        return []
+    return [l.split()[0] for l in open(index) if l.strip()]
+
+
+def prepare(libs, wanted):
+    listed = listed_meshes()
+    if not listed or any(m not in listed for m in wanted):
         sh(["mojo", "run", "-I", ".", "-I", "build",
             "benchmarks/compare/meshes.mojo", str(MESHES)], cwd=ROOT)
     if "mojodec" in libs:
@@ -329,9 +338,9 @@ def main():
             print(comparison(load(args.compare)[1], records))
         return
 
-    pydec = prepare(libs)
-    meshes = [m for m in args.meshes.split(",") if m] or \
-        [l.split()[0] for l in open(MESHES / "meshes.txt") if l.strip()]
+    wanted = [m for m in args.meshes.split(",") if m]
+    pydec = prepare(libs, wanted)
+    meshes = wanted or listed_meshes()
     meta = machine()
     meta["libs"] = libs
     meta["repeats"] = args.repeats
