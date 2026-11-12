@@ -31,10 +31,16 @@ positive integer, it leaves one chunk per logical (or physical) core.
 The body must not raise, and chunks must write to disjoint memory. A loop
 that can fail records it at its chunk index (there are `num_chunks(n,
 serial_below)` of them) and raises after `parallel_ranges` returns.
+
+Disjoint is not enough for scratch space a body writes in its inner loop:
+two chunks' small lists can share a cache line, and every write then
+takes the line from the other core (false sharing; it made the 3D dual
+walk slower on two threads than on one). Allocate it with
+`chunk_scratch`, which leaves room after the list.
 """
 
 from std.os import getenv
-from std.sys import num_logical_cores, num_physical_cores
+from std.sys import num_logical_cores, num_physical_cores, size_of
 
 from max.algorithm import parallelize
 
@@ -84,6 +90,35 @@ def max_threads(*, memory_bound: Bool = False) -> Int:
     except:
         pass
     return cores
+
+
+comptime _SCRATCH_PAD_BYTES = 128
+"""Unused bytes after a chunk's scratch list: a cache line, and the
+second line Intel's spatial prefetcher fetches with it."""
+
+
+def chunk_scratch[T: Copyable](length: Int, fill: T) -> List[T]:
+    """Scratch space for one chunk of a parallel loop.
+
+    The list holds `length` copies of `fill` and has at least 128 unused
+    bytes of capacity after them. When every chunk's scratch has that
+    room, no two chunks' elements share a cache line, so writes in one
+    chunk's inner loop do not slow down another's.
+
+    Parameters:
+        T: The element type.
+
+    Args:
+        length: The number of elements.
+        fill: The initial value of each.
+
+    Returns:
+        The list (do not grow it past `length`).
+    """
+    var out = List[T](capacity=length + _SCRATCH_PAD_BYTES // size_of[T]() + 1)
+    for _ in range(length):
+        out.append(fill.copy())
+    return out^
 
 
 def parallel_ranges[

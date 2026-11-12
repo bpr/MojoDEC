@@ -31,8 +31,10 @@ from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.utils import (
     int_array,
+    int_vector,
     real_array_from_rows,
     real_vector_from_list,
+    require_distinct_simplices,
 )
 from mojodec.routines.combinatorial import (
     combinations,
@@ -51,6 +53,11 @@ from mojodec.routines.mesh_generation import (
     icosphere,
     loop_subdivision,
     triangulate_ncube,
+)
+from mojodec.routines.simplex_array import (
+    _boundary_by_buckets,
+    _boundary_by_lexsort,
+    _vertex_bound,
 )
 from mojodec.routines.topology import closure_of, star_of
 
@@ -167,6 +174,32 @@ def _sparse_triplets(
         cols.append(data.draw(integers(0, ncols - 1)))
         vals.append(Float64(data.draw(integers(-9, 9))))
     return (nrows, ncols, rows^, cols^, vals^)
+
+
+def _simplex_rows(
+    mut data: ConjectureData,
+) raises -> Tuple[Int, List[Int], List[Int]]:
+    """`N` rows of `K` distinct vertex ids from `[0, nv)`, each sorted, and a
+    parity per row (`K` in [2, 5], `N` in [1, 40], `nv` in [K, 12]): few
+    ids, so rows and faces repeat and the sorts see ties."""
+    var K = data.draw(integers(2, 5), "K")
+    var nv = data.draw(integers(K, 12), "nv")
+    var N = data.draw(integers(1, 40), "N")
+    var base = List[Int]()
+    for i in range(nv):
+        base.append(i)
+    var flat = List[Int]()
+    var parity = List[Int]()
+    for _ in range(N):
+        var p = data.draw(permutations(base.copy()))
+        var row = List[Int]()
+        for j in range(K):
+            row.append(p[j])
+        sort(row)
+        for v in row:
+            flat.append(v)
+        parity.append(data.draw(integers(0, 1)))
+    return (K, flat^, parity^)
 
 
 def _grid_dims(mut data: ConjectureData) raises -> List[Int]:
@@ -512,6 +545,65 @@ def test_from_coo_sums_duplicates_like_a_dense_matrix() raises:
                 assert_equal(A[i, j], D[i][j], String("entry ", i, ", ", j))
 
     given(composite(_sparse_triplets), prop, quick())
+
+
+def _same_csr(A: CSRMatrix, B: CSRMatrix, what: String) raises:
+    assert_equal(A.nrows, B.nrows, what)
+    assert_equal(A.ncols, B.ncols, what)
+    assert_true(A.indptr == B.indptr, what + ": indptr")
+    assert_true(A.indices == B.indices, what + ": indices")
+    assert_true(A.data == B.data, what + ": data")
+
+
+def test_boundary_by_buckets_matches_lexsort() raises:
+    # simplex_array_boundary's parallel path (one bucket per first vertex)
+    # gives the serial path's faces and matrices, entry for entry
+    def prop(t: Tuple[Int, List[Int], List[Int]]) raises:
+        var K = t[0]
+        var N = len(t[2])
+        var s = int_array(N, K)
+        for i in range(N * K):
+            s.unsafe_set(i, Scalar[DType.int](t[1][i]))
+        var parity = int_vector(N)
+        for i in range(N):
+            parity.unsafe_set(i, Scalar[DType.int](t[2][i]))
+        var x = _boundary_by_buckets(s, parity, _vertex_bound(s))
+        var y = _boundary_by_lexsort(s, parity)
+        assert_equal(x.faces.size, y.faces.size)
+        for i in range(x.faces.size):
+            assert_equal(x.faces.unsafe_get(i), y.faces.unsafe_get(i))
+        _same_csr(x.coboundary, y.coboundary, "d")
+        _same_csr(x.boundary, y.boundary, "boundary")
+
+    given(composite(_simplex_rows), prop, quick())
+
+
+def test_require_distinct_simplices_finds_duplicates() raises:
+    # raises exactly when two rows are equal, whether or not the rows are
+    # in increasing order (the shortcut that skips sorting)
+    def prop(t: Tuple[Int, List[Int], List[Int]]) raises:
+        var K = t[0]
+        var N = len(t[2])
+        var s = int_array(N, K)
+        for i in range(N * K):
+            s.unsafe_set(i, Scalar[DType.int](t[1][i]))
+        var duplicate = False
+        for a in range(N):
+            for b in range(a + 1, N):
+                var same = True
+                for j in range(K):
+                    if t[1][a * K + j] != t[1][b * K + j]:
+                        same = False
+                if same:
+                    duplicate = True
+        var raised = False
+        try:
+            require_distinct_simplices(s, "prop")
+        except:
+            raised = True
+        assert_equal(raised, duplicate)
+
+    given(composite(_simplex_rows), prop, quick())
 
 
 def test_transpose_is_an_involution() raises:

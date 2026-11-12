@@ -328,8 +328,25 @@ a block of outputs and adds only to those, in the serial order (dual
 volumes: faces by first vertex id, which can exceed the number of
 0-simplices when vertices are unused; `whitney_innerproduct`: matrix rows,
 each summed over its top simplices in increasing order, as `from_coo`
-would). `tests/test_parallel.mojo`
-uses meshes past every threshold; the other tests' meshes run serially.
+would). Allocate a body's scratch with `chunk_scratch(n, fill)`, never a
+bare `List(length=...)`: two chunks' small lists can share a cache line,
+and writing them in an inner loop (false sharing) made the 3D dual walk
+slower on two threads than on one; helpers called per element take
+their scratch as an argument (`frame_dual_basis(..., diag)`,
+`parallelotope_volume(..., diag)`) instead of allocating it. Large
+outputs the parallel loops write in full are created with
+`List(unsafe_uninit_length=n)`: a `fill` is a serial memset that also
+takes every page fault on one thread (it doubled the first call of
+`whitney_innerproduct`). Topology is parallel too:
+`simplex_array_boundary` sorts face occurrences into one bucket per
+first vertex (`_boundary_by_buckets`, from 16384 occurrences with vertex
+ids in a narrow range; occurrences are `r << sh | i`, as divisions by
+the row width dominated the sort) and reads faces, `d`, and the boundary
+off the sorted runs, equal entry for entry to `_boundary_by_lexsort`; and
+`require_distinct_simplices` skips its sort when the rows are already in
+strictly increasing order. `tests/test_parallel.mojo` uses meshes past
+every threshold, and compares each parallel path with the serial one
+exactly; the other tests' meshes run serially.
 
 ## Coding standards
 

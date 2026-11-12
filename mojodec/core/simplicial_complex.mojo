@@ -38,7 +38,7 @@ from mojodec.core.diagonal import DiagonalOperator
 from mojodec.core.primality import Primality
 from mojodec.core.mesh import SimplicialMesh
 from mojodec.core.simplex import Simplex
-from mojodec.core.parallel import num_chunks, parallel_ranges
+from mojodec.core.parallel import chunk_scratch, num_chunks, parallel_ranges
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.subset import Subset
 from mojodec.core.utils import (
@@ -975,9 +975,9 @@ struct SimplicialComplex(
         def simplices(
             chunk: Int, lo: Int, hi: Int
         ) {dim, E, w, m, Vp, Sp, op, bp, badp}:
-            var A = List[Float64](length=m * m, fill=0)
-            var b = List[Float64](length=m, fill=0)
-            var edges = List[Float64](length=2 * E, fill=0)
+            var A = chunk_scratch[Float64](m * m, 0)
+            var b = chunk_scratch[Float64](m, 0)
+            var edges = chunk_scratch[Float64](2 * E, 0)
             for i in range(lo, hi):
                 if dim == 0:
                     bp[unsafe_offset=i] = 1.0
@@ -1496,13 +1496,13 @@ struct _DualWalk(Copyable, Movable):
         var E = self.E
         var size = 1 << w
         var top = self.simplices[n]
-        var q = List[Float64](length=max(n, 1) * E, fill=0)
-        var gidx = List[Int](length=size, fill=0)
-        var cen = List[Float64](length=size * E, fill=0)
-        var lbary = List[Float64](length=size * w, fill=0)
+        var q = chunk_scratch[Float64](max(n, 1) * E, 0)
+        var gidx = chunk_scratch[Int](size, 0)
+        var cen = chunk_scratch[Float64](size * E, 0)
+        var lbary = chunk_scratch[Float64](size * w, 0)
         # bitpos[M * w + r]: the position of the r-th set bit of M
-        var bitpos = List[Int](length=size * w, fill=0)
-        var pop = List[Int](length=size, fill=0)
+        var bitpos = chunk_scratch[Int](size * w, 0)
+        var pop = chunk_scratch[Int](size, 0)
         for M in range(size):
             var r = 0
             for j in range(w):
@@ -1823,8 +1823,9 @@ def _simplex_volumes(
     def simplices(
         chunk: Int, lo: Int, hi: Int
     ) {dim, E, w, signed, scale, Vp, Sp, op}:
-        var edges = List[Float64](length=dim * E, fill=0)
-        var M = List[Float64](length=dim * dim, fill=0)
+        var edges = chunk_scratch[Float64](dim * E, 0)
+        var M = chunk_scratch[Float64](dim * dim, 0)
+        var diag = chunk_scratch[Float64](dim, 0)
         for i in range(lo, hi):
             var v0 = Int(Sp[unsafe_offset=i * w]) * E
             for r in range(dim):
@@ -1840,7 +1841,7 @@ def _simplex_volumes(
                 op[unsafe_offset=i] = _det_in_place(M, dim) / scale
             else:
                 op[unsafe_offset=i] = (
-                    parallelotope_volume(edges, dim, E) / scale
+                    parallelotope_volume(edges, dim, E, diag) / scale
                 )
 
     parallel_ranges(rows_of(S), 50_000, simplices)

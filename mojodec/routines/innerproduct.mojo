@@ -12,7 +12,7 @@ matrix as a typed operator from primal k-cochains to dual (n-k)-cochains.
 """
 
 
-from mojodec.core.parallel import num_chunks, parallel_ranges
+from mojodec.core.parallel import chunk_scratch, num_chunks, parallel_ranges
 from mojodec.core.regular_cube_complex import RegularCubeComplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
@@ -236,7 +236,9 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
 
     ref top = sc[p]
     var num_top = top.num_simplices
-    var data = List[Float64](length=num_top * nfp, fill=0)
+    # the parallel loops below write every entry of these (a degenerate
+    # simplex raises before any is read), and so touch their pages first
+    var data = List[Float64](unsafe_uninit_length=num_top * nfp)
     var datap = data.unsafe_ptr()
     # The k-face indices of each top simplex, in the order of k_faces, as
     # `massmatrix_rowcols` finds them, but from the rows of d: faces are
@@ -272,7 +274,7 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
             .d.indices.unsafe_ptr()
             .unsafe_origin_cast[MutUntrackedOrigin]()
         )
-    var faces = List[Int](length=num_top * num_k_faces, fill=0)
+    var faces = List[Int](unsafe_uninit_length=num_top * num_k_faces)
     var facesp = faces.unsafe_ptr()
     var Xp = sc.vertices().unsafe_ptr()
     var Sp = top.simplices.unsafe_ptr()
@@ -316,17 +318,18 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
         imm d_indices,
         facesp,
     }:
-        var edges = List[Float64](length=p * dim, fill=0)
-        var frame = List[Float64](length=p * p, fill=0)
-        var grads = List[Float64](length=(p + 1) * p, fill=0)
-        var minors = List[Float64](length=num_forms * num_sets, fill=0)
-        var dets = List[Float64](length=num_forms * num_forms, fill=1)
-        var work = List[Float64](length=k * k, fill=0)
+        var edges = chunk_scratch[Float64](p * dim, 0)
+        var frame = chunk_scratch[Float64](p * p, 0)
+        var grads = chunk_scratch[Float64]((p + 1) * p, 0)
+        var minors = chunk_scratch[Float64](num_forms * num_sets, 0)
+        var dets = chunk_scratch[Float64](num_forms * num_forms, 1)
+        var work = chunk_scratch[Float64](k * k, 0)
+        var diag = chunk_scratch[Float64](p, 0)
         var ep = edges.unsafe_ptr()
         var Dp = grads.unsafe_ptr()
         var mp = minors.unsafe_ptr()
         var dp = dets.unsafe_ptr()
-        var gidx = List[Int](length=size, fill=0)
+        var gidx = chunk_scratch[Int](size, 0)
         var gp = gidx.unsafe_ptr()
         for i in range(lo, hi):
             gp[unsafe_offset=size - 1] = i
@@ -355,7 +358,7 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
                             Xp[unsafe_offset=v * dim + c]
                             - Xp[unsafe_offset=v0 * dim + c]
                         )
-                if not frame_dual_basis(edges, p, dim, frame):
+                if not frame_dual_basis(edges, p, dim, frame, diag):
                     badp[unsafe_offset=chunk] = i
                     return
                 for c in range(p):
@@ -402,7 +405,7 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
         # one entry per top simplex, on the diagonal
         var A = CSRMatrix(num_top, num_top)
         var ip = A.indptr.unsafe_ptr()
-        A.indices = List[Int](length=num_top, fill=0)
+        A.indices = List[Int](unsafe_uninit_length=num_top)
         var ixp = A.indices.unsafe_ptr()
         for i in range(num_top):
             ip[unsafe_offset=i + 1] = i + 1
@@ -436,7 +439,7 @@ def _assemble(
         sp[unsafe_offset=r + 1] = sp[unsafe_offset=r + 1] + 1
     for r in range(N):
         sp[unsafe_offset=r + 1] = sp[unsafe_offset=r + 1] + sp[unsafe_offset=r]
-    var incidence = List[Int](length=num_top * fps, fill=0)
+    var incidence = List[Int](unsafe_uninit_length=num_top * fps)
     var ip = incidence.unsafe_ptr()
     var next = start.copy()
     var np = next.unsafe_ptr()
@@ -448,9 +451,10 @@ def _assemble(
     # Row r has at most fps entries per top simplex: assemble it into
     # slots fps * start[r] ..., sorted by column, then compact. Terms are
     # taken in increasing s, as from_coo's stable sort orders them.
-    var cols = List[Int](length=num_top * fps * fps, fill=0)
-    var vals = List[Float64](length=num_top * fps * fps, fill=0)
-    var counts = List[Int](length=N, fill=0)
+    # (only the slots a row fills are read, and every count is written)
+    var cols = List[Int](unsafe_uninit_length=num_top * fps * fps)
+    var vals = List[Float64](unsafe_uninit_length=num_top * fps * fps)
+    var counts = List[Int](unsafe_uninit_length=N)
     var cp = cols.unsafe_ptr()
     var valp = vals.unsafe_ptr()
     var cnp = counts.unsafe_ptr()
@@ -490,13 +494,14 @@ def _assemble(
 
     comptime SERIAL_BELOW = 4096
     parallel_ranges(N, SERIAL_BELOW, rows)
-    var indptr = List[Int](length=N + 1, fill=0)
+    var indptr = List[Int](unsafe_uninit_length=N + 1)
+    indptr[0] = 0
     var pp = indptr.unsafe_ptr()
     for r in range(N):
         pp[unsafe_offset=r + 1] = pp[unsafe_offset=r] + cnp[unsafe_offset=r]
     var nnz = indptr[N]
-    var indices = List[Int](length=nnz, fill=0)
-    var data = List[Float64](length=nnz, fill=0)
+    var indices = List[Int](unsafe_uninit_length=nnz)
+    var data = List[Float64](unsafe_uninit_length=nnz)
     var ixp = indices.unsafe_ptr()
     var dp = data.unsafe_ptr()
 

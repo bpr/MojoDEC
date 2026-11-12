@@ -12,6 +12,7 @@ from std.testing import (
 import numojo as nm
 from numojo.prelude import *
 from mojodec import (
+    CSRMatrix,
     SimplicialComplex,
     SimplicialMesh,
     kuhn_grid,
@@ -20,7 +21,22 @@ from mojodec import (
 )
 from mojodec.core.parallel import num_chunks, parallel_ranges
 from mojodec.core.sparse import PARALLEL_NNZ
-from mojodec.core.utils import fget, fset, iget, iset, real_vector
+from mojodec.core.utils import (
+    fget,
+    fset,
+    iget,
+    iset,
+    int_vector,
+    real_vector,
+    rows_of,
+    sort_each_row,
+)
+from mojodec.routines.simplex_array import (
+    _boundary_by_buckets,
+    _boundary_by_lexsort,
+    _vertex_bound,
+    simplex_array_parity,
+)
 
 # The meshes here are large enough for the parallel paths: 80k triangles
 # for circumcenters and volumes (50k), 5000 for Whitney (4096), and a
@@ -164,6 +180,65 @@ def test_unused_vertices() raises:
     _check_unused_vertices(_jittered([60, 60], False))
     _check_unused_vertices(_jittered([12, 12, 12], True))
     _check_unused_vertices(_jittered([4, 4], False))
+
+
+def _same_csr(A: CSRMatrix, B: CSRMatrix) raises:
+    assert_equal(A.nrows, B.nrows)
+    assert_equal(A.ncols, B.ncols)
+    assert_true(A.indptr == B.indptr)
+    assert_true(A.indices == B.indices)
+    assert_true(A.data == B.data)
+
+
+def _check_boundary_paths(mesh: SimplicialMesh) raises:
+    # every level's faces and matrices by buckets (parallel) and by one
+    # lexicographic sort (serial), entry for entry
+    var s = mesh.elements.copy()
+    var parity = simplex_array_parity(s)
+    sort_each_row(s)
+    while s.shape[1] > 1:
+        var x = _boundary_by_buckets(s, parity, _vertex_bound(s))
+        var y = _boundary_by_lexsort(s, parity)
+        assert_equal(x.faces.size, y.faces.size)
+        for i in range(x.faces.size):
+            assert_equal(x.faces.unsafe_get(i), y.faces.unsafe_get(i))
+        _same_csr(x.coboundary, y.coboundary)
+        _same_csr(x.boundary, y.boundary)
+        s = y.faces.copy()
+        parity = int_vector(rows_of(s))
+
+
+def test_boundary_by_buckets_matches_lexsort() raises:
+    _check_boundary_paths(_jittered([60, 60], False))
+    _check_boundary_paths(_jittered([60, 60], True))
+    _check_boundary_paths(_jittered([12, 12, 12], True))
+    _check_boundary_paths(
+        _with_unused_vertices(_jittered([12, 12, 12], True), 5)
+    )
+
+
+def test_large_meshes_check_distinct_simplices() raises:
+    # past the 50k rows where the checks of the elements go parallel
+    var mesh = kuhn_grid([160, 160])
+    var n = rows_of(mesh.elements)
+    _ = SimplicialComplex(mesh.vertices, mesh.elements, compute_geometry=False)
+    # row 70 again, reordered, at the end
+    var E = nm.zeros[DType.int](Shape(n + 1, 3))
+    for i in range(n):
+        for j in range(3):
+            iset(E, i, j, iget(mesh.elements, i, j))
+    for j in range(3):
+        iset(E, n, j, iget(mesh.elements, 70, 2 - j))
+    with assert_raises(
+        contains=String("simplices 70 and ", n, " have the same vertices")
+    ):
+        _ = SimplicialComplex(mesh.vertices, E, compute_geometry=False)
+    # repeated vertices in two rows of different chunks: the first is named
+    var R = mesh.elements.copy()
+    iset(R, 45_000, 2, iget(R, 45_000, 0))
+    iset(R, 40_000, 2, iget(R, 40_000, 1))
+    with assert_raises(contains="simplex 40000 repeats vertex"):
+        _ = SimplicialComplex(mesh.vertices, R, compute_geometry=False)
 
 
 def test_parallel_ranges_covers_once() raises:

@@ -17,6 +17,8 @@ from std.math import sqrt
 import numojo as nm
 from numojo.prelude import *
 
+from mojodec.core.parallel import chunk_scratch, num_chunks, parallel_ranges
+
 comptime IntArray = NDArray[DType.int]
 """A C-contiguous array of machine integers."""
 comptime RealArray = NDArray[DType.float64]
@@ -427,15 +429,22 @@ def sort_each_row(mut a: IntArray):
     """
     var r = rows_of(a)
     var c = cols_of(a)
-    for i in range(r):
-        # insertion sort: rows are short (simplex vertex lists)
-        for j in range(1, c):
-            var key = a.unsafe_get(i * c + j)
-            var k = j - 1
-            while k >= 0 and a.unsafe_get(i * c + k) > key:
-                a.unsafe_set(i * c + k + 1, a.unsafe_get(i * c + k))
-                k -= 1
-            a.unsafe_set(i * c + k + 1, key)
+    var ap = a.unsafe_ptr()
+
+    def rows(chunk: Int, lo: Int, hi: Int) {ap, c}:
+        for i in range(lo, hi):
+            # insertion sort: rows are short (simplex vertex lists)
+            for j in range(1, c):
+                var key = ap[unsafe_offset=i * c + j]
+                var k = j - 1
+                while k >= 0 and ap[unsafe_offset=i * c + k] > key:
+                    ap[unsafe_offset=i * c + k + 1] = ap[
+                        unsafe_offset=i * c + k
+                    ]
+                    k -= 1
+                ap[unsafe_offset=i * c + k + 1] = key
+
+    parallel_ranges(r, 50_000, rows)
 
 
 def require_distinct_simplices(sorted_rows: IntArray, who: String) raises:
@@ -452,13 +461,54 @@ def require_distinct_simplices(sorted_rows: IntArray, who: String) raises:
     """
     var r = rows_of(sorted_rows)
     var c = cols_of(sorted_rows)
-    for i in range(r):
-        for j in range(1, c):
-            if iget(sorted_rows, i, j) == iget(sorted_rows, i, j - 1):
-                raise Error(
-                    String(who, ": simplex ", i, " repeats vertex ")
-                    + String(iget(sorted_rows, i, j))
-                )
+    # one pass, in parallel chunks: the first row of each chunk that
+    # repeats a vertex, and whether the rows are in strictly increasing
+    # order, which makes them distinct without sorting them (generated
+    # meshes usually are)
+    comptime SERIAL_BELOW = 50_000
+    var chunks = num_chunks(r, SERIAL_BELOW)
+    var repeats = List[Int](length=chunks, fill=-1)
+    var unordered = List[Bool](length=chunks, fill=False)
+    var sp = sorted_rows.unsafe_ptr()
+    var rp = repeats.unsafe_ptr()
+    var up = unordered.unsafe_ptr()
+
+    def rows(chunk: Int, lo: Int, hi: Int) {sp, rp, up, c}:
+        var ordered = True
+        for i in range(lo, hi):
+            for j in range(1, c):
+                if (
+                    sp[unsafe_offset=i * c + j]
+                    == sp[unsafe_offset=i * c + j - 1]
+                ):
+                    rp[unsafe_offset=chunk] = i
+                    return
+            if ordered and i > 0:
+                for j in range(c):
+                    var x = sp[unsafe_offset=(i - 1) * c + j]
+                    var y = sp[unsafe_offset=i * c + j]
+                    if x != y:
+                        ordered = x < y
+                        break
+                    if j == c - 1:
+                        ordered = False
+        up[unsafe_offset=chunk] = not ordered
+
+    parallel_ranges(r, SERIAL_BELOW, rows)
+    var sorted = True
+    for k in range(chunks):
+        var i = repeats[k]
+        if i >= 0:
+            for j in range(1, c):
+                if iget(sorted_rows, i, j) == iget(sorted_rows, i, j - 1):
+                    raise Error(
+                        String(who, ": simplex ", i, " repeats vertex ")
+                        + String(iget(sorted_rows, i, j))
+                    )
+        if unordered[k]:
+            sorted = False
+    if sorted:
+        return
     var order = lexsort_rows(sorted_rows)
     for t in range(1, r):
         var a = order[t - 1]
@@ -665,6 +715,24 @@ def parallelotope_volume(mut a: List[Float64], m: Int, n: Int) -> Float64:
         The volume (1 when `m == 0`).
     """
     var diag = List[Float64](length=m, fill=0)
+    return parallelotope_volume(a, m, n, diag)
+
+
+def parallelotope_volume(
+    mut a: List[Float64], m: Int, n: Int, mut diag: List[Float64]
+) -> Float64:
+    """`parallelotope_volume(a, m, n)` with caller-provided scratch, for
+    loops that must not allocate per call.
+
+    Args:
+        a: The vectors, row after row (`m * n` entries); overwritten.
+        m: Number of vectors, at most `n`.
+        n: Their dimension.
+        diag: Scratch of at least `m` entries; overwritten.
+
+    Returns:
+        The volume (1 when `m == 0`).
+    """
     if not _householder_rows(a, m, n, diag):
         return 0
     var product: Float64 = 1
@@ -751,9 +819,33 @@ def frame_dual_basis(
         False, leaving `out` undefined, if the vectors are linearly
         dependent.
     """
+    var diag = List[Float64](length=m, fill=0)
+    return frame_dual_basis(a, m, n, out, diag)
+
+
+def frame_dual_basis(
+    mut a: List[Float64],
+    m: Int,
+    n: Int,
+    mut out: List[Float64],
+    mut diag: List[Float64],
+) -> Bool:
+    """`frame_dual_basis(a, m, n, out)` with caller-provided scratch, for
+    loops that must not allocate per call.
+
+    Args:
+        a: The vectors, row after row (`m * n` entries); overwritten.
+        m: Number of vectors, at most `n`.
+        n: Their dimension.
+        out: Set to the `m x m` row-major `R^-1` (resized if smaller).
+        diag: Scratch of at least `m` entries; overwritten.
+
+    Returns:
+        False, leaving `out` undefined, if the vectors are linearly
+        dependent.
+    """
     if len(out) < m * m:
         out.resize(m * m, 0)
-    var diag = List[Float64](length=m, fill=0)
     if not _householder_rows(a, m, n, diag):
         return False
     # column c of R^-1 solves R x = e_c; R[i, k] (k > i) is in row k

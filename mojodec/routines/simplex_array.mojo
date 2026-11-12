@@ -9,6 +9,7 @@ Largely inspired by `pydec.dec.simplex_array`. A simplex array is an
 `N x (k+1)` integer array whose rows are the vertex lists of `N` k-simplices.
 """
 
+from mojodec.core.parallel import chunk_scratch, num_chunks, parallel_ranges
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.utils import (
     IntArray,
@@ -104,21 +105,27 @@ def simplex_array_parity(s: IntArray) raises -> IntArray:
     var M = rows_of(s)
     var N = cols_of(s)
     var out = int_vector(M)
-    var row = List[Int](length=N, fill=0)
-    for i in range(M):
-        for j in range(N):
-            row[j] = Int(s.unsafe_get(i * N + j))
-        # count transpositions of a selection sort
-        var trans = 0
-        for j in range(N - 1):
-            var m = j
-            for k in range(j + 1, N):
-                if row[k] < row[m]:
-                    m = k
-            if m != j:
-                row.swap_elements(j, m)
-                trans += 1
-        out.unsafe_set(i, Scalar[DType.int](trans % 2))
+    var sp = s.unsafe_ptr()
+    var op = out.unsafe_ptr()
+
+    def rows(chunk: Int, lo: Int, hi: Int) {sp, op, N}:
+        var row = chunk_scratch[Int](N, 0)
+        for i in range(lo, hi):
+            for j in range(N):
+                row[j] = Int(sp[unsafe_offset=i * N + j])
+            # count transpositions of a selection sort
+            var trans = 0
+            for j in range(N - 1):
+                var m = j
+                for k in range(j + 1, N):
+                    if row[k] < row[m]:
+                        m = k
+                if m != j:
+                    row.swap_elements(j, m)
+                    trans += 1
+            op[unsafe_offset=i] = Scalar[DType.int](trans % 2)
+
+    parallel_ranges(M, 50_000, rows)
     return out^
 
 
@@ -191,6 +198,25 @@ def simplex_array_boundary(
     Raises:
         Does not raise in practice.
     """
+    # From a few thousand simplices with vertex ids in a narrow range, as a
+    # complex's levels have, the faces are sorted by buckets, in parallel;
+    # the result is the same either way.
+    if cols_of(s) >= 2 and rows_of(s) * cols_of(s) >= _BUCKETS_FROM:
+        var V = _vertex_bound(s)
+        if V > 0:
+            return _boundary_by_buckets(s, parity, V)
+    return _boundary_by_lexsort(s, parity)
+
+
+comptime _BUCKETS_FROM = 16384
+"""Face occurrences (simplices x faces per simplex) from which
+`simplex_array_boundary` sorts by buckets."""
+
+
+def _boundary_by_lexsort(
+    s: IntArray, parity: IntArray
+) raises -> FacesAndBoundary:
+    """`simplex_array_boundary` by one lexicographic sort of every face."""
     var num_simplices = rows_of(s)
     var faces_per_simplex = cols_of(s)
     var num_faces = num_simplices * faces_per_simplex
@@ -247,6 +273,303 @@ def simplex_array_boundary(
     var d = CSRMatrix(num_simplices, len(unique_rows), indptr^, indices^, data^)
     var B = d.transpose()
     return FacesAndBoundary(unique_faces^, B^, d^)
+
+
+comptime _IntPtr = Pointer[Scalar[DType.int], ImmUntrackedOrigin]
+comptime _Ptr = Pointer[Int, MutUntrackedOrigin]
+
+
+def _vertex_bound(s: IntArray) -> Int:
+    """One more than the largest vertex id of `s`, or -1 if an id is
+    negative or the range is wider than the number of entries (then one
+    bucket per id would cost more than it saves)."""
+    var sp = s.unsafe_ptr()
+    var hi = -1
+    for i in range(s.size):
+        var v = Int(sp[unsafe_offset=i])
+        if v < 0:
+            return -1
+        hi = max(hi, v)
+    if hi + 1 > s.size + 1024:
+        return -1
+    return hi + 1
+
+
+def _face_entry(sp: _IntPtr, K: Int, sh: Int, e: Int, j: Int) -> Int:
+    """Entry `j` of the face of occurrence `e = (r << sh) | i`: row `r` of
+    the simplices without its entry `i`."""
+    var r = e >> sh
+    var i = e & ((1 << sh) - 1)
+    return Int(sp[unsafe_offset=r * K + (j if j < i else j + 1)])
+
+
+def _occurrence_less(sp: _IntPtr, K: Int, sh: Int, a: Int, b: Int) -> Bool:
+    """Whether occurrence `a` sorts before `b` in their bucket: by the face's
+    entries after the first (the bucket's), then by simplex."""
+    for j in range(1, K - 1):
+        var x = _face_entry(sp, K, sh, a, j)
+        var y = _face_entry(sp, K, sh, b, j)
+        if x != y:
+            return x < y
+    return (a >> sh) < (b >> sh)
+
+
+def _same_face(sp: _IntPtr, K: Int, sh: Int, a: Int, b: Int) -> Bool:
+    """Whether occurrences `a` and `b` of one bucket have the same face."""
+    for j in range(1, K - 1):
+        if _face_entry(sp, K, sh, a, j) != _face_entry(sp, K, sh, b, j):
+            return False
+    return True
+
+
+def _sort_occurrences(
+    sp: _IntPtr, K: Int, sh: Int, op: _Ptr, lo: Int, hi: Int, tmp: _Ptr
+):
+    """Sort occurrences `op[lo:hi]` with `_occurrence_less` (merge sort over
+    insertion-sorted runs; `tmp` holds at least `(hi - lo) / 2 + 1`)."""
+    if hi - lo <= 24:
+        for a in range(lo + 1, hi):
+            var key = op[unsafe_offset=a]
+            var b = a - 1
+            while b >= lo and _occurrence_less(
+                sp, K, sh, key, op[unsafe_offset=b]
+            ):
+                op[unsafe_offset=b + 1] = op[unsafe_offset=b]
+                b -= 1
+            op[unsafe_offset=b + 1] = key
+        return
+    var mid = (lo + hi) // 2
+    _sort_occurrences(sp, K, sh, op, lo, mid, tmp)
+    _sort_occurrences(sp, K, sh, op, mid, hi, tmp)
+    if not _occurrence_less(
+        sp, K, sh, op[unsafe_offset=mid], op[unsafe_offset=mid - 1]
+    ):
+        return
+    var n = mid - lo
+    for t in range(n):
+        tmp[unsafe_offset=t] = op[unsafe_offset=lo + t]
+    var a = 0
+    var b = mid
+    var out = lo
+    while a < n and b < hi:
+        if _occurrence_less(
+            sp, K, sh, op[unsafe_offset=b], tmp[unsafe_offset=a]
+        ):
+            op[unsafe_offset=out] = op[unsafe_offset=b]
+            b += 1
+        else:
+            op[unsafe_offset=out] = tmp[unsafe_offset=a]
+            a += 1
+        out += 1
+    while a < n:
+        op[unsafe_offset=out] = tmp[unsafe_offset=a]
+        a += 1
+        out += 1
+
+
+def _boundary_by_buckets(
+    s: IntArray, parity: IntArray, V: Int
+) raises -> FacesAndBoundary:
+    """`simplex_array_boundary` with the faces sorted by buckets, in parallel.
+
+    Occurrence `e = (r << sh) | i` is the face of simplex `r` without its
+    entry `i` (a shift, not `r * K + i`, as divisions by `K` dominated the
+    sort); its first vertex is `s[r, 0]`, or `s[r, 1]` when `i = 0`. A
+    counting sort puts the occurrences into one bucket per first vertex,
+    each bucket is sorted by the rest of the face and then by simplex, and
+    the runs of equal faces are the unique faces, in lexicographic order.
+    A run's position is its row's start in the boundary matrix, whose
+    entries are then in increasing simplex order, as a transpose gives;
+    each row of `d` is the simplex's faces sorted by index. The result is
+    `_boundary_by_lexsort`'s, entry for entry.
+    """
+    var N = rows_of(s)
+    var K = cols_of(s)
+    var fw = K - 1
+    var M = N * K
+    var sp = s.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()
+    var pp = parity.unsafe_ptr()
+    comptime SERIAL_BELOW = 4096
+    var C = num_chunks(N, SERIAL_BELOW)
+    var sh = 1
+    while (1 << sh) < K:
+        sh += 1
+
+    # occurrences per (chunk of simplices, first vertex)
+    var counts = List[Int](length=C * V, fill=0)
+    var cp = counts.unsafe_ptr()
+
+    def count(chunk: Int, lo: Int, hi: Int) {sp, cp, K, V}:
+        var base = chunk * V
+        for r in range(lo, hi):
+            cp[unsafe_offset=base + Int(sp[unsafe_offset=r * K])] += K - 1
+            cp[unsafe_offset=base + Int(sp[unsafe_offset=r * K + 1])] += 1
+
+    parallel_ranges(N, SERIAL_BELOW, count)
+    # bucket v holds occurrences start[v]:start[v + 1]; within it, chunk c
+    # writes from start[v] + counts[c * V + v] on
+    var start = List[Int](length=V + 1, fill=0)
+    var stp = start.unsafe_ptr()
+
+    def totals(chunk: Int, lo: Int, hi: Int) {cp, stp, C, V}:
+        for v in range(lo, hi):
+            var t = 0
+            for c in range(C):
+                var x = cp[unsafe_offset=c * V + v]
+                cp[unsafe_offset=c * V + v] = t
+                t += x
+            stp[unsafe_offset=v + 1] = t
+
+    parallel_ranges(V, 65536, totals)
+    for v in range(V):
+        stp[unsafe_offset=v + 1] += stp[unsafe_offset=v]
+    var occ = List[Int](unsafe_uninit_length=M)
+    var op = occ.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+
+    def scatter(chunk: Int, lo: Int, hi: Int) {sp, cp, stp, op, K, V, sh}:
+        var base = chunk * V
+        for r in range(lo, hi):
+            for i in range(K):
+                var v = Int(sp[unsafe_offset=r * K + (1 if i == 0 else 0)])
+                var at = stp[unsafe_offset=v] + cp[unsafe_offset=base + v]
+                cp[unsafe_offset=base + v] = cp[unsafe_offset=base + v] + 1
+                op[unsafe_offset=at] = (r << sh) | i
+
+    parallel_ranges(N, SERIAL_BELOW, scatter)
+    _ = counts^
+
+    # blocks of buckets with about equal numbers of occurrences
+    var blocks = List[Int](length=C + 1, fill=V)
+    blocks[0] = 0
+    var c = 1
+    for v in range(V):
+        while c < C and stp[unsafe_offset=v] * C >= c * M:
+            blocks[c] = v
+            c += 1
+    var bp = blocks.unsafe_ptr()
+    # sort each bucket and count its distinct faces
+    var distinct = List[Int](length=V + 1, fill=0)
+    var dsp = distinct.unsafe_ptr()
+
+    def sort_buckets(
+        chunk: Int, lo: Int, hi: Int
+    ) {sp, stp, op, bp, dsp, K, sh}:
+        for b in range(lo, hi):
+            var widest = 0
+            for v in range(bp[unsafe_offset=b], bp[unsafe_offset=b + 1]):
+                widest = max(
+                    widest, stp[unsafe_offset=v + 1] - stp[unsafe_offset=v]
+                )
+            var tmp = List[Int](length=widest // 2 + 1, fill=0)
+            var tp = tmp.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+            for v in range(bp[unsafe_offset=b], bp[unsafe_offset=b + 1]):
+                var a = stp[unsafe_offset=v]
+                var e = stp[unsafe_offset=v + 1]
+                _sort_occurrences(sp, K, sh, op, a, e, tp)
+                var n = 0
+                for t in range(a, e):
+                    if t == a or not _same_face(
+                        sp, K, sh, op[unsafe_offset=t - 1], op[unsafe_offset=t]
+                    ):
+                        n += 1
+                dsp[unsafe_offset=v + 1] = n
+            _ = tmp^
+
+    parallel_ranges(C, 0, sort_buckets)
+    for v in range(V):
+        dsp[unsafe_offset=v + 1] += dsp[unsafe_offset=v]
+    var F = distinct[V]
+
+    # the unique faces, the boundary (one row per run), and each
+    # occurrence's face index
+    var faces = int_array(F, fw)
+    var fp = faces.unsafe_ptr()
+    # every entry is written in the parallel loops below, which then also
+    # touch the pages first
+    var b_indptr = List[Int](unsafe_uninit_length=F + 1)
+    b_indptr[F] = M
+    var b_indices = List[Int](unsafe_uninit_length=M)
+    var b_data = List[Float64](unsafe_uninit_length=M)
+    var face_of = List[Int](unsafe_uninit_length=M)
+    var bip = b_indptr.unsafe_ptr()
+    var bix = b_indices.unsafe_ptr()
+    var bdv = b_data.unsafe_ptr()
+    var fop = face_of.unsafe_ptr()
+
+    def runs(
+        chunk: Int, lo: Int, hi: Int
+    ) {sp, pp, stp, op, bp, dsp, fp, bip, bix, bdv, fop, K, fw, sh}:
+        for b in range(lo, hi):
+            for v in range(bp[unsafe_offset=b], bp[unsafe_offset=b + 1]):
+                var f = dsp[unsafe_offset=v]
+                var e = stp[unsafe_offset=v + 1]
+                var t = stp[unsafe_offset=v]
+                while t < e:
+                    var first = op[unsafe_offset=t]
+                    fp[unsafe_offset=f * fw] = Scalar[DType.int](v)
+                    for j in range(1, fw):
+                        fp[unsafe_offset=f * fw + j] = Scalar[DType.int](
+                            _face_entry(sp, K, sh, first, j)
+                        )
+                    bip[unsafe_offset=f] = t
+                    while t < e:
+                        var occ_e = op[unsafe_offset=t]
+                        if occ_e != first and not _same_face(
+                            sp, K, sh, first, occ_e
+                        ):
+                            break
+                        var r = occ_e >> sh
+                        var i = occ_e & ((1 << sh) - 1)
+                        var o = 1 - 2 * Int(pp[unsafe_offset=r])
+                        bix[unsafe_offset=t] = r
+                        bdv[unsafe_offset=t] = Float64(o if i % 2 == 0 else -o)
+                        fop[unsafe_offset=r * K + i] = f
+                        t += 1
+                    f += 1
+
+    parallel_ranges(C, 0, runs)
+    _ = occ^
+    _ = start^
+    _ = blocks^
+    _ = distinct^
+
+    # d: each simplex's faces in increasing index
+    var d_indptr = List[Int](unsafe_uninit_length=N + 1)
+    d_indptr[0] = 0
+    var d_indices = List[Int](unsafe_uninit_length=M)
+    var d_data = List[Float64](unsafe_uninit_length=M)
+    var dip = d_indptr.unsafe_ptr()
+    var dix = d_indices.unsafe_ptr()
+    var ddv = d_data.unsafe_ptr()
+
+    def rows(chunk: Int, lo: Int, hi: Int) {pp, fop, dip, dix, ddv, K}:
+        for r in range(lo, hi):
+            var o = 1 - 2 * Int(pp[unsafe_offset=r])
+            var base = r * K
+            dip[unsafe_offset=r + 1] = base + K
+            for i in range(K):
+                var f = fop[unsafe_offset=base + i]
+                var x = Float64(o if i % 2 == 0 else -o)
+                var at = base + i
+                while at > base and dix[unsafe_offset=at - 1] > f:
+                    dix[unsafe_offset=at] = dix[unsafe_offset=at - 1]
+                    ddv[unsafe_offset=at] = ddv[unsafe_offset=at - 1]
+                    at -= 1
+                dix[unsafe_offset=at] = f
+                ddv[unsafe_offset=at] = x
+
+    parallel_ranges(N, SERIAL_BELOW, rows)
+    _ = face_of^
+    # canonical by construction: sorted columns, no duplicates
+    var d = CSRMatrix(N, F)
+    d.indptr = d_indptr^
+    d.indices = d_indices^
+    d.data = d_data^
+    var B = CSRMatrix(F, N)
+    B.indptr = b_indptr^
+    B.indices = b_indices^
+    B.data = b_data^
+    return FacesAndBoundary(faces^, B^, d^)
 
 
 def _row_string(a: IntArray, i: Int) -> String:
