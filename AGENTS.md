@@ -106,6 +106,13 @@ maintainers, in `third_party/numojo-bugs.md`; add new ones there.
   fractional exponent is off by up to ~5e-12 relative, which Cholesky and
   Gram-matrix solves amplify (it cost DarcyFlow two digits and Sphere's
   spectrum check three).
+- Mojo's float operations allow contraction, so LLVM may fuse `a * b + c`
+  into one rounding, or not, depending on how the code around it is
+  laid out: the dual walk's loops fused all three of their multiply-adds,
+  and the same arithmetic unrolled fused different ones and changed the
+  last bits. Where two code paths must agree bit for bit (the dual walk's
+  `_walk` and `_walk_soa`), write the multiply-adds as explicit
+  `x.fma(y, acc)`.
 
 ## Architecture
 
@@ -135,7 +142,13 @@ Key design points that span several files:
   (`parallelotope_volume`), never the Gram determinant, and barycentric
   gradients likewise (`dual_basis`, `frame_dual_basis` in `core/utils.mojo`),
   never `(E E^T)^-1 E`. Dual volumes come from one walk down the chains of
-  circumcenters (`_add_dual_pieces`); `dual_edge_piece_values` runs the
+  circumcenters (`_add_dual_pieces`; `compute_dual_volume` runs it as
+  `_DualWalk`, breadth first and four chains per SIMD vector in
+  `_walk_soa` for triangles in 2D and 3D and tetrahedra in 3D, the
+  recursive `_walk` otherwise, the same sums bit for bit; check a change
+  there against the committed build on jittered meshes, serial and
+  parallel, by the bits of every level's dual volumes);
+  `dual_edge_piece_values` runs the
   same walk to keep the edge pieces per top simplex, which `flat` and
   `dual_edge_pieces` use. In loops, look faces up with
   `level.find_vertices(sorted_list)`, not `simplex_to_index(Simplex(...))`.

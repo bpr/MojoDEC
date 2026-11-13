@@ -155,7 +155,8 @@ Where the time goes now, on `tet_40`:
 
 - **Dual volumes** are the largest piece of geometry: 454 ms on one
   thread, 80 ms on all cores (5.7×). Circumcenters take 155 → 31 ms and
-  primal volumes 49 → 7 ms.
+  primal volumes 49 → 7 ms. (The dual walk has since gone breadth first:
+  116 ms and 34 ms; see [below](#the-dual-walk-breadth-first).)
 - **Topology** is 76 ms on all cores, a third of `build`; what is left
   serial in it is the prefix sums over vertices, the mesh copy and
   orientation check, and the CSR bookkeeping between the parallel passes.
@@ -262,3 +263,50 @@ is within 4% of the grid's own numbering (it was 1.22×). On all cores
 the sorts were already a smaller part, and topology is 0.83–0.98× (the
 `tri_400` build, 57 → 62 ms, is within its round-to-round noise of
 57–62 ms). Whitney is unchanged.
+
+## The dual walk, breadth first
+
+`compute_dual_volume` walks down every chain of faces from each top
+simplex (for a tetrahedron: 4 triangles, 12 triangle-edge pairs, 24
+triangle-edge-vertex chains) and, for each, orthogonalizes the edge from
+the top simplex's circumcenter to the face's against the chain's edges
+so far. The piece it adds is the chain's volume. Depth first, each step
+waits on its parent's square root and division, and the processor sees
+only a few pieces at a time: about 30 ns a piece, 455 ms on one thread
+for `tet_40`, more than half of `build`.
+
+For triangles in 2D and 3D and tetrahedra in 3D, the walk now runs
+breadth first: all chains of a level at once, four to a SIMD vector
+(1, 3, and 6 vectors for a tetrahedron), each lane doing the scalar
+walk's arithmetic. The chains of a level are independent, so their
+square roots and divisions overlap. The face masks, the chains, and the
+gathering of each top simplex's faces are fixed at compile time, so the
+loops unroll with constant offsets. The pieces are then added to the
+dual volumes level by level in the depth-first order, so every sum is
+added in the same order: the dual volumes equal the old ones bit for
+bit, on one thread and on all cores. Other dimensions keep the
+recursive walk.
+
+One trap on the way: Mojo lets LLVM fuse `a * b + c` into one rounding,
+and whether it does depends on the code around it. The old loops fused
+all three of their multiply-adds (the dot products' accumulations and
+the projection's update), and the first unrolled version fused
+different ones, which moved the last bits. Both walks now write those
+as explicit fused multiply-adds.
+
+`tet_40` and `tri_400`, before and after (best of 3 alternating rounds,
+same laptop; the dual walk timed alone), in ms:
+
+| Mesh | dual walk, 1 thread | dual walk, all cores | build, 1 thread | build, all cores |
+|---|---:|---:|---:|---:|
+| `tet_40` | 454 → 116 | 83 → 34 | 779 → 444 | 192 → 152 |
+| `tet_40`, reordered | 478 → 127 | 75 → 26 | 799 → 458 | 176 → 131 |
+| `tet_40_shuffled` | 541 → 178 | 203 → 90 | 1032 → 674 | 447 → 283 |
+| `tri_400` | 69 → 21 | 12 → 5.8 | 162 → 114 | 58 → 49 |
+| `tri_400`, reordered | | | 167 → 118 | 60 → 49 |
+| `tri_400_shuffled` | | | 291 → 225 | 147 → 124 |
+
+On one thread the walk is 3.0–3.9× faster and `build` 0.57–0.77× of
+before; geometry on `tet_40` went from 690 to 355 ms, and circumcenters
+(155 ms) are now its largest piece. On all cores the walk is 2.1–2.9×
+faster and `build` 0.63–0.84×. Topology and Whitney are unchanged.
