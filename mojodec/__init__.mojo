@@ -170,6 +170,9 @@ from mojodec.routines.mesh_generation import (
     triangulate_ncube,
     loop_subdivision,
     orient_coherently,
+    ReorderedMesh,
+    morton_keys,
+    reorder_vertices,
     icosahedron,
     icosphere,
 )

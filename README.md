@@ -38,6 +38,9 @@ Beyond PyDEC, MojoDEC adds:
 - VTK (`.vtu`) output for ParaView, PLY mesh input/output, and Gmsh
   `.msh` input with its physical groups as subsets, in pure Mojo
 - icosahedron and icosphere meshes
+- `reorder_vertices`: renumbers a mesh (or a Gmsh file, with its groups)
+  in Morton order, which makes meshes numbered at random in space build
+  2–3× faster
 - its own dense and sparse linear algebra (pivoted LU, symmetric
   eigensolver, CG, LSQR, generalized eigenproblems), and a
   `DiagonalOperator` type for the Hodge stars
@@ -238,6 +241,13 @@ the published mathematics:
   `None` for a non-orientable mesh such as a Möbius band.
   `orient_coherently(mesh)` returns the mesh with those elements reversed,
   ready for `SimplicialComplex`.
+- **Vertex numbering.** `reorder_vertices(mesh)` renumbers the vertices in
+  Morton order of their coordinates (`morton_keys`) and sorts the
+  elements to match, keeping orientations, and returns the permutations
+  to carry data across; `GmshMesh.reorder_vertices()` renumbers node tags
+  and physical groups too. A mesh numbered at random in space builds 2.3×
+  slower on all cores (384k tetrahedra) than a spatially numbered one;
+  reordered, it builds as fast. See `docs/guide/vertex-numbering.md`.
 - **Betti numbers** over the rationals on every complex type:
   `betti_numbers()`, `betti_numbers(cells)` for a subcomplex such as a
   link, and `relative_betti_numbers()` (relative to the boundary) or

@@ -46,6 +46,9 @@ from mojodec.core.utils import (
     real_array,
     rows_of,
     cols_of,
+    lexsort_rows,
+    sort_each_row,
+    take_rows,
 )
 
 
@@ -465,6 +468,192 @@ def orient_coherently(mesh: SimplicialMesh) raises -> SimplicialMesh:
             iset(out.elements, t, K - 2, iget(out.elements, t, K - 1))
             iset(out.elements, t, K - 1, a)
     return out^
+
+
+struct ReorderedMesh(Copyable, Movable):
+    """A mesh renumbered by `reorder_vertices`, with the permutations that
+    carry data between the old and new numbering."""
+
+    var mesh: SimplicialMesh
+    """The renumbered mesh."""
+    var old_vertex: List[Int]
+    """`old_vertex[i]` is the old number of new vertex `i`: vertex data
+    `x` becomes `x[old_vertex[i]]` (`take_rows(x, old_vertex)`, from
+    `mojodec.core.utils`)."""
+    var new_vertex: List[Int]
+    """`new_vertex[j]` is the new number of old vertex `j`: a list of old
+    vertex numbers (boundary vertices, say) maps through it."""
+    var old_element: List[Int]
+    """`old_element[t]` is the old row of new element `t`: element data
+    `y` becomes `y[old_element[t]]`."""
+
+    def __init__(
+        out self,
+        var mesh: SimplicialMesh,
+        var old_vertex: List[Int],
+        var new_vertex: List[Int],
+        var old_element: List[Int],
+    ):
+        """Assemble the result; normally built by `reorder_vertices`.
+
+        Args:
+            mesh: The renumbered mesh.
+            old_vertex: The old number of each new vertex.
+            new_vertex: The new number of each old vertex.
+            old_element: The old row of each new element.
+        """
+        self.mesh = mesh^
+        self.old_vertex = old_vertex^
+        self.new_vertex = new_vertex^
+        self.old_element = old_element^
+
+
+def morton_keys(vertices: RealArray) raises -> List[Int]:
+    """The Morton (Z-order) code of each point, from its coordinates.
+
+    Each coordinate is scaled to the points' bounding box and quantized to
+    `b = min(21, 63 // E)` bits (`E` the number of columns; an axis on
+    which all points agree quantizes to 0), and the code interleaves the
+    bits, most significant first and axis 0 lowest within each bit: bit
+    `l E + a` of the code is bit `l` of axis `a`. Points close in the code
+    are close in space (the converse fails across the curve's jumps).
+
+    Args:
+        vertices: `num_points x E` coordinates, `1 <= E <= 63`.
+
+    Returns:
+        One code per point, in `[0, 2^(b E))`.
+
+    Raises:
+        If `E` is 0 or above 63, or a coordinate is not finite.
+    """
+    var nv = rows_of(vertices)
+    var E = cols_of(vertices)
+    if E < 1 or E > 63:
+        raise Error(
+            String("morton_keys: need 1 to 63 coordinates per point, got ", E)
+        )
+    var vp = vertices.unsafe_ptr()
+    var lo = List[Float64](length=E, fill=0)
+    var hi = List[Float64](length=E, fill=0)
+    for i in range(nv):
+        for a in range(E):
+            var x = Float64(vp[unsafe_offset=i * E + a])
+            if not isfinite(x):
+                raise Error(
+                    String(
+                        "morton_keys: coordinate ",
+                        a,
+                        " of point ",
+                        i,
+                        " is not finite",
+                    )
+                )
+            if i == 0 or x < lo[a]:
+                lo[a] = x
+            if i == 0 or x > hi[a]:
+                hi[a] = x
+    var bits = min(21, 63 // E)
+    var top = (1 << bits) - 1
+    var scale = Float64(1 << bits)
+    var q = List[Int](length=E, fill=0)
+    var keys = List[Int](length=nv, fill=0)
+    for i in range(nv):
+        for a in range(E):
+            var width = hi[a] - lo[a]
+            if width > 0:
+                var t = (Float64(vp[unsafe_offset=i * E + a]) - lo[a]) / width
+                q[a] = min(Int(t * scale), top)
+            else:
+                q[a] = 0
+        var key = 0
+        for l in range(bits):
+            for a in range(E):
+                key |= ((q[a] >> l) & 1) << (l * E + a)
+        keys[i] = key
+    return keys^
+
+
+def reorder_vertices(mesh: SimplicialMesh) raises -> ReorderedMesh:
+    """The mesh with its vertices renumbered in Morton (Z-curve) order and
+    its elements sorted to match: the same mesh, numbered so that nearby
+    vertices and elements get nearby numbers.
+
+    Faces are numbered by their sorted vertex numbers, and the loops that
+    build a `SimplicialComplex` and its Whitney matrices run in vertex,
+    face, or element order, so a mesh whose numbering jumps around in space
+    (as files often have) is several times slower to build than a
+    spatially numbered one; the parallel dual-volume walk also splits its
+    work by blocks of vertex numbers. See the guide's vertex numbering
+    page.
+
+    Vertices are ordered by `morton_keys` of their coordinates, equal keys
+    in their old order (so unused vertices are kept, and reordering twice
+    changes nothing). Elements are ordered by their vertex numbers sorted
+    (lexicographically, with ties in their old order); each element keeps
+    its vertices in the same positions, so its orientation is unchanged.
+
+    ```mojo
+    from mojodec.core.utils import take_rows
+
+    var r = reorder_vertices(mesh)
+    var sc = SimplicialComplex(r.mesh)
+    var u = take_rows(u_old, r.old_vertex)    # vertex data, new order
+    ```
+
+    Args:
+        mesh: Any simplicial mesh.
+
+    Returns:
+        The renumbered mesh and the permutations between the numberings.
+
+    Raises:
+        If a coordinate is not finite, the embedding dimension is above 63,
+        or an element names a vertex that does not exist.
+    """
+    var nv = rows_of(mesh.vertices)
+    var ne = rows_of(mesh.elements)
+    var K = cols_of(mesh.elements)
+    var keys = morton_keys(mesh.vertices)
+    var key_col = int_array(nv, 1)
+    for i in range(nv):
+        key_col.unsafe_set(i, Scalar[DType.int](keys[i]))
+    var old_vertex = lexsort_rows(key_col)
+    var new_vertex = List[Int](length=nv, fill=0)
+    for i in range(nv):
+        new_vertex[old_vertex[i]] = i
+    # every element in the new numbering, and a copy with sorted rows
+    var ep = mesh.elements.unsafe_ptr()
+    var renamed = int_array(ne, K)
+    for i in range(ne * K):
+        var v = Int(ep[unsafe_offset=i])
+        if v < 0 or v >= nv:
+            raise Error(
+                String(
+                    "reorder_vertices: element ",
+                    i // K,
+                    " names vertex ",
+                    v,
+                    " of ",
+                    nv,
+                )
+            )
+        renamed.unsafe_set(i, Scalar[DType.int](new_vertex[v]))
+    var sorted_rows = renamed.copy()
+    sort_each_row(sorted_rows)
+    var old_element = lexsort_rows(sorted_rows)
+    var elements = int_array(ne, K)
+    for t in range(ne):
+        var r = old_element[t]
+        for j in range(K):
+            elements.unsafe_set(t * K + j, renamed.unsafe_get(r * K + j))
+    var vertices = take_rows(mesh.vertices, old_vertex)
+    return ReorderedMesh(
+        SimplicialMesh(vertices, elements),
+        old_vertex^,
+        new_vertex^,
+        old_element^,
+    )
 
 
 def kuhn_grid(dims: List[Int]) raises -> SimplicialMesh:

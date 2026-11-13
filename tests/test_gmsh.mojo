@@ -171,6 +171,54 @@ def test_cube() raises:
     assert_true(msh.subset(sc, "solid", 3) == Subset.full(sc, 3))
 
 
+def _circumcenter_sum(
+    sc: SimplicialComplex, cells: Subset, dim: Int
+) raises -> List[Float64]:
+    var out = List[Float64](length=cols_of(sc.vertices()), fill=0)
+    for i in cells.indices():
+        for a in range(len(out)):
+            out[a] += fget(sc[dim].circumcenter, i, a)
+    return out^
+
+
+def test_reorder_vertices() raises:
+    for path in [DIR + "square_v41.msh", DIR + "cube_v41_bin.msh"]:
+        var msh = read_gmsh(path)
+        var r = msh.reorder_vertices()
+        var nv = rows_of(msh.vertices)
+        assert_equal(rows_of(r.vertices), nv)
+        assert_equal(len(r.node_tags), nv)
+        # each vertex keeps its node tag
+        for i in range(nv):
+            var found = False
+            for j in range(nv):
+                if msh.node_tags[j] == r.node_tags[i]:
+                    for a in range(cols_of(msh.vertices)):
+                        assert_equal(
+                            fget(r.vertices, i, a), fget(msh.vertices, j, a)
+                        )
+                    found = True
+            assert_true(found)
+        # every group names the same cells
+        var sc = SimplicialComplex(msh.mesh())
+        var sr = SimplicialComplex(r.mesh())
+        var n = sc.complex_dimension()
+        assert_equal(len(r.groups), len(msh.groups))
+        for gi in range(len(msh.groups)):
+            ref g = msh.groups[gi]
+            assert_equal(r.groups[gi].name, g.name)
+            assert_equal(r.groups[gi].num_cells(), g.num_cells())
+            for dim in range(min(g.dim, n) + 1):
+                var a = msh.subset(sc, group_dim=g.dim, tag=g.tag, dim=dim)
+                var b = r.subset(sr, group_dim=g.dim, tag=g.tag, dim=dim)
+                assert_equal(len(a), len(b))
+                var ca = _circumcenter_sum(sc, a, dim)
+                var cb = _circumcenter_sum(sr, b, dim)
+                for x in range(len(ca)):
+                    # sums in another order
+                    assert_almost_equal(ca[x], cb[x], atol=1e-12, rtol=1e-13)
+
+
 def _write(text: String) raises:
     with open(TMP, "w") as f:
         f.write(text)

@@ -45,6 +45,10 @@ how to use it, and what can go wrong.
 - **[Time stepping](time-stepping.md)**: the leapfrog for Maxwell's
   equations and other wave systems, its conserved energy, the stability
   limit, dispersion, mesh requirements, and boundary conditions.
+- **[Vertex numbering](vertex-numbering.md)**: why a mesh numbered at
+  random in space builds 2–3× slower, Morton order (`morton_keys`),
+  renumbering a mesh or a Gmsh file with `reorder_vertices`, carrying
+  data across, and not reordering between refinements.
 - **[Performance against other DEC libraries](performance.md)**: build,
   geometry, and Whitney matrices timed against PyDEC, dexterior, and
   formoniq on the same meshes, with checks that they compute the same

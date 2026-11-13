@@ -16,7 +16,22 @@ from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
 from mojodec.routines.innerproduct import whitney_innerproduct
 from mojodec.routines.linalg import eigh_generalized
-from mojodec.core.utils import iget, fget, row_list, rows_of, cols_of, take_rows
+from mojodec.core.utils import (
+    compare_rows,
+    fget,
+    fset,
+    iget,
+    int_array_from_rows,
+    iset,
+    real_array,
+    real_array_from_rows,
+    row_list,
+    rows_of,
+    cols_of,
+    sort_each_row,
+    take_rows,
+)
+from mojodec.core.mesh import SimplicialMesh
 from mojodec.routines.geometry import signed_volume, unsigned_volume
 from mojodec.routines.mesh_generation import (
     simplicial_grid_2d,
@@ -28,6 +43,8 @@ from mojodec.routines.mesh_generation import (
     klein_bottle,
     mobius_band,
     orient_coherently,
+    morton_keys,
+    reorder_vertices,
 )
 from mojodec.core.abstract_simplicial_complex import AbstractSimplicialComplex
 from mojodec.routines.simplex_array import coherent_orientation
@@ -389,6 +406,210 @@ def test_non_orientable_surfaces() raises:
         _ = mobius_band(5, 1, 2.0)
     with assert_raises(contains="each at least 3"):
         _ = klein_bottle([6, 2])
+
+
+def test_morton_keys() raises:
+    # the corners of a square, in Z order: axis 0 is the lower bit
+    var V = real_array_from_rows(
+        [[1.0, 1.0], [0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+    )
+    var keys = morton_keys(V)
+    # 21 bits per axis: (1, 0) sets every even bit, (0, 1) every odd one
+    var even = ((1 << 42) - 1) // 3
+    assert_equal(keys, [(1 << 42) - 1, 0, even, 2 * even])
+    # an axis on which all points agree contributes nothing
+    var flat = real_array_from_rows([[0.0, 5.0], [1.0, 5.0], [0.5, 5.0]])
+    var fk = morton_keys(flat)
+    assert_equal(fk[0], 0)
+    assert_equal(fk[2] & 0xAAAAAAAAAAA, 0)
+    assert_true(fk[0] < fk[2] and fk[2] < fk[1])
+    # one bit per axis at 63 coordinates, and no more
+    var wide = real_array(2, 63)
+    fset(wide, 1, 62, 1.0)
+    assert_equal(morton_keys(wide), [0, 1 << 62])
+    with assert_raises(contains="1 to 63 coordinates"):
+        _ = morton_keys(real_array(2, 64))
+    var bad = real_array_from_rows([[0.0, 0.0], [1.0, Float64.MAX * 2]])
+    with assert_raises(contains="coordinate 1 of point 1 is not finite"):
+        _ = morton_keys(bad)
+
+
+def _lcg(mut state: UInt64) -> Int:
+    state = state * 6364136223846793005 + 1442695040888963407
+    return Int(state >> 33)
+
+
+def _jittered_cube(n: Int, shuffle: Bool) raises -> SimplicialMesh:
+    """A Kuhn grid of the unit cube with interior vertices moved up to 5%
+    of a cell; with `shuffle`, its vertex numbers and element order
+    randomly permuted."""
+    var mesh = kuhn_grid([n, n, n])
+    var nv = rows_of(mesh.vertices)
+    var ne = rows_of(mesh.elements)
+    var state: UInt64 = 2024
+    var h = 1.0 / Float64(n)
+    for i in range(nv):
+        var interior = True
+        for a in range(3):
+            var x = fget(mesh.vertices, i, a)
+            if x < 0.5 * h or x > 1.0 - 0.5 * h:
+                interior = False
+        if interior:
+            for a in range(3):
+                var j = Float64(_lcg(state) % 2001 - 1000) / 1000.0
+                fset(
+                    mesh.vertices,
+                    i,
+                    a,
+                    fget(mesh.vertices, i, a) + 0.05 * h * j,
+                )
+    if not shuffle:
+        return mesh^
+    var p = List[Int](length=nv, fill=0)
+    for i in range(nv):
+        p[i] = i
+    for i in range(nv - 1, 0, -1):
+        var j = _lcg(state) % (i + 1)
+        var t = p[i]
+        p[i] = p[j]
+        p[j] = t
+    var q = List[Int](length=ne, fill=0)
+    for i in range(ne):
+        q[i] = i
+    for i in range(ne - 1, 0, -1):
+        var j = _lcg(state) % (i + 1)
+        var t = q[i]
+        q[i] = q[j]
+        q[j] = t
+    var V = mesh.vertices.copy()
+    for i in range(nv):
+        for a in range(3):
+            fset(V, p[i], a, fget(mesh.vertices, i, a))
+    var E = mesh.elements.copy()
+    for e in range(ne):
+        for j in range(4):
+            iset(E, q[e], j, p[iget(mesh.elements, e, j)])
+    return SimplicialMesh(V, E)
+
+
+def test_reorder_vertices_small() raises:
+    var V = real_array_from_rows(
+        [[1.0, 1.0], [0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
+    )
+    var E = int_array_from_rows([[1, 2, 0], [1, 0, 3]], 3)
+    var r = reorder_vertices(SimplicialMesh(V, E))
+    assert_equal(r.old_vertex, [1, 2, 3, 0])
+    assert_equal(r.new_vertex, [3, 0, 1, 2])
+    assert_equal(r.old_element, [0, 1])
+    # each element keeps its vertices in place: [1, 2, 0] -> [0, 1, 3]
+    assert_equal(row_list(r.mesh.elements, 0), [0, 1, 3])
+    assert_equal(row_list(r.mesh.elements, 1), [0, 3, 2])
+    assert_equal(fget(r.mesh.vertices, 3, 0), 1.0)
+    assert_equal(fget(r.mesh.vertices, 3, 1), 1.0)
+    # elements whose sorted rows are out of order are swapped
+    var E2 = int_array_from_rows([[0, 1, 3], [1, 2, 0]], 3)
+    var r2 = reorder_vertices(SimplicialMesh(V, E2))
+    assert_equal(r2.old_element, [1, 0])
+    # an element naming a missing vertex
+    var bad = SimplicialMesh(V, E)
+    iset(bad.elements, 1, 2, 7)
+    with assert_raises(contains="element 1 names vertex 7 of 4"):
+        _ = reorder_vertices(bad)
+
+
+def test_reorder_vertices() raises:
+    var mesh = _jittered_cube(5, shuffle=True)
+    # an unused vertex, kept and placed by its coordinates
+    var nv0 = rows_of(mesh.vertices)
+    var V = real_array(nv0 + 1, 3)
+    for i in range(nv0):
+        for a in range(3):
+            fset(V, i, a, fget(mesh.vertices, i, a))
+    fset(V, nv0, 0, 0.3)
+    fset(V, nv0, 1, 0.6)
+    fset(V, nv0, 2, 0.1)
+    mesh = SimplicialMesh(V, mesh.elements)
+    var r = reorder_vertices(mesh)
+    var nv = rows_of(mesh.vertices)
+    var ne = rows_of(mesh.elements)
+    assert_equal(len(r.old_vertex), nv)
+    assert_equal(len(r.old_element), ne)
+    var seen = List[Bool](length=ne, fill=False)
+    for t in range(ne):
+        assert_false(seen[r.old_element[t]])
+        seen[r.old_element[t]] = True
+    for i in range(nv):
+        assert_equal(r.new_vertex[r.old_vertex[i]], i)
+        for a in range(3):
+            assert_equal(
+                fget(r.mesh.vertices, i, a),
+                fget(mesh.vertices, r.old_vertex[i], a),
+            )
+    for t in range(ne):
+        for j in range(4):
+            assert_equal(
+                iget(r.mesh.elements, t, j),
+                r.new_vertex[iget(mesh.elements, r.old_element[t], j)],
+            )
+    # vertices in Morton order, elements in order of their sorted rows
+    var keys = morton_keys(r.mesh.vertices)
+    for i in range(1, nv):
+        assert_true(keys[i - 1] <= keys[i])
+    var s = r.mesh.elements.copy()
+    sort_each_row(s)
+    for t in range(1, ne):
+        assert_equal(compare_rows(s, t - 1, s, t), -1)
+    # orientations are unchanged, so the complex builds; the same complex
+    var a = SimplicialComplex(mesh)
+    var b = SimplicialComplex(r.mesh)
+    for k in range(4):
+        assert_equal(a[k].num_simplices, b[k].num_simplices)
+    for t in range(ne):
+        assert_almost_equal(
+            b[3].primal_volume.unsafe_get(t),
+            a[3].primal_volume.unsafe_get(r.old_element[t]),
+            atol=1e-17,
+            rtol=1e-12,
+        )
+    # 0-simplices are the used vertices, so not every vertex has one
+    for i in range(b[0].num_simplices):
+        var v = iget(b[0].simplices, i, 0)
+        var j = a[0].find_vertices([r.old_vertex[v]])
+        assert_true(j >= 0)
+        assert_almost_equal(
+            b[0].dual_volume.unsafe_get(i),
+            a[0].dual_volume.unsafe_get(j),
+            atol=1e-17,
+            rtol=1e-12,
+        )
+    for k in range(4):
+        var na: Float64 = 0
+        var nb: Float64 = 0
+        for x in whitney_innerproduct(a, k).data:
+            na += x * x
+        for x in whitney_innerproduct(b, k).data:
+            nb += x * x
+        assert_almost_equal(na, nb, atol=0, rtol=1e-12)
+    # the result does not depend on the numbering it starts from (the
+    # Morton keys are distinct here)
+    var direct = reorder_vertices(_jittered_cube(5, shuffle=False))
+    var shuffled = reorder_vertices(_jittered_cube(5, shuffle=True))
+    for i in range(direct.mesh.vertices.size):
+        assert_equal(
+            direct.mesh.vertices.unsafe_get(i),
+            shuffled.mesh.vertices.unsafe_get(i),
+        )
+    for i in range(direct.mesh.elements.size):
+        assert_equal(
+            direct.mesh.elements.unsafe_get(i),
+            shuffled.mesh.elements.unsafe_get(i),
+        )
+    # reordering again changes nothing
+    var again = reorder_vertices(r.mesh)
+    for i in range(nv):
+        assert_equal(again.old_vertex[i], i)
+    for t in range(ne):
+        assert_equal(again.old_element[t], t)
 
 
 def main() raises:

@@ -208,7 +208,13 @@ all cores (the walk revisits 1.18 times per tetrahedron, fewer than the
 grid's lexicographic numbering), Whitney 1.0–1.15× on one thread except
 k = 0 on `tet_40` (1.48×), build 1.1×. Topology is still 1.2–1.5×, as the
 element order no longer matches the vertex order; sorting the elements
-too (by their first vertex, say) would be needed for that. So an opt-in
-`reorder_vertices` (Morton or Hilbert, elements sorted to match) is worth
-doing for meshes from files; a different split of the dual walk alone
-would fix only the walk.
+too (by their first vertex, say) would be needed for that.
+
+**`reorder_vertices`** does both: Morton order for the vertices and the
+elements sorted by their sorted vertex numbers (see
+[Vertex numbering](vertex-numbering.md)). On `tet_40_shuffled`, reordered
+against `tet_40` (best of 3 alternating rounds): build 1.06× on one thread
+and 1.00× on all cores, topology 1.21× and 1.11×, the dual walk on all
+cores 0.82× (69 against 84 ms), Whitney k = 0 1.33× on one thread and the
+rest within 1.05×. `tri_400_shuffled` reordered: build 1.04× and 0.98×.
+Reordering takes 30–40 ms.

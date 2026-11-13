@@ -56,6 +56,9 @@ from mojodec.core.utils import (
     sort_each_row,
 )
 from mojodec.routines.io.scan import ByteReader
+from mojodec.routines.mesh_generation import (
+    reorder_vertices as _reorder_mesh,
+)
 
 
 struct GmshGroup(Copyable, Movable, Writable):
@@ -175,6 +178,46 @@ struct GmshMesh(Movable, Writable):
             If `SimplicialMesh` rejects the arrays.
         """
         return SimplicialMesh(self.vertices, self.elements)
+
+    def reorder_vertices(self) raises -> GmshMesh:
+        """This mesh with its vertices renumbered in Morton order and its
+        elements sorted to match (`reorder_vertices` of `mesh()`), and the
+        node tags and physical groups carried along.
+
+        Gmsh numbers nodes by the geometric entity they lie on, which can
+        scatter neighbors; renumbering makes building the complex and its
+        Whitney matrices faster (see the guide's vertex numbering page).
+        Each vertex keeps its node tag, so `node_tags` still names it in
+        the file, and each group keeps its cells in file order.
+
+        ```mojo
+        var msh = read_gmsh("cube.msh").reorder_vertices()
+        var sc = SimplicialComplex(msh.mesh())
+        var walls = msh.subset(sc, "walls", 2)
+        ```
+
+        Returns:
+            The renumbered mesh.
+
+        Raises:
+            As `reorder_vertices`.
+        """
+        var r = _reorder_mesh(self.mesh())
+        var tags = List[Int](capacity=len(r.old_vertex))
+        for i in range(len(r.old_vertex)):
+            tags.append(self.node_tags[r.old_vertex[i]])
+        var groups = List[GmshGroup](capacity=len(self.groups))
+        for ref g in self.groups:
+            var cells = g.cells.copy()
+            for i in range(cells.size):
+                cells.unsafe_set(
+                    i,
+                    Scalar[DType.int](r.new_vertex[Int(cells.unsafe_get(i))]),
+                )
+            groups.append(GmshGroup(g.name, g.dim, g.tag, cells^))
+        return GmshMesh(
+            r.mesh.vertices.copy(), r.mesh.elements.copy(), tags^, groups^
+        )
 
     def group_names(self) -> List[String]:
         """The names of the named groups.

@@ -331,8 +331,11 @@ each summed over its top simplices in increasing order, as `from_coo`
 would). Ownership by vertex blocks assumes the vertex numbering is
 spatially coherent: with randomly numbered vertices a tetrahedron touches
 3.6 blocks instead of 1.4 and the 3D walk on all cores takes 2.6× as long
-(`tet_40_shuffled` in `benchmarks/compare`; see the guide's performance
-page). Allocate a body's scratch with `chunk_scratch(n, fill)`, never a
+(`tet_40_shuffled` in `benchmarks/compare`), and every loop in face order
+loses locality; `reorder_vertices` (`routines/mesh_generation.mojo`:
+Morton order, elements sorted by their sorted rows, orientations kept)
+restores it (see `docs/guide/vertex-numbering.md`). It must not run
+between refinements, whose numbering keeps shapes bounded. Allocate a body's scratch with `chunk_scratch(n, fill)`, never a
 bare `List(length=...)`: two chunks' small lists can share a cache line,
 and writing them in an inner loop (false sharing) made the 3D dual walk
 slower on two threads than on one; helpers called per element take
