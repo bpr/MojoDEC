@@ -218,3 +218,47 @@ and 1.00× on all cores, topology 1.21× and 1.11×, the dual walk on all
 cores 0.82× (69 against 84 ms), Whitney k = 0 1.33× on one thread and the
 rest within 1.05×. `tri_400_shuffled` reordered: build 1.04× and 0.98×.
 Reordering takes 30–40 ms.
+
+## Sorting without branches
+
+Most of topology is sorting: each element's vertices, the parity of
+that sort, and in `simplex_array_boundary` the face occurrences in each
+bucket (one bucket per first vertex). Comparison sorts branch on the
+data, and how often those branches mispredict depends on the vertex
+numbering, which is why a Hilbert-numbered mesh had the slowest
+topology (see [Vertex numbering](vertex-numbering.md)). Three changes take the branches out:
+
+- **Rows of 3 and 4** are sorted by fixed sorting networks of min/max
+  exchanges, and their parity is the parity of the number of pairs out
+  of order, counted with comparisons that add 0 or 1. Longer rows use an
+  odd-even transposition network and the same count.
+- **Each face occurrence is one integer key**: the face's entries after
+  the first, then the simplex and the entry left out, when that fits in
+  62 bits (up to about 4M tetrahedra in 3D). A bucket then sorts integers
+  instead of rebuilding both faces from the simplex array at every
+  comparison, and the runs of equal faces are marked once, while
+  counting them.
+- **Buckets of 17 to 64 keys** are sorted by rank: each key's place is the
+  number of smaller keys, counted 4 at a time in SIMD, more comparisons
+  than insertion sort but none that branch. Smaller buckets keep
+  insertion sort, larger ones merge.
+
+`tet_40` and `tri_400`, before and after (best of 3 alternating rounds,
+same laptop), in ms:
+
+| Mesh | topology, 1 thread | topology, all cores | build, 1 thread | build, all cores |
+|---|---:|---:|---:|---:|
+| `tet_40` | 172 → 127 | 68 → 65 | 825 → 779 | 200 → 188 |
+| `tet_40`, Morton order | 209 → 131 | 72 → 62 | 873 → 797 | 180 → 178 |
+| `tet_40`, Hilbert order | 258 → 139 | 80 → 66 | 927 → 807 | 199 → 178 |
+| `tet_40_shuffled` | 440 → 284 | 199 → 178 | 1196 → 1031 | 454 → 433 |
+| `tri_400` | 58 → 47 | 32 → 31 | 171 → 161 | 57 → 62 |
+| `tri_400`, Morton order | 51 → 49 | 35 → 30 | 178 → 167 | 56 → 56 |
+| `tri_400_shuffled` | 156 → 133 | 93 → 91 | 311 → 289 | 144 → 135 |
+
+The results are the same, entry for entry. On one thread, topology on
+`tet_40` is 0.54–0.74× in every numbering, and a Morton-numbered mesh
+is within 4% of the grid's own numbering (it was 1.22×). On all cores
+the sorts were already a smaller part, and topology is 0.83–0.98× (the
+`tri_400` build, 57 → 62 ms, is within its round-to-round noise of
+57–62 ms). Whitney is unchanged.

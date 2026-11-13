@@ -349,9 +349,16 @@ takes every page fault on one thread (it doubled the first call of
 first vertex (`_boundary_by_buckets`, from 16384 occurrences with vertex
 ids in a narrow range; occurrences are `r << sh | i`, as divisions by
 the row width dominated the sort) and reads faces, `d`, and the boundary
-off the sorted runs, equal entry for entry to `_boundary_by_lexsort`; and
-`require_distinct_simplices` skips its sort when the rows are already in
-strictly increasing order. `tests/test_parallel.mojo` uses meshes past
+off the sorted runs, equal entry for entry to `_boundary_by_lexsort`.
+Each bucket sorts occurrences packed into one integer key (the rest of
+the face, then the occurrence) when that fits in 62 bits, and falls back
+to the `_occurrence_less` comparator otherwise (`pack=False` forces it,
+for tests); bit 62 marks each run's first occurrence. Sorts in topology
+avoid data-dependent branches, which mispredict more or less with the
+vertex numbering: sorting networks for rows of 3 and 4
+(`sort_each_row`), parity by counting inversions, and rank sort (SIMD)
+for buckets of 17 to 64 keys. `require_distinct_simplices` skips its
+sort when the rows are already in strictly increasing order. `tests/test_parallel.mojo` uses meshes past
 every threshold, and compares each parallel path with the serial one
 exactly; the other tests' meshes run serially.
 

@@ -61,26 +61,30 @@ but few: on `tet_40` the walk revisits each tetrahedron 1.18 times with
 
 A Hilbert curve has no jumps, and puts the two ends of an edge a little
 closer in number (median 16 apart on `tet_40`, against 27 in Morton
-order), but it is slower to build with. The Hilbert curve rotates and
-reflects each subcube, so the order of the vertices within an element
-changes from one subcube to the next, and the sorts on each row and each
-face, which branch on that order, mispredict more often. Morton order
-keeps the axes in the same order in every subcube, so the same few
-patterns repeat. On `tet_40` with one thread, in ms:
+order), but it is slower to build with. On `tet_40` with one thread, in
+ms:
 
 | | grid order | Morton | Hilbert |
 |---|---:|---:|---:|
-| sort each element's vertices | 2.9 | 4.4 | 8.6 |
-| topology | 171 | 208 | 257 |
-| Whitney k = 0 | 94 | 127 | 152 |
-| build | 827 | 876 | 926 |
+| topology | 127 | 131 | 139 |
+| Whitney k = 0 | 95 | 125 | 149 |
+| build | 779 | 797 | 807 |
 
-On all cores the two curves are within a few percent of each other, and
-they walk each tetrahedron in the dual walk equally often (1.18 times).
-Hilbert keys also take twice as long to compute. That makes Morton order
-the better choice here. The grid's own numbering is fastest on one
-thread, even though the two ends of an edge are farthest apart in it
-(median 1681): its Kuhn numbering repeats only a handful of patterns.
+The two curves walk each tetrahedron in the dual walk equally often
+(1.18 times), and on all cores they are within a few percent of each
+other. Hilbert keys also take twice as long to compute, so Morton order
+is the better choice here.
+
+The gap was wider when topology sorted with branches: topology took 171,
+208, and 257 ms. The Hilbert curve rotates and reflects each subcube, so
+the order of the vertices within an element changes from one subcube to
+the next, and sorts that branch on that order mispredict more often;
+Morton order keeps the axes in the same order in every subcube, and the
+grid's Kuhn numbering repeats only a handful of patterns. Topology's
+sorts no longer branch on the order of the data (see
+[Performance](performance.md#sorting-without-branches)). Whitney k = 0
+still runs fastest in grid order, even though the two ends of an edge
+are farthest apart in it (median 1681).
 
 `reorder_vertices(mesh)`:
 
@@ -119,21 +123,23 @@ vertex keeps its node tag from the file.
 `tet_40` (384k tetrahedra) and `tri_400` (320k triangles) from
 `benchmarks/compare`, with vertex numbers randomly permuted
 (`_shuffled`), then reordered; best of 3 alternating rounds on an
-i7-10875H (8 cores, 16 threads), in ms:
+i7-10875H (8 cores, 16 threads), in ms (the dual walk from the run
+before topology's sorts stopped branching, which left it unchanged):
 
 | `tet_40` | grid order | shuffled | reordered |
 |---|---:|---:|---:|
-| build, 1 thread | 826 | 1191 | 878 |
-| build, all cores | 194 | 446 | 193 |
+| build, 1 thread | 779 | 1031 | 797 |
+| build, all cores | 188 | 433 | 178 |
 | dual walk, all cores | 84 | 201 | 69 |
-| topology, all cores | 69 | 196 | 77 |
-| Whitney k = 0, 1 thread | 94 | 239 | 125 |
-| Whitney k = 1, 1 thread | 264 | 450 | 277 |
+| topology, 1 thread | 127 | 284 | 131 |
+| topology, all cores | 65 | 178 | 62 |
+| Whitney k = 0, 1 thread | 95 | 237 | 125 |
+| Whitney k = 1, 1 thread | 263 | 455 | 277 |
 
 | `tri_400` | grid order | shuffled | reordered |
 |---|---:|---:|---:|
-| build, 1 thread | 172 | 309 | 179 |
-| build, all cores | 62 | 134 | 61 |
+| build, 1 thread | 161 | 289 | 167 |
+| build, all cores | 62 | 135 | 56 |
 | Whitney k = 0, 1 thread | 39 | 105 | 43 |
 
 Reordering brings a shuffled mesh back to the speed of the grid's own

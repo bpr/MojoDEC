@@ -25,6 +25,7 @@ from mojodec.core.utils import (
     fget,
     fset,
     iget,
+    int_array,
     iset,
     int_vector,
     real_vector,
@@ -197,15 +198,33 @@ def _check_boundary_paths(mesh: SimplicialMesh) raises:
     var parity = simplex_array_parity(s)
     sort_each_row(s)
     while s.shape[1] > 1:
-        var x = _boundary_by_buckets(s, parity, _vertex_bound(s))
         var y = _boundary_by_lexsort(s, parity)
-        assert_equal(x.faces.size, y.faces.size)
-        for i in range(x.faces.size):
-            assert_equal(x.faces.unsafe_get(i), y.faces.unsafe_get(i))
-        _same_csr(x.coboundary, y.coboundary)
-        _same_csr(x.boundary, y.boundary)
+        # packed integer keys, and the comparator they replace
+        for pack in [True, False]:
+            var x = _boundary_by_buckets(s, parity, _vertex_bound(s), pack)
+            assert_equal(x.faces.size, y.faces.size)
+            for i in range(x.faces.size):
+                assert_equal(x.faces.unsafe_get(i), y.faces.unsafe_get(i))
+            _same_csr(x.coboundary, y.coboundary)
+            _same_csr(x.boundary, y.boundary)
         s = y.faces.copy()
         parity = int_vector(rows_of(s))
+
+
+def _fan(n: Int, K: Int) raises -> SimplicialMesh:
+    # n simplices around the K - 1 lowest vertices, each with two of the
+    # n + 1 others, numbered at random: buckets of n and more occurrences
+    var E = int_array(n, K)
+    var perm = List[Int](length=n + 1, fill=0)
+    for i in range(n + 1):
+        perm[i] = i * 7919 % (n + 1)  # n + 1 prime to 7919
+    for t in range(n):
+        for j in range(K - 2):
+            E.unsafe_set(t * K + j, Scalar[DType.int](j))
+        E.unsafe_set(t * K + K - 2, Scalar[DType.int](K - 2 + perm[t]))
+        E.unsafe_set(t * K + K - 1, Scalar[DType.int](K - 2 + perm[t + 1]))
+    var V = nm.zeros[DType.float64](Shape(n + K - 1, K - 1))
+    return SimplicialMesh(V, E)
 
 
 def test_boundary_by_buckets_matches_lexsort() raises:
@@ -215,6 +234,9 @@ def test_boundary_by_buckets_matches_lexsort() raises:
     _check_boundary_paths(
         _with_unused_vertices(_jittered([12, 12, 12], True), 5)
     )
+    # buckets past _RANK_SORT_TO, sorted by merging
+    _check_boundary_paths(_fan(5000, 3))
+    _check_boundary_paths(_fan(3000, 4))
 
 
 def test_large_meshes_check_distinct_simplices() raises:

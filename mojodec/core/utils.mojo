@@ -421,6 +421,14 @@ def lexsort_rows(a: IntArray) -> List[Int]:
     return perm^
 
 
+@always_inline
+def _exchange(mut x: Scalar[DType.int], mut y: Scalar[DType.int]):
+    """Order `x <= y`, by min and max."""
+    var lo = min(x, y)
+    y = max(x, y)
+    x = lo
+
+
 def sort_each_row(mut a: IntArray):
     """Sort the entries of every row of a 2-D integer array in place.
 
@@ -432,17 +440,46 @@ def sort_each_row(mut a: IntArray):
     var ap = a.unsafe_ptr()
 
     def rows(chunk: Int, lo: Int, hi: Int) {ap, c}:
+        # sorting networks: compare-exchanges by min and max, with no branch
+        # to mispredict however the rows are ordered (rows are short:
+        # simplex vertex lists)
+        if c == 3:
+            for i in range(lo, hi):
+                var x0 = ap[unsafe_offset=3 * i]
+                var x1 = ap[unsafe_offset=3 * i + 1]
+                var x2 = ap[unsafe_offset=3 * i + 2]
+                _exchange(x1, x2)
+                _exchange(x0, x2)
+                _exchange(x0, x1)
+                ap[unsafe_offset=3 * i] = x0
+                ap[unsafe_offset=3 * i + 1] = x1
+                ap[unsafe_offset=3 * i + 2] = x2
+            return
+        if c == 4:
+            for i in range(lo, hi):
+                var x0 = ap[unsafe_offset=4 * i]
+                var x1 = ap[unsafe_offset=4 * i + 1]
+                var x2 = ap[unsafe_offset=4 * i + 2]
+                var x3 = ap[unsafe_offset=4 * i + 3]
+                _exchange(x0, x1)
+                _exchange(x2, x3)
+                _exchange(x0, x2)
+                _exchange(x1, x3)
+                _exchange(x1, x2)
+                ap[unsafe_offset=4 * i] = x0
+                ap[unsafe_offset=4 * i + 1] = x1
+                ap[unsafe_offset=4 * i + 2] = x2
+                ap[unsafe_offset=4 * i + 3] = x3
+            return
         for i in range(lo, hi):
-            # insertion sort: rows are short (simplex vertex lists)
-            for j in range(1, c):
-                var key = ap[unsafe_offset=i * c + j]
-                var k = j - 1
-                while k >= 0 and ap[unsafe_offset=i * c + k] > key:
-                    ap[unsafe_offset=i * c + k + 1] = ap[
-                        unsafe_offset=i * c + k
-                    ]
-                    k -= 1
-                ap[unsafe_offset=i * c + k + 1] = key
+            # odd-even transposition: c rounds of neighbor exchanges
+            var base = i * c
+            for round in range(c):
+                for j in range(round % 2, c - 1, 2):
+                    var x = ap[unsafe_offset=base + j]
+                    var y = ap[unsafe_offset=base + j + 1]
+                    ap[unsafe_offset=base + j] = min(x, y)
+                    ap[unsafe_offset=base + j + 1] = max(x, y)
 
     parallel_ranges(r, 50_000, rows)
 

@@ -425,10 +425,34 @@ def test_barycentric_gradients_sum_to_zero() raises:
     given(composite(_simplex_points), prop, quick())
 
 
+def _int_det(a: List[List[Int]]) -> Int:
+    """The determinant of a small integer matrix, exactly (cofactors)."""
+    var n = len(a)
+    if n == 1:
+        return a[0][0]
+    var d = 0
+    for j in range(n):
+        var minor = List[List[Int]]()
+        for i in range(1, n):
+            var row = List[Int]()
+            for k in range(n):
+                if k != j:
+                    row.append(a[i][k])
+            minor.append(row^)
+        var t = a[0][j] * _int_det(minor)
+        d += t if j % 2 == 0 else -t
+    return d
+
+
 def _thin_simplex(mut data: ConjectureData) raises -> List[List[Float64]]:
     """An M-simplex in N-space (1 <= M <= 3, M <= N <= M + 2) whose last
     vertex is an integer combination of the others plus 10^-j times an
-    integer offset (0 <= j <= 8), so it may be very thin."""
+    integer offset (0 <= j <= 8), so it may be very thin, but not flat.
+
+    Flat draws (a flat base, or an offset in the base's span) are rejected
+    exactly, by the integer Gram determinant of the base's edges and the
+    offset: in floating point their volumes are rounding noise, not 0, and
+    `_thinness` would be noise over noise (it came out as low as 8.6)."""
     var m = data.draw(integers(1, 3), "M")
     var n = m + data.draw(integers(0, 2), "N - M")
     var pts = List[List[Float64]]()
@@ -445,8 +469,28 @@ def _thin_simplex(mut data: ConjectureData) raises -> List[List[Float64]]:
         var c = Float64(data.draw(integers(-2, 2), "coefficient"))
         for k in range(n):
             last[k] += c * (pts[i][k] - pts[0][k])
+    var vecs = List[List[Int]]()
+    for i in range(1, m):
+        var v = List[Int]()
+        for k in range(n):
+            v.append(Int(pts[i][k] - pts[0][k]))
+        vecs.append(v^)
+    var offset = List[Int]()
     for k in range(n):
-        last[k] += scale * Float64(data.draw(integers(-3, 3), "offset"))
+        var o = data.draw(integers(-3, 3), "offset")
+        offset.append(o)
+        last[k] += scale * Float64(o)
+    vecs.append(offset^)
+    var gram = List[List[Int]]()
+    for i in range(m):
+        var row = List[Int]()
+        for j in range(m):
+            var g = 0
+            for k in range(n):
+                g += vecs[i][k] * vecs[j][k]
+            row.append(g)
+        gram.append(row^)
+    assume(_int_det(gram) != 0)
     pts.append(last^)
     return pts^
 
@@ -522,7 +566,15 @@ def test_thin_simplex_top_form_mass_is_inverse_volume() raises:
         var T = int_array(1, m + 1)
         for i in range(m + 1):
             T.unsafe_set(i, Scalar[DType.int](i))
-        var sc = SimplicialComplex(P, T)
+        var sc: SimplicialComplex
+        try:
+            sc = SimplicialComplex(P, T)
+        except e:
+            # the circumcenter of a tetrahedron this thin can be beyond
+            # floating point (about 1 in 3000 with L / h from 1e8 to 1e10);
+            # the mass matrix does not need it, but the complex does
+            assume("circumcenter: degenerate simplex" not in String(e))
+            raise e^
         var M = whitney_innerproduct(sc, m).todense().unsafe_get(0)
         var got = M * abs(sc[m].primal_volume.unsafe_get(0))
         if abs(got - 1) > 64 * 2.220446049250313e-16 * kappa:
@@ -567,13 +619,15 @@ def test_boundary_by_buckets_matches_lexsort() raises:
         var parity = int_vector(N)
         for i in range(N):
             parity.unsafe_set(i, Scalar[DType.int](t[2][i]))
-        var x = _boundary_by_buckets(s, parity, _vertex_bound(s))
         var y = _boundary_by_lexsort(s, parity)
-        assert_equal(x.faces.size, y.faces.size)
-        for i in range(x.faces.size):
-            assert_equal(x.faces.unsafe_get(i), y.faces.unsafe_get(i))
-        _same_csr(x.coboundary, y.coboundary, "d")
-        _same_csr(x.boundary, y.boundary, "boundary")
+        # packed integer keys, and the comparator they replace
+        for pack in [True, False]:
+            var x = _boundary_by_buckets(s, parity, _vertex_bound(s), pack)
+            assert_equal(x.faces.size, y.faces.size)
+            for i in range(x.faces.size):
+                assert_equal(x.faces.unsafe_get(i), y.faces.unsafe_get(i))
+            _same_csr(x.coboundary, y.coboundary, "d")
+            _same_csr(x.boundary, y.boundary, "boundary")
 
     given(composite(_simplex_rows), prop, quick())
 

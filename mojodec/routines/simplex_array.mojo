@@ -9,7 +9,7 @@ Largely inspired by `pydec.dec.simplex_array`. A simplex array is an
 `N x (k+1)` integer array whose rows are the vertex lists of `N` k-simplices.
 """
 
-from mojodec.core.parallel import chunk_scratch, num_chunks, parallel_ranges
+from mojodec.core.parallel import num_chunks, parallel_ranges
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.utils import (
     IntArray,
@@ -109,21 +109,40 @@ def simplex_array_parity(s: IntArray) raises -> IntArray:
     var op = out.unsafe_ptr()
 
     def rows(chunk: Int, lo: Int, hi: Int) {sp, op, N}:
-        var row = chunk_scratch[Int](N, 0)
+        # the parity of the number of pairs out of order, counted with no
+        # branch to mispredict
+        if N == 3:
+            for i in range(lo, hi):
+                var x0 = sp[unsafe_offset=3 * i]
+                var x1 = sp[unsafe_offset=3 * i + 1]
+                var x2 = sp[unsafe_offset=3 * i + 2]
+                var inversions = Int(x1 < x0) + Int(x2 < x0) + Int(x2 < x1)
+                op[unsafe_offset=i] = Scalar[DType.int](inversions % 2)
+            return
+        if N == 4:
+            for i in range(lo, hi):
+                var x0 = sp[unsafe_offset=4 * i]
+                var x1 = sp[unsafe_offset=4 * i + 1]
+                var x2 = sp[unsafe_offset=4 * i + 2]
+                var x3 = sp[unsafe_offset=4 * i + 3]
+                var inversions = (
+                    Int(x1 < x0)
+                    + Int(x2 < x0)
+                    + Int(x3 < x0)
+                    + Int(x2 < x1)
+                    + Int(x3 < x1)
+                    + Int(x3 < x2)
+                )
+                op[unsafe_offset=i] = Scalar[DType.int](inversions % 2)
+            return
         for i in range(lo, hi):
-            for j in range(N):
-                row[j] = Int(sp[unsafe_offset=i * N + j])
-            # count transpositions of a selection sort
-            var trans = 0
+            var base = i * N
+            var inversions = 0
             for j in range(N - 1):
-                var m = j
+                var x = sp[unsafe_offset=base + j]
                 for k in range(j + 1, N):
-                    if row[k] < row[m]:
-                        m = k
-                if m != j:
-                    row.swap_elements(j, m)
-                    trans += 1
-            op[unsafe_offset=i] = Scalar[DType.int](trans % 2)
+                    inversions += Int(sp[unsafe_offset=base + k] < x)
+            op[unsafe_offset=i] = Scalar[DType.int](inversions % 2)
 
     parallel_ranges(M, 50_000, rows)
     return out^
@@ -367,8 +386,96 @@ def _sort_occurrences(
         out += 1
 
 
+def _sort_keys(op: _Ptr, lo: Int, hi: Int, tmp: _Ptr):
+    """Sort the distinct integers `op[lo:hi]`, all below `Int.MAX`.
+
+    Up to `_INSERTION_SORT_TO` keys by insertion; up to `_RANK_SORT_TO` by
+    rank; longer runs by merge sort over halves. `tmp` holds at least
+    `max((hi - lo) / 2 + 1, _RANK_SORT_TO)` entries.
+    """
+    var n0 = hi - lo
+    if n0 <= _INSERTION_SORT_TO:
+        for a in range(lo + 1, hi):
+            var key = op[unsafe_offset=a]
+            var b = a - 1
+            while b >= lo and key < op[unsafe_offset=b]:
+                op[unsafe_offset=b + 1] = op[unsafe_offset=b]
+                b -= 1
+            op[unsafe_offset=b + 1] = key
+        return
+    if n0 <= _RANK_SORT_TO:
+        # each key's place is the number of smaller keys (they are
+        # distinct): more comparisons than insertion sort, but in SIMD and
+        # with no branch to mispredict, so the cost does not depend on how
+        # the keys arrive; padded with Int.MAX, which counts for none
+        comptime W = 4
+        var padded = (n0 + W - 1) // W * W
+        for a in range(n0):
+            tmp[unsafe_offset=a] = op[unsafe_offset=lo + a]
+        for a in range(n0, padded):
+            tmp[unsafe_offset=a] = Int.MAX
+        var tv = rebind[Pointer[Scalar[DType.int], MutUntrackedOrigin]](tmp)
+        for a in range(n0):
+            var key = tmp[unsafe_offset=a]
+            var kv = SIMD[DType.int, W](key)
+            var acc = SIMD[DType.int, W](0)
+            for b in range(0, padded, W):
+                var v = tv.unsafe_load[width=W](b)
+                acc += v.lt(kv).cast[DType.int]()
+            op[unsafe_offset=lo + Int(acc.reduce_add())] = key
+        return
+    var mid = (lo + hi) // 2
+    _sort_keys(op, lo, mid, tmp)
+    _sort_keys(op, mid, hi, tmp)
+    if op[unsafe_offset=mid - 1] < op[unsafe_offset=mid]:
+        return
+    var n = mid - lo
+    for t in range(n):
+        tmp[unsafe_offset=t] = op[unsafe_offset=lo + t]
+    var a = 0
+    var b = mid
+    var out = lo
+    while a < n and b < hi:
+        var x = op[unsafe_offset=b]
+        var y = tmp[unsafe_offset=a]
+        if x < y:
+            op[unsafe_offset=out] = x
+            b += 1
+        else:
+            op[unsafe_offset=out] = y
+            a += 1
+        out += 1
+    while a < n:
+        op[unsafe_offset=out] = tmp[unsafe_offset=a]
+        a += 1
+        out += 1
+
+
+comptime _INSERTION_SORT_TO = 16
+"""Runs up to this long are sorted by insertion in `_sort_keys`: few
+comparisons, so mispredicted ones cost little."""
+comptime _RANK_SORT_TO = 64
+"""Longer runs up to this long are sorted by rank in `_sort_keys` (a
+multiple of the SIMD width 4). With ranking instead of insertion above
+16, the topology of `tet_40` on one thread takes 125 ms instead of 133 in
+Morton order and 238 instead of 264 numbered at random, but 120 instead
+of 114 in grid order."""
+
+
+def _bit_length(x: Int) -> Int:
+    """The number of bits of `x >= 0` (0 for 0)."""
+    var n = 0
+    while n < 63 and (1 << n) <= x:
+        n += 1
+    return n
+
+
+comptime _NEW_FACE = 1 << 62
+"""Marks an occurrence that starts a run of equal faces in its bucket."""
+
+
 def _boundary_by_buckets(
-    s: IntArray, parity: IntArray, V: Int
+    s: IntArray, parity: IntArray, V: Int, pack: Bool = True
 ) raises -> FacesAndBoundary:
     """`simplex_array_boundary` with the faces sorted by buckets, in parallel.
 
@@ -382,6 +489,15 @@ def _boundary_by_buckets(
     entries are then in increasing simplex order, as a transpose gives;
     each row of `d` is the simplex's faces sorted by index. The result is
     `_boundary_by_lexsort`'s, entry for entry.
+
+    When they fit in 62 bits, each occurrence is sorted as one integer key:
+    the face's entries after the first, `bV` bits each, then `e`. Keys
+    order as `_occurrence_less` does (by the rest of the face, then by
+    simplex), and a bucket sorts with integer comparisons instead of
+    rebuilding both faces from `s` at every one. Otherwise (or with
+    `pack=False`, for tests) the occurrences sort with
+    `_occurrence_less`. Either way, sorting marks each run's first
+    occurrence with `_NEW_FACE`.
     """
     var N = rows_of(s)
     var K = cols_of(s)
@@ -394,6 +510,10 @@ def _boundary_by_buckets(
     var sh = 1
     while (1 << sh) < K:
         sh += 1
+    var bV = _bit_length(V - 1)
+    var bE = _bit_length(N - 1) + sh
+    var packed = pack and (K - 2) * bV + bE <= 62
+    var e_mask = (1 << bE) - 1
 
     # occurrences per (chunk of simplices, first vertex)
     var counts = List[Int](length=C * V, fill=0)
@@ -426,14 +546,24 @@ def _boundary_by_buckets(
     var occ = List[Int](unsafe_uninit_length=M)
     var op = occ.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
 
-    def scatter(chunk: Int, lo: Int, hi: Int) {sp, cp, stp, op, K, V, sh}:
+    def scatter(
+        chunk: Int, lo: Int, hi: Int
+    ) {sp, cp, stp, op, K, V, sh, bV, bE, packed}:
         var base = chunk * V
         for r in range(lo, hi):
             for i in range(K):
                 var v = Int(sp[unsafe_offset=r * K + (1 if i == 0 else 0)])
                 var at = stp[unsafe_offset=v] + cp[unsafe_offset=base + v]
                 cp[unsafe_offset=base + v] = cp[unsafe_offset=base + v] + 1
-                op[unsafe_offset=at] = (r << sh) | i
+                var e = (r << sh) | i
+                if packed:
+                    # the face's entries after its first, then e
+                    var key = 0
+                    for j in range(2 if i == 0 else 1, K):
+                        if j != i:
+                            key = (key << bV) | Int(sp[unsafe_offset=r * K + j])
+                    e = (key << bE) | e
+                op[unsafe_offset=at] = e
 
     parallel_ranges(N, SERIAL_BELOW, scatter)
     _ = counts^
@@ -453,25 +583,42 @@ def _boundary_by_buckets(
 
     def sort_buckets(
         chunk: Int, lo: Int, hi: Int
-    ) {sp, stp, op, bp, dsp, K, sh}:
+    ) {sp, stp, op, bp, dsp, K, sh, bE, e_mask, packed}:
         for b in range(lo, hi):
             var widest = 0
             for v in range(bp[unsafe_offset=b], bp[unsafe_offset=b + 1]):
                 widest = max(
                     widest, stp[unsafe_offset=v + 1] - stp[unsafe_offset=v]
                 )
-            var tmp = List[Int](length=widest // 2 + 1, fill=0)
+            var tmp = List[Int](
+                length=max(widest // 2 + 1, _RANK_SORT_TO), fill=0
+            )
             var tp = tmp.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
             for v in range(bp[unsafe_offset=b], bp[unsafe_offset=b + 1]):
                 var a = stp[unsafe_offset=v]
                 var e = stp[unsafe_offset=v + 1]
-                _sort_occurrences(sp, K, sh, op, a, e, tp)
                 var n = 0
-                for t in range(a, e):
-                    if t == a or not _same_face(
-                        sp, K, sh, op[unsafe_offset=t - 1], op[unsafe_offset=t]
-                    ):
-                        n += 1
+                if packed:
+                    _sort_keys(op, a, e, tp)
+                    # back to occurrences, run starts marked
+                    var prev = -1
+                    for t in range(a, e):
+                        var key = op[unsafe_offset=t]
+                        var occ_e = key & e_mask
+                        if t == a or (key >> bE) != prev:
+                            occ_e |= _NEW_FACE
+                            n += 1
+                        prev = key >> bE
+                        op[unsafe_offset=t] = occ_e
+                else:
+                    _sort_occurrences(sp, K, sh, op, a, e, tp)
+                    var prev = -1
+                    for t in range(a, e):
+                        var occ_e = op[unsafe_offset=t]
+                        if t == a or not _same_face(sp, K, sh, prev, occ_e):
+                            op[unsafe_offset=t] = occ_e | _NEW_FACE
+                            n += 1
+                        prev = occ_e
                 dsp[unsafe_offset=v + 1] = n
             _ = tmp^
 
@@ -501,31 +648,24 @@ def _boundary_by_buckets(
     ) {sp, pp, stp, op, bp, dsp, fp, bip, bix, bdv, fop, K, fw, sh}:
         for b in range(lo, hi):
             for v in range(bp[unsafe_offset=b], bp[unsafe_offset=b + 1]):
-                var f = dsp[unsafe_offset=v]
-                var e = stp[unsafe_offset=v + 1]
-                var t = stp[unsafe_offset=v]
-                while t < e:
-                    var first = op[unsafe_offset=t]
-                    fp[unsafe_offset=f * fw] = Scalar[DType.int](v)
-                    for j in range(1, fw):
-                        fp[unsafe_offset=f * fw + j] = Scalar[DType.int](
-                            _face_entry(sp, K, sh, first, j)
-                        )
-                    bip[unsafe_offset=f] = t
-                    while t < e:
-                        var occ_e = op[unsafe_offset=t]
-                        if occ_e != first and not _same_face(
-                            sp, K, sh, first, occ_e
-                        ):
-                            break
-                        var r = occ_e >> sh
-                        var i = occ_e & ((1 << sh) - 1)
-                        var o = 1 - 2 * Int(pp[unsafe_offset=r])
-                        bix[unsafe_offset=t] = r
-                        bdv[unsafe_offset=t] = Float64(o if i % 2 == 0 else -o)
-                        fop[unsafe_offset=r * K + i] = f
-                        t += 1
-                    f += 1
+                var f = dsp[unsafe_offset=v] - 1
+                for t in range(stp[unsafe_offset=v], stp[unsafe_offset=v + 1]):
+                    var x = op[unsafe_offset=t]
+                    var occ_e = x & (_NEW_FACE - 1)
+                    if x != occ_e:
+                        f += 1
+                        fp[unsafe_offset=f * fw] = Scalar[DType.int](v)
+                        for j in range(1, fw):
+                            fp[unsafe_offset=f * fw + j] = Scalar[DType.int](
+                                _face_entry(sp, K, sh, occ_e, j)
+                            )
+                        bip[unsafe_offset=f] = t
+                    var r = occ_e >> sh
+                    var i = occ_e & ((1 << sh) - 1)
+                    var o = 1 - 2 * Int(pp[unsafe_offset=r])
+                    bix[unsafe_offset=t] = r
+                    bdv[unsafe_offset=t] = Float64(o if i % 2 == 0 else -o)
+                    fop[unsafe_offset=r * K + i] = f
 
     parallel_ranges(C, 0, runs)
     _ = occ^
