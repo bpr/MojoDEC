@@ -346,3 +346,41 @@ ms:
 
 On all cores, `build` is within its noise on `tet_40_shuffled` and
 `tri_400`, where topology dominates.
+
+## Closed-form areas and volumes
+
+Triangle circumcenters and the primal volumes of triangles in 3D took
+their areas from a Householder QR of the two edges, and tetrahedra in
+3D their volumes from an LU determinant with pivoting. They now use
+`|u × w|` and `a · (b × c)`. Each component of a cross product is a 2 × 2
+minor, as well conditioned as QR's distance from one edge to the line of
+the other, so slivers lose nothing (the Gram form `|u|²|w|² - (u · w)²`
+would cancel). Against exact rational arithmetic on 3000 triangles in
+3D flattened down to 1e-11 of their size, the areas and barycentric
+weights are 2–4 times more accurate than QR's, and the circumcenters and
+tetrahedron volumes as accurate; both lose accuracy as `eps L / h`, from
+rounding the inputs' differences. Edge lengths and triangles in 2D
+already had closed forms; they now skip the general loops too.
+
+On one thread, triangle circumcenters take 49 → 14 ms on `tet_40` and
+16 → 4.1 ms on `tri_400`; primal volumes of triangles in 3D 25 → 6.1 ms
+and of tetrahedra 17 → 2.9 ms. Best of 3 alternating rounds, in ms:
+
+| Mesh | geometry, 1 thread | geometry, all cores | build, 1 thread | build, all cores |
+|---|---:|---:|---:|---:|
+| `tet_40` | 272 → 203 | 88 → 85 | 359 → 295 | 129 → 120 |
+| `tet_40_shuffled` | 351 → 282 | 126 → 123 | 597 → 541 | 272 → 274 |
+| `tri_400` | 72 → 60 | 27 → 26 | 105 → 93 | 45 → 50 |
+| `tri_400_shuffled` | 102 → 87 | 39 → 38 | 218 → 205 | 121 → 121 |
+
+On all cores geometry was already short, and `build` is within its
+noise (topology, unchanged, varies by several ms between rounds).
+
+The results change in the last bits, and one test had to change with
+them: a triangle of height 1e-8 checked that its Whitney top-form mass
+times its area is 1 to 1e-14, which held only because both came from
+the same QR. The area is now the more accurate of the two (5e-10 from
+exact against QR's 7e-9), and the two agree to 5e-9, within the
+conditioning `eps L / h = 2e-8`; the test now checks the area against its
+exact value and the product to 1e-7.
+

@@ -326,7 +326,14 @@ def test_whitney_on_thin_simplices() raises:
     var sc = SimplicialComplex(real_array_from_rows(tri), I("[[0,1,2]]"))
     var M = whitney_innerproduct(sc, 2).todense().unsafe_get(0)
     var area = abs(sc[2].primal_volume.unsafe_get(0))
-    assert_almost_equal(M * area, 1.0, atol=1e-14, rtol=0)
+    # the area of these floating-point vertices, in exact arithmetic, is
+    # 7.0148057865919133e-9; |u x w| / 2 has it to 5e-10 relative (QR had
+    # 7e-9, the Gram determinant would lose half the digits)
+    assert_almost_equal(area, 7.0148057865919133e-9, atol=1.4e-17, rtol=0)
+    # the mass comes from the QR gradients and the area from the cross
+    # product, each good to about eps L / h = 2e-8 relative here, so they
+    # agree to that (they differ by 5e-9), not to the last bit
+    assert_almost_equal(M * area, 1.0, atol=1e-7, rtol=0)
     var tet: List[List[Float64]] = [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],

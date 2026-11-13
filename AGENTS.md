@@ -140,8 +140,13 @@ Key design points that span several files:
   relative to the first vertex, and from triangles up the Cartesian center
   is built relative to it too (absolute positions lose precision far from
   the origin). Embedded volumes use Householder QR
-  (`parallelotope_volume`), never the Gram determinant, and barycentric
-  gradients likewise (`dual_basis`, `frame_dual_basis` in `core/utils.mojo`),
+  (`parallelotope_volume`), or for triangles in 3D the cross product
+  `|u x w|` (its components are 2 x 2 minors, as accurate as QR; the
+  triangle circumcenter's area uses it too), never the Gram determinant;
+  tetrahedra in 3D take the triple product. The Whitney top-form mass
+  (QR gradients) and the primal volume therefore agree to the
+  conditioning `eps L / h`, not to the last bit. Barycentric
+  gradients use QR too (`dual_basis`, `frame_dual_basis` in `core/utils.mojo`),
   never `(E E^T)^-1 E`. Dual volumes come from one walk down the chains of
   circumcenters (`_add_dual_pieces`; `compute_dual_volume` runs it as
   `_DualWalk`, breadth first and four chains per SIMD vector in

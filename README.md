@@ -531,11 +531,13 @@ the published mathematics:
 - **Precise geometry.** The results agree with PyDEC's to rounding, but
   are computed so as not to lose digits that PyDEC loses. Volumes of
   simplices below the embedding dimension come from a Householder QR
-  factorization rather than the Gram determinant, which cannot tell a
+  factorization (for triangles in 3D, the cross product, whose components
+  are 2 x 2 minors) rather than the Gram determinant, which cannot tell a
   very thin simplex from a flat one. Circumcenters are solved for with
   positions relative to a vertex, not absolute positions, which keeps
   their precision on meshes far from the origin; triangles use a closed
-  form whose denominator, the squared area, also comes from QR, so even
+  form whose denominator, the squared area, also comes from the cross
+  product (QR above 3D), so even
   slivers get their circumcenters, and tetrahedra in 3D a closed form from
   cross products, within 1e-11 circumradii of exact on tetrahedra
   flattened to 1e-10 of their size (PyDEC's system, a Gram matrix,
@@ -672,7 +674,7 @@ from your own program.
 | DarcyFlow | pressures agree with the exact solution to 1e-14 |
 | HeatConduction | mesh and boundary pieces from a Gmsh file; the piecewise-linear temperature through two materials to 7e-15, and the heat in through the hot edge equals the heat out through the cold one and the exact 25/26 (not from PyDEC) |
 | ResonantCavity | eigenvalues 1, 1, 2, 4, 4, 5, 5, 8, 9, 9, 10, 10, 13, 13, … (the exact m²+n²); largest backward error 7e-15 |
-| CavityWaves | resonances 0.9986, 0.9986, 2.987, 3.977, 3.977, 6.93, 6.93, 8.88 times (4π/3)² (the exact m²+mn+n² of the equilateral triangle); leapfrog from the lowest mode follows cos(ω_dt t) to 3e-12 over five periods, staggered energy constant to 2e-15 (not from PyDEC) |
+| CavityWaves | resonances 0.9986, 0.9986, 2.987, 3.977, 3.977, 6.93, 6.93, 8.88 times (4π/3)² (the exact m²+mn+n² of the equilateral triangle); leapfrog from the lowest mode follows cos(ω_dt t) to 7e-12 over five periods, staggered energy constant to 2e-15 (not from PyDEC) |
 | Sphere | Hodge-Laplacian spectra near n(n+1) for 0-, 1-, and 2-forms; the 1-form spectrum is the 0- and 2-form spectra merged (to 3e-12); Gauss-Bonnet exact; Gaussian and mean curvature 1.02 and 1.0001; largest backward error of any eigenpair 5e-15 (not from PyDEC) |
 | Neighborhoods | interior links are hexagons (χ = 0), boundary links paths (χ = 1); Bd(Cl(St(v))) = Lk(v); every ring boundary has χ = 0; the square's boundary has 4n edges and an empty boundary (not from PyDEC) |
 | Neighborhoods3D | interior vertex links are spheres (χ = 2), boundary links disks (χ = 1); growing rings are balls (χ = 1) until they meet themselves around the hole (one pinched step), then the solid torus (χ = 0) bounded by a torus; χ(Bd R) = 2 χ(R) whenever Bd R is a surface (not from PyDEC) |

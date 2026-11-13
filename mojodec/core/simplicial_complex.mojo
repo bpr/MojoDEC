@@ -996,6 +996,28 @@ struct SimplicialComplex(
                 elif dim == 1:
                     bp[unsafe_offset=2 * i] = 0.5
                     bp[unsafe_offset=2 * i + 1] = 0.5
+                elif dim == 2 and (E == 2 or E == 3):
+                    var ok: Bool
+                    if E == 3:
+                        ok = _triangle_circumcenter[3](
+                            Vp.unsafe_origin_cast[MutUntrackedOrigin](),
+                            Sp.unsafe_origin_cast[MutUntrackedOrigin](),
+                            op.unsafe_origin_cast[MutUntrackedOrigin](),
+                            bp.unsafe_origin_cast[MutUntrackedOrigin](),
+                            i,
+                        )
+                    else:
+                        ok = _triangle_circumcenter[2](
+                            Vp.unsafe_origin_cast[MutUntrackedOrigin](),
+                            Sp.unsafe_origin_cast[MutUntrackedOrigin](),
+                            op.unsafe_origin_cast[MutUntrackedOrigin](),
+                            bp.unsafe_origin_cast[MutUntrackedOrigin](),
+                            i,
+                        )
+                    if not ok:
+                        badp[unsafe_offset=chunk] = True
+                        return
+                    continue
                 elif dim == 2:
                     var v0 = Int(Sp[unsafe_offset=3 * i]) * E
                     var v1 = Int(Sp[unsafe_offset=3 * i + 1]) * E
@@ -2147,6 +2169,64 @@ def _det_in_place(mut A: List[Float64], n: Int) -> Float64:
     return d
 
 
+@always_inline
+def _triangle_circumcenter[
+    E: Int
+](
+    Vp: Pointer[Float64, MutUntrackedOrigin],
+    Sp: Pointer[Scalar[DType.int], MutUntrackedOrigin],
+    op: Pointer[Float64, MutUntrackedOrigin],
+    bp: Pointer[Float64, MutUntrackedOrigin],
+    i: Int,
+) -> Bool:
+    """The circumcenter of triangle `i` in `E = 2` or `3` dimensions, as in
+    `compute_circumcenters`, with `|u ^ w|^2` in closed form: `|u x w|^2`
+    in 3D, `(u_0 w_1 - u_1 w_0)^2` in 2D. Each component of the cross
+    product is a 2 x 2 minor, as accurate as QR's distance from `w` to the
+    line of `u` (the Gram form `|u|^2 |w|^2 - (u . w)^2` would cancel).
+    Returns False for a degenerate triangle.
+    """
+    var v0 = Int(Sp[unsafe_offset=3 * i]) * E
+    var v1 = Int(Sp[unsafe_offset=3 * i + 1]) * E
+    var v2 = Int(Sp[unsafe_offset=3 * i + 2]) * E
+    var u = SIMD[DType.float64, 4](0)
+    var w = SIMD[DType.float64, 4](0)
+    var z = SIMD[DType.float64, 4](0)
+    comptime for k in range(E):
+        var x0 = Vp[unsafe_offset=v0 + k]
+        u[k] = Vp[unsafe_offset=v1 + k] - x0
+        w[k] = Vp[unsafe_offset=v2 + k] - x0
+        z[k] = Vp[unsafe_offset=v2 + k] - Vp[unsafe_offset=v1 + k]
+    var uu = (u * u).reduce_add()
+    var ww = (w * w).reduce_add()
+    var zz = (z * z).reduce_add()
+    var uw = (u * w).reduce_add()
+    var uz = (u * z).reduce_add()
+    var wz = (w * z).reduce_add()
+    var area2sq: Float64
+    comptime if E == 3:
+        var cx = u[1] * w[2] - u[2] * w[1]
+        var cy = u[2] * w[0] - u[0] * w[2]
+        var cz = u[0] * w[1] - u[1] * w[0]
+        area2sq = cx * cx + cy * cy + cz * cz
+    else:
+        var c = u[0] * w[1] - u[1] * w[0]
+        area2sq = c * c
+    var total = 2 * area2sq
+    if total == 0:
+        return False
+    var b1 = -ww * uz / total
+    var b2 = uu * wz / total
+    bp[unsafe_offset=3 * i] = zz * uw / total
+    bp[unsafe_offset=3 * i + 1] = b1
+    bp[unsafe_offset=3 * i + 2] = b2
+    comptime for k in range(E):
+        op[unsafe_offset=i * E + k] = Vp[unsafe_offset=v0 + k] + (
+            b1 * u[k] + b2 * w[k]
+        )
+    return True
+
+
 def _simplex_volumes(
     V: RealArray, S: IntArray, dim: Int, signed: Bool, mut out: RealArray
 ):
@@ -2154,8 +2234,10 @@ def _simplex_volumes(
 
     Signed: the determinant of the edge vectors over `dim!` (needs
     `dim` equal to the embedding dimension). Unsigned: the volume of the
-    parallelotope they span (by Householder QR) over `dim!`. Runs in parallel
-    chunks, each with its own buffers.
+    parallelotope they span (by Householder QR) over `dim!`. Tetrahedra in
+    3D take the triple product `a . (b x c)` and triangles in 3D `|u x w|`
+    instead, whose components are 2 x 2 minors, as accurate as QR. Runs in
+    parallel chunks, each with its own buffers.
     """
     var E = cols_of(V)
     var w = dim + 1
@@ -2171,6 +2253,49 @@ def _simplex_volumes(
         var M = chunk_scratch[Float64](dim * dim, 0)
         var diag = chunk_scratch[Float64](dim, 0)
         for i in range(lo, hi):
+            # closed forms for the common cases: the same quantities as
+            # the general paths below, without their loops
+            if dim == 3 and E == 3:
+                var v0 = Int(Sp[unsafe_offset=4 * i]) * 3
+                var v1 = Int(Sp[unsafe_offset=4 * i + 1]) * 3
+                var v2 = Int(Sp[unsafe_offset=4 * i + 2]) * 3
+                var v3 = Int(Sp[unsafe_offset=4 * i + 3]) * 3
+                var ax = Vp[unsafe_offset=v1] - Vp[unsafe_offset=v0]
+                var ay = Vp[unsafe_offset=v1 + 1] - Vp[unsafe_offset=v0 + 1]
+                var az = Vp[unsafe_offset=v1 + 2] - Vp[unsafe_offset=v0 + 2]
+                var bx = Vp[unsafe_offset=v2] - Vp[unsafe_offset=v0]
+                var by = Vp[unsafe_offset=v2 + 1] - Vp[unsafe_offset=v0 + 1]
+                var bz = Vp[unsafe_offset=v2 + 2] - Vp[unsafe_offset=v0 + 2]
+                var cx = Vp[unsafe_offset=v3] - Vp[unsafe_offset=v0]
+                var cy = Vp[unsafe_offset=v3 + 1] - Vp[unsafe_offset=v0 + 1]
+                var cz = Vp[unsafe_offset=v3 + 2] - Vp[unsafe_offset=v0 + 2]
+                # a . (b x c), the determinant of the edges' rows
+                var det = (
+                    ax * (by * cz - bz * cy)
+                    + ay * (bz * cx - bx * cz)
+                    + az * (bx * cy - by * cx)
+                )
+                op[unsafe_offset=i] = (
+                    det / scale if signed else abs(det) / scale
+                )
+                continue
+            if dim == 2 and E == 3 and not signed:
+                var v0 = Int(Sp[unsafe_offset=3 * i]) * 3
+                var v1 = Int(Sp[unsafe_offset=3 * i + 1]) * 3
+                var v2 = Int(Sp[unsafe_offset=3 * i + 2]) * 3
+                var ux = Vp[unsafe_offset=v1] - Vp[unsafe_offset=v0]
+                var uy = Vp[unsafe_offset=v1 + 1] - Vp[unsafe_offset=v0 + 1]
+                var uz = Vp[unsafe_offset=v1 + 2] - Vp[unsafe_offset=v0 + 2]
+                var wx = Vp[unsafe_offset=v2] - Vp[unsafe_offset=v0]
+                var wy = Vp[unsafe_offset=v2 + 1] - Vp[unsafe_offset=v0 + 1]
+                var wz = Vp[unsafe_offset=v2 + 2] - Vp[unsafe_offset=v0 + 2]
+                # |u x w|: its components are 2 x 2 minors, as accurate as
+                # QR (the Gram form would cancel for slivers)
+                var cx = uy * wz - uz * wy
+                var cy = uz * wx - ux * wz
+                var cz = ux * wy - uy * wx
+                op[unsafe_offset=i] = sqrt(cx * cx + cy * cy + cz * cz) / scale
+                continue
             var v0 = Int(Sp[unsafe_offset=i * w]) * E
             for r in range(dim):
                 var v = Int(Sp[unsafe_offset=i * w + r + 1]) * E
