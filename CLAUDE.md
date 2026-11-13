@@ -29,6 +29,8 @@ AGENTS.md.
 | Question                                   | Where                                   |
 | ------------------------------------------ | --------------------------------------- |
 | Commands, architecture, conventions, traps | AGENTS.md                               |
+| Architecture overview, memory, build times | `docs/architecture.md`                  |
+| Future ideas, rejected designs             | `docs/plan.md`                          |
 | MojoDEC ↔ PyDEC file mapping, differences  | README.md                               |
 | Expected example results                   | README.md, Examples table               |
 | Doc string style                           | `docs/writing-docs.md`                  |

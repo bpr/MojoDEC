@@ -116,7 +116,12 @@ maintainers, in `third_party/numojo-bugs.md`; add new ones there.
 
 ## Architecture
 
-Key design points that span several files:
+`docs/architecture.md` is the overview, with the complex's memory and
+build times. `docs/plan.md` lists future ideas and rejected designs;
+check it before proposing a design change. The complex caches nothing:
+operators other than `d`, `boundary`, and the stars are functions whose
+results the caller owns (caching Whitney sparsity was rejected, see the
+plan). Key design points that span several files:
 
 - **`SimplicialComplex`** (`core/simplicial_complex.mojo`) stores its
   `ComplexData` (mesh + one `SimplexLevel` per dimension) behind an

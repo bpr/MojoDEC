@@ -8,6 +8,11 @@ place of NumPy and its own sparse matrices in place of `scipy.sparse`.
   function, generated from the doc strings.
 - **[User guide](guide/index.md)**: the mathematics and use of
   orientation checks, homology, and time stepping.
+- **[Architecture](architecture.md)**: the layers, what a complex
+  stores and what it computes on demand, where build time and memory go,
+  and how parallel results stay equal to serial ones.
+- **[Plan](plan.md)**: ideas not yet done, with the measurements behind
+  them, and ideas rejected, with the reasons.
 - **[Writing doc strings](writing-docs.md)**: the format, and the checks
   that keep the reference complete.
 
