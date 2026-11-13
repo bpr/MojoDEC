@@ -135,7 +135,8 @@ Key design points that span several files:
   `__getattr__`; `compute_geometry=False` skips it for degenerate meshes.
   `simplex_array_boundary` builds `d` directly (k+1 entries per row) and
   `boundary` is its transpose. Circumcenters are closed-form up to
-  triangles; higher dimensions solve PyDEC's system with positions
+  triangles and for tetrahedra in 3D (cross products, each weight from
+  its own face's normal); other cases solve PyDEC's system with positions
   relative to the first vertex, and from triangles up the Cartesian center
   is built relative to it too (absolute positions lose precision far from
   the origin). Embedded volumes use Householder QR

@@ -536,7 +536,10 @@ the published mathematics:
   positions relative to a vertex, not absolute positions, which keeps
   their precision on meshes far from the origin; triangles use a closed
   form whose denominator, the squared area, also comes from QR, so even
-  slivers get their circumcenters. Barycentric gradients, and the Whitney
+  slivers get their circumcenters, and tetrahedra in 3D a closed form from
+  cross products, within 1e-11 circumradii of exact on tetrahedra
+  flattened to 1e-10 of their size (PyDEC's system, a Gram matrix,
+  squares the conditioning). Barycentric gradients, and the Whitney
   mass matrices built from them, come from the same QR rather than from
   the Gram matrix of the edges (`barycentric_gradients` in PyDEC), which
   squares a thin simplex's conditioning: for a triangle 1e-8 high, PyDEC's

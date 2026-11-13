@@ -310,3 +310,39 @@ On one thread the walk is 3.0–3.9× faster and `build` 0.57–0.77× of
 before; geometry on `tet_40` went from 690 to 355 ms, and circumcenters
 (155 ms) are now its largest piece. On all cores the walk is 2.1–2.9×
 faster and `build` 0.63–0.84×. Topology and Whitney are unchanged.
+
+## Closed-form circumcenters of tetrahedra
+
+Tetrahedra in 3D used to get their circumcenters from PyDEC's 5 × 5
+system `[[2 P Pᵀ, 1], [1ᵀ, 0]]`, solved with partial pivoting. They now
+use the closed form: with edges `a`, `b`, `c` from the first vertex and
+`D = a · (b × c)`, the center is the first vertex plus
+`(|a|² b × c + |b|² c × a + |c|² a × b) / 2D`, and the barycentric
+weights are its dot products with the face normals over `D`, vertex 0's
+from its own face's normal rather than as 1 minus the others. It is
+faster and much more accurate: the system's matrix is a Gram matrix,
+which squares a sliver's conditioning. Against exact rational
+arithmetic on 3000 random tetrahedra flattened down to 1e-10 of their
+size, the closed form's center was within 1e-11 circumradii throughout,
+the system's off by 3e-7 on the best-shaped ones and up to 30 on the
+thinnest. Tetrahedra in 4D and 5D keep the system.
+
+Triangles' circumcenters no longer allocate scratch for their QR on
+every triangle; their results are unchanged, bit for bit.
+
+The circumcenters, and from them the dual volumes and the diagonal
+Hodge stars, change in the last bits: at most 1.5e-14 of each level's
+largest dual volume on `tet_40`. On one thread, tetrahedra's
+circumcenters take 70 → 9.2 ms on `tet_40`, triangles' 73 → 49 ms on
+`tet_40` and 26 → 16 ms on `tri_400`. Best of 3 alternating rounds, in
+ms:
+
+| Mesh | geometry, 1 thread | geometry, all cores | build, 1 thread | build, all cores |
+|---|---:|---:|---:|---:|
+| `tet_40` | 355 → 271 | 109 → 90 | 446 → 362 | 140 → 122 |
+| `tet_40`, reordered | 367 → 284 | 100 → 79 | 460 → 377 | 143 → 127 |
+| `tet_40_shuffled` | 434 → 348 | 148 → 127 | 684 → 596 | 303 → 307 |
+| `tri_400` | 82 → 72 | 33 → 26 | 115 → 104 | 49 → 49 |
+
+On all cores, `build` is within its noise on `tet_40_shuffled` and
+`tri_400`, where topology dominates.

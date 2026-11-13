@@ -570,8 +570,9 @@ def test_thin_simplex_top_form_mass_is_inverse_volume() raises:
         try:
             sc = SimplicialComplex(P, T)
         except e:
-            # the circumcenter of a tetrahedron this thin can be beyond
-            # floating point (about 1 in 3000 with L / h from 1e8 to 1e10);
+            # the circumcenter of a tetrahedron this thin in 4 or 5
+            # dimensions can be beyond the general solver (about 1 in 3000
+            # with L / h from 1e8 to 1e10; in 3D the closed form has it);
             # the mass matrix does not need it, but the complex does
             assume("circumcenter: degenerate simplex" not in String(e))
             raise e^
