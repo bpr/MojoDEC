@@ -384,3 +384,52 @@ exact against QR's 7e-9), and the two agree to 5e-9, within the
 conditioning `eps L / h = 2e-8`; the test now checks the area against its
 exact value and the product to 1e-7.
 
+## Whitney matrices
+
+`whitney_innerproduct` loops over the top simplices, computing each
+one's barycentric gradients (Householder QR of its edges), the minors of
+their Gram matrix by Cauchy-Binet, and its local matrix as signed sums
+of those minors from a precomputed table; then it assembles the rows of
+the sparse matrix, each from the top simplices containing its face. Two
+changes, with the same matrices bit for bit:
+
+- **The element loop is unrolled** for triangles in 2D and 3D and
+  tetrahedra in 3D: the dimensions, the degree, and the face masks are
+  known at compile time, the small matrices stay on the stack, and the
+  general loop's arithmetic is kept operation for operation, with the
+  multiply-adds the compiler fused there written as explicit fused
+  multiply-adds. On `tet_40` with one thread it takes 15, 72, 74, and
+  55 ms for k = 0 to 3, against 50, 153, 155, and 101.
+- **Assembly writes the result directly.** It summed each row into a
+  scratch array of `fps` slots per term (two arrays of 110 MB for
+  `tet_40`, k = 1), then copied the rows into the result; faulting in
+  that fresh memory cost about as much as the summing. It now counts
+  each row's columns in one pass and writes the row into its place in a
+  second. Rows of up to 16 terms on average (triangles' edges, and
+  tetrahedra's triangles) keep their columns sorted by insertion, as
+  before; longer ones find a column's slot through a per-chunk array
+  indexed by column, where insertion would be quadratic.
+
+Best of 3 alternating rounds, in ms:
+
+| Mesh | k | 1 thread | all cores |
+|---|---|---:|---:|
+| `tet_40` | 0 | 96 → 55 | 23 → 21 |
+| | 1 | 266 → 186 | 70 → 46 |
+| | 2 | 206 → 137 | 50 → 32 |
+| | 3 | 100 → 54 | 13 → 6.8 |
+| `tet_40_shuffled` | 0 | 244 → 173 | 41 → 38 |
+| | 1 | 460 → 402 | 89 → 86 |
+| | 2 | 261 → 221 | 67 → 50 |
+| | 3 | 102 → 57 | 16 → 6.3 |
+| `tri_400` | 0 | 40 → 30 | 14 → 12 |
+| | 1 | 76 → 54 | 22 → 15 |
+| | 2 | 32 → 18 | 5.3 → 2.3 |
+| `tri_400_shuffled` | 0 | 107 → 114 | 25 → 27 |
+| | 1 | 121 → 117 | 34 → 29 |
+| | 2 | 36 → 21 | 6.7 → 2.8 |
+
+The exception is k = 0 on the shuffled triangles, 6% slower: with
+randomly numbered vertices a row's top simplices are scattered, and the
+two passes read them twice. `reorder_vertices` removes that case.
+

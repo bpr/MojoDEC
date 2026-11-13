@@ -12,6 +12,9 @@ matrix as a typed operator from primal k-cochains to dual (n-k)-cochains.
 """
 
 
+from std.math import sqrt
+from std.memory import stack_allocation
+
 from mojodec.core.parallel import chunk_scratch, num_chunks, parallel_ranges
 from mojodec.core.regular_cube_complex import RegularCubeComplex
 from mojodec.core.simplicial_complex import SimplicialComplex
@@ -287,10 +290,18 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
         length=num_chunks(num_top, SERIAL_BELOW), fill=-1
     )
     var badp = degenerate.unsafe_ptr()
+    var fixed = (p == 3 and dim == 3) or (p == 2 and (dim == 2 or dim == 3))
+    var formsp = forms.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    var setsp = sets.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    var maskp = face_mask.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
 
     def simplices(
         chunk: Int, lo: Int, hi: Int
     ) {
+        fixed,
+        formsp,
+        setsp,
+        maskp,
         k,
         p,
         dim,
@@ -332,6 +343,34 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
         var gidx = chunk_scratch[Int](size, 0)
         var gp = gidx.unsafe_ptr()
         for i in range(lo, hi):
+            # triangles in 2D and 3D and tetrahedra in 3D: the same
+            # arithmetic unrolled at compile time
+            if fixed:
+                var ok: Bool
+                var args = _ElementArgs(
+                    Xp.unsafe_origin_cast[MutUntrackedOrigin](),
+                    Sp.unsafe_origin_cast[MutUntrackedOrigin](),
+                    volp.unsafe_origin_cast[MutUntrackedOrigin](),
+                    scale_integration,
+                    tpp.unsafe_origin_cast[MutUntrackedOrigin](),
+                    tcp.unsafe_origin_cast[MutUntrackedOrigin](),
+                    formsp,
+                    setsp,
+                    maskp,
+                    facesp.unsafe_origin_cast[MutUntrackedOrigin](),
+                    datap.unsafe_origin_cast[MutUntrackedOrigin](),
+                    gp.unsafe_origin_cast[MutUntrackedOrigin](),
+                )
+                if p == 3:
+                    ok = _whitney_fixed[3, 3](k, i, args, d_indptr, d_indices)
+                elif dim == 3:
+                    ok = _whitney_fixed[2, 3](k, i, args, d_indptr, d_indices)
+                else:
+                    ok = _whitney_fixed[2, 2](k, i, args, d_indptr, d_indices)
+                if not ok:
+                    badp[unsafe_offset=chunk] = i
+                    return
+                continue
             gp[unsafe_offset=size - 1] = i
             for L in range(p, k, -1):
                 var ip = d_indptr[L - 1]
@@ -415,6 +454,274 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
     return _assemble(sc[k].num_simplices, num_k_faces, faces, data)
 
 
+comptime _FPtr = Pointer[Float64, MutUntrackedOrigin]
+comptime _NPtr = Pointer[Int, MutUntrackedOrigin]
+comptime _SPtr = Pointer[Scalar[DType.int], MutUntrackedOrigin]
+
+
+@fieldwise_init
+struct _ElementArgs(Copyable, Movable):
+    """The tables and buffers `_whitney_element` reads and writes."""
+
+    var X: _FPtr
+    """Vertex coordinates."""
+    var S: _SPtr
+    """Top simplices' vertex rows."""
+    var vol: _FPtr
+    """Top simplices' primal volumes."""
+    var scale: Float64
+    """`k!^2 / ((p + 2)(p + 1))`."""
+    var term_pair: _NPtr
+    """Entry `t`'s terms' indices into the table of pair determinants."""
+    var term_coef: _FPtr
+    """Entry `t`'s terms' coefficients."""
+    var forms: _NPtr
+    """The k-forms' vertex positions, `k` each."""
+    var sets: _NPtr
+    """The k-subsets of the frame's axes, `k` each."""
+    var face_mask: _NPtr
+    """Each k-face's mask of vertex positions."""
+    var faces: _NPtr
+    """Output: the k-face indices of each top simplex."""
+    var data: _FPtr
+    """Output: the local matrices."""
+    var gidx: _NPtr
+    """Scratch: global index of each face mask."""
+
+
+@always_inline
+def _whitney_fixed[
+    p: Int, dim: Int
+](
+    k: Int,
+    i: Int,
+    args: _ElementArgs,
+    d_indptr: List[_NPtr],
+    d_indices: List[_NPtr],
+) -> Bool:
+    """`_whitney_element` for the run-time degree `k`."""
+    comptime for kk in range(p + 1):
+        if k == kk:
+            return _whitney_element[p, dim, kk](i, args, d_indptr, d_indices)
+    return False
+
+
+@always_inline
+def _whitney_element[
+    p: Int, dim: Int, k: Int
+](
+    i: Int, args: _ElementArgs, d_indptr: List[_NPtr], d_indices: List[_NPtr]
+) -> Bool:
+    """Top simplex `i`'s k-faces and local mass matrix, as the general loop
+    of `whitney_innerproduct` computes them, with the dimensions known at
+    compile time: the loops unroll and the small matrices stay on the stack.
+    The arithmetic is the general loop's, operation for operation; the
+    multiply-adds the compiler fuses there (in `_householder_rows`, the back
+    substitution of `frame_dual_basis`, `_minor_det`, and the sums of pair
+    determinants and of terms) are explicit fused multiply-adds here, so the
+    results are the same bit for bit. Returns False for a degenerate
+    simplex."""
+    comptime w = p + 1
+    comptime size = 1 << w
+    comptime nkf = _binom(p + 1, k + 1)
+    comptime nfp = nkf * nkf
+    comptime nforms = _binom(p + 1, k)
+    comptime nsets = _binom(p, k)
+    comptime T = (k + 1) * (k + 1)
+    var gp = args.gidx
+    # the k-faces, from the rows of d, as the general loop finds them
+    gp[unsafe_offset=size - 1] = i
+    comptime for jj in range(p - k):
+        comptime L = p - jj
+        var ip = d_indptr[L - 1]
+        var ix = d_indices[L - 1]
+        comptime for M in range(size):
+            comptime if _bit_count(M) == L + 1:
+                var base = ip[unsafe_offset=gp[unsafe_offset=M]]
+                comptime for q in range(L + 1):
+                    comptime face = M ^ (1 << _nth_bit(M, L - q))
+                    gp[unsafe_offset=face] = ix[unsafe_offset=base + q]
+    comptime for a in range(nkf):
+        args.faces[unsafe_offset=i * nkf + a] = gp[
+            unsafe_offset=args.face_mask[unsafe_offset=a]
+        ]
+    var dets = stack_allocation[nforms * nforms, DType.float64]()
+    comptime if k == 0:
+        dets[unsafe_offset=0] = 1.0
+    else:
+        # edges from vertex 0, then Householder QR as _householder_rows
+        var A = stack_allocation[p * dim, DType.float64]()
+        var v0 = Int(args.S[unsafe_offset=i * w])
+        comptime for r in range(p):
+            var v = Int(args.S[unsafe_offset=i * w + r + 1])
+            comptime for c in range(dim):
+                A[unsafe_offset=r * dim + c] = (
+                    args.X[unsafe_offset=v * dim + c]
+                    - args.X[unsafe_offset=v0 * dim + c]
+                )
+        var diag = stack_allocation[p, DType.float64]()
+        comptime for j in range(p):
+            var norm2: Float64 = 0
+            comptime for c in range(j, dim):
+                var x = A[unsafe_offset=j * dim + c]
+                norm2 = x.fma(x, norm2)
+            var norm = sqrt(norm2)
+            if norm == 0:
+                return False
+            var x0 = A[unsafe_offset=j * dim + j]
+            var alpha = -norm if x0 >= 0 else norm
+            diag[unsafe_offset=j] = alpha
+            A[unsafe_offset=j * dim + j] = x0 - alpha
+            var vv: Float64 = 0
+            comptime for c in range(j, dim):
+                var x = A[unsafe_offset=j * dim + c]
+                vv = x.fma(x, vv)
+            comptime for l in range(j + 1, p):
+                var dot: Float64 = 0
+                comptime for c in range(j, dim):
+                    dot = A[unsafe_offset=j * dim + c].fma(
+                        A[unsafe_offset=l * dim + c], dot
+                    )
+                var f = 2 * dot / vv
+                comptime for c in range(j, dim):
+                    A[unsafe_offset=l * dim + c] = (-f).fma(
+                        A[unsafe_offset=j * dim + c],
+                        A[unsafe_offset=l * dim + c],
+                    )
+        # R^-1 by back substitution, as frame_dual_basis
+        var Rinv = stack_allocation[p * p, DType.float64]()
+        comptime for c in range(p):
+            comptime for ii in range(p):
+                comptime r = p - 1 - ii
+                comptime if r <= c:
+                    var t: Float64 = 1 if r == c else 0
+                    comptime for kk in range(r + 1, c + 1):
+                        t = (-A[unsafe_offset=kk * dim + r]).fma(
+                            Rinv[unsafe_offset=kk * p + c], t
+                        )
+                    Rinv[unsafe_offset=r * p + c] = t / diag[unsafe_offset=r]
+                else:
+                    Rinv[unsafe_offset=r * p + c] = 0
+        # the gradients in the frame: rows 1..p of R^-1, row 0 minus their sum
+        var D = stack_allocation[(p + 1) * p, DType.float64]()
+        comptime for c in range(p):
+            var t: Float64 = 0
+            comptime for r in range(p):
+                var g = Rinv[unsafe_offset=r * p + c]
+                D[unsafe_offset=(r + 1) * p + c] = g
+                t += g
+            D[unsafe_offset=c] = -t
+        var minors = stack_allocation[nforms * nsets, DType.float64]()
+        comptime for a in range(nforms):
+            comptime for q in range(nsets):
+                minors[unsafe_offset=a * nsets + q] = _minor_fixed[p, k](
+                    D, args.forms, a * k, args.sets, q * k
+                )
+        comptime for a in range(nforms):
+            comptime for b in range(a, nforms):
+                var det: Float64 = 0
+                comptime for q in range(nsets):
+                    det = minors[unsafe_offset=a * nsets + q].fma(
+                        minors[unsafe_offset=b * nsets + q], det
+                    )
+                dets[unsafe_offset=a * nforms + b] = det
+                dets[unsafe_offset=b * nforms + a] = det
+    var weight = abs(args.vol[unsafe_offset=i]) * args.scale
+    comptime for t in range(nfp):
+        var s: Float64 = 0
+        comptime for q in range(T):
+            s = args.term_coef[unsafe_offset=t * T + q].fma(
+                dets[unsafe_offset=args.term_pair[unsafe_offset=t * T + q]], s
+            )
+        args.data[unsafe_offset=i * nfp + t] = s * weight
+    return True
+
+
+@always_inline
+def _minor_fixed[
+    p: Int, k: Int
+](D: _FPtr, rows: _NPtr, r0: Int, cols: _NPtr, c0: Int) -> Float64:
+    """`_minor_det` of the `(p + 1) x p` gradients `D` for a degree `k`
+    known at compile time, with its fused multiply-adds explicit."""
+
+    @always_inline
+    def g(a: Int, b: Int) {D, rows, r0, cols, c0} -> Float64:
+        return D[
+            unsafe_offset=rows[unsafe_offset=r0 + a] * p
+            + cols[unsafe_offset=c0 + b]
+        ]
+
+    comptime if k == 1:
+        return g(0, 0)
+    elif k == 2:
+        return g(0, 0).fma(g(1, 1), -(g(0, 1) * g(1, 0)))
+    else:
+        var work = stack_allocation[k * k, DType.float64]()
+        comptime for a in range(k):
+            comptime for b in range(k):
+                work[unsafe_offset=a * k + b] = g(a, b)
+        var det: Float64 = 1
+        comptime for c in range(k):
+            var piv = c
+            comptime for r in range(c + 1, k):
+                if abs(work[unsafe_offset=r * k + c]) > abs(
+                    work[unsafe_offset=piv * k + c]
+                ):
+                    piv = r
+            var pv = work[unsafe_offset=piv * k + c]
+            if pv == 0:
+                return 0
+            if piv != c:
+                det = -det
+                comptime for b in range(k):
+                    var t = work[unsafe_offset=c * k + b]
+                    work[unsafe_offset=c * k + b] = work[
+                        unsafe_offset=piv * k + b
+                    ]
+                    work[unsafe_offset=piv * k + b] = t
+            det *= pv
+            comptime for r in range(c + 1, k):
+                var f = work[unsafe_offset=r * k + c] / pv
+                comptime for b in range(c + 1, k):
+                    work[unsafe_offset=r * k + b] = (-f).fma(
+                        work[unsafe_offset=c * k + b],
+                        work[unsafe_offset=r * k + b],
+                    )
+        return det
+
+
+def _binom(n: Int, r: Int) -> Int:
+    """`C(n, r)`, 1 when `r <= 0` (as `combinations` yields one empty
+    combination)."""
+    if r <= 0:
+        return 1
+    if r > n:
+        return 1
+    var c = 1
+    for j in range(r):
+        c = c * (n - j) // (j + 1)
+    return c
+
+
+def _bit_count(M: Int) -> Int:
+    """The number of set bits of `M`."""
+    var c = 0
+    for j in range(64):
+        c += (M >> j) & 1
+    return c
+
+
+def _nth_bit(M: Int, r: Int) -> Int:
+    """The position of the `r`-th lowest set bit of `M`."""
+    var c = 0
+    for j in range(64):
+        if (M >> j) & 1 == 1:
+            if c == r:
+                return j
+            c += 1
+    return -1
+
+
 def _assemble(
     N: Int, fps: Int, faces: List[Int], values: List[Float64]
 ) raises -> CSRMatrix:
@@ -448,52 +755,74 @@ def _assemble(
         var at = np[unsafe_offset=r]
         ip[unsafe_offset=at] = e
         np[unsafe_offset=r] = at + 1
-    # Row r has at most fps entries per top simplex: assemble it into
-    # slots fps * start[r] ..., sorted by column, then compact. Terms are
-    # taken in increasing s, as from_coo's stable sort orders them.
-    # (only the slots a row fills are read, and every count is written)
-    var cols = List[Int](unsafe_uninit_length=num_top * fps * fps)
-    var vals = List[Float64](unsafe_uninit_length=num_top * fps * fps)
+    # Two passes over the rows, in parallel: the first counts each row's
+    # distinct columns, the second sums its entries and writes them, sorted
+    # by column, straight into the result; the terms of each entry are
+    # added in increasing s, as from_coo's stable sort orders them. Rows
+    # of 16 terms or fewer on average keep their columns sorted by
+    # insertion; longer rows (k = 0, and edges in 3D) find a column's slot
+    # through a per-chunk array `slot[c]` (-1 when the column is not in the
+    # row) and sort once at the end, where insertion would be quadratic.
+    var short_rows = num_top * fps * fps <= 16 * N
+    var max_terms = 0
+    for r in range(N):
+        max_terms = max(
+            max_terms, (sp[unsafe_offset=r + 1] - sp[unsafe_offset=r]) * fps
+        )
     var counts = List[Int](unsafe_uninit_length=N)
-    var cp = cols.unsafe_ptr()
-    var valp = vals.unsafe_ptr()
     var cnp = counts.unsafe_ptr()
+    comptime SERIAL_BELOW = 4096
 
-    def rows(chunk: Int, lo: Int, hi: Int) {fps, fp, vp, sp, ip, cp, valp, cnp}:
+    def count_rows(
+        chunk: Int, lo: Int, hi: Int
+    ) {N, fps, fp, sp, ip, cnp, max_terms}:
+        var slot = chunk_scratch[Int32](N, -1)
+        var cols = chunk_scratch[Int](max_terms, 0)
+        var slp = slot.unsafe_ptr()
+        var cp = cols.unsafe_ptr()
         for r in range(lo, hi):
-            var base = sp[unsafe_offset=r] * fps
             var n = 0
             for j in range(sp[unsafe_offset=r], sp[unsafe_offset=r + 1]):
-                var e = ip[unsafe_offset=j]
-                var s = e // fps
+                var s = ip[unsafe_offset=j] // fps
                 for b in range(fps):
                     var c = fp[unsafe_offset=s * fps + b]
-                    var v = vp[unsafe_offset=e * fps + b]
-                    # find c among the n sorted columns so far
+                    if slp[unsafe_offset=c] < 0:
+                        slp[unsafe_offset=c] = Int32(n)
+                        cp[unsafe_offset=n] = c
+                        n += 1
+            cnp[unsafe_offset=r] = n
+            for t in range(n):
+                slp[unsafe_offset=cp[unsafe_offset=t]] = -1
+
+    def count_rows_short(
+        chunk: Int, lo: Int, hi: Int
+    ) {fps, fp, sp, ip, cnp, max_terms}:
+        var cols = chunk_scratch[Int](max_terms, 0)
+        var cp = cols.unsafe_ptr()
+        for r in range(lo, hi):
+            # the row's distinct columns, kept sorted (rows are short)
+            var n = 0
+            for j in range(sp[unsafe_offset=r], sp[unsafe_offset=r + 1]):
+                var s = ip[unsafe_offset=j] // fps
+                for b in range(fps):
+                    var c = fp[unsafe_offset=s * fps + b]
                     var at = n
-                    while at > 0 and cp[unsafe_offset=base + at - 1] > c:
+                    while at > 0 and cp[unsafe_offset=at - 1] > c:
                         at -= 1
-                    if at > 0 and cp[unsafe_offset=base + at - 1] == c:
-                        valp[unsafe_offset=base + at - 1] = (
-                            valp[unsafe_offset=base + at - 1] + v
-                        )
+                    if at > 0 and cp[unsafe_offset=at - 1] == c:
                         continue
                     var m = n
                     while m > at:
-                        cp[unsafe_offset=base + m] = cp[
-                            unsafe_offset=base + m - 1
-                        ]
-                        valp[unsafe_offset=base + m] = valp[
-                            unsafe_offset=base + m - 1
-                        ]
+                        cp[unsafe_offset=m] = cp[unsafe_offset=m - 1]
                         m -= 1
-                    cp[unsafe_offset=base + at] = c
-                    valp[unsafe_offset=base + at] = v
+                    cp[unsafe_offset=at] = c
                     n += 1
             cnp[unsafe_offset=r] = n
 
-    comptime SERIAL_BELOW = 4096
-    parallel_ranges(N, SERIAL_BELOW, rows)
+    if short_rows:
+        parallel_ranges(N, SERIAL_BELOW, count_rows_short)
+    else:
+        parallel_ranges(N, SERIAL_BELOW, count_rows)
     var indptr = List[Int](unsafe_uninit_length=N + 1)
     indptr[0] = 0
     var pp = indptr.unsafe_ptr()
@@ -505,20 +834,89 @@ def _assemble(
     var ixp = indices.unsafe_ptr()
     var dp = data.unsafe_ptr()
 
-    def compact(chunk: Int, lo: Int, hi: Int) {fps, sp, cp, valp, pp, ixp, dp}:
+    def fill_rows(
+        chunk: Int, lo: Int, hi: Int
+    ) {N, fps, fp, vp, sp, ip, pp, ixp, dp, max_terms}:
+        var slot = chunk_scratch[Int32](N, -1)
+        var cols = chunk_scratch[Int](max_terms, 0)
+        var vals = chunk_scratch[Float64](max_terms, 0)
+        var slp = slot.unsafe_ptr()
+        var cp = cols.unsafe_ptr()
+        var vlp = vals.unsafe_ptr()
         for r in range(lo, hi):
-            var src = sp[unsafe_offset=r] * fps
+            var n = 0
+            for j in range(sp[unsafe_offset=r], sp[unsafe_offset=r + 1]):
+                var e = ip[unsafe_offset=j]
+                var s = e // fps
+                for b in range(fps):
+                    var c = fp[unsafe_offset=s * fps + b]
+                    var v = vp[unsafe_offset=e * fps + b]
+                    var at = Int(slp[unsafe_offset=c])
+                    if at < 0:
+                        slp[unsafe_offset=c] = Int32(n)
+                        cp[unsafe_offset=n] = c
+                        vlp[unsafe_offset=n] = v
+                        n += 1
+                    else:
+                        vlp[unsafe_offset=at] = vlp[unsafe_offset=at] + v
+            for t in range(n):
+                slp[unsafe_offset=cp[unsafe_offset=t]] = -1
+            # sort the row by column (insertion: rows are short) into place
             var dst = pp[unsafe_offset=r]
-            for j in range(pp[unsafe_offset=r + 1] - dst):
-                ixp[unsafe_offset=dst + j] = cp[unsafe_offset=src + j]
-                dp[unsafe_offset=dst + j] = valp[unsafe_offset=src + j]
+            for t in range(n):
+                var c = cp[unsafe_offset=t]
+                var v = vlp[unsafe_offset=t]
+                var at = t
+                while at > 0 and ixp[unsafe_offset=dst + at - 1] > c:
+                    ixp[unsafe_offset=dst + at] = ixp[
+                        unsafe_offset=dst + at - 1
+                    ]
+                    dp[unsafe_offset=dst + at] = dp[unsafe_offset=dst + at - 1]
+                    at -= 1
+                ixp[unsafe_offset=dst + at] = c
+                dp[unsafe_offset=dst + at] = v
 
-    parallel_ranges(N, SERIAL_BELOW, compact)
+    def fill_rows_short(
+        chunk: Int, lo: Int, hi: Int
+    ) {fps, fp, vp, sp, ip, pp, ixp, dp}:
+        for r in range(lo, hi):
+            # insert into the row's place in the result, sorted by column
+            var base = pp[unsafe_offset=r]
+            var n = 0
+            for j in range(sp[unsafe_offset=r], sp[unsafe_offset=r + 1]):
+                var e = ip[unsafe_offset=j]
+                var s = e // fps
+                for b in range(fps):
+                    var c = fp[unsafe_offset=s * fps + b]
+                    var v = vp[unsafe_offset=e * fps + b]
+                    var at = n
+                    while at > 0 and ixp[unsafe_offset=base + at - 1] > c:
+                        at -= 1
+                    if at > 0 and ixp[unsafe_offset=base + at - 1] == c:
+                        dp[unsafe_offset=base + at - 1] = (
+                            dp[unsafe_offset=base + at - 1] + v
+                        )
+                        continue
+                    var m = n
+                    while m > at:
+                        ixp[unsafe_offset=base + m] = ixp[
+                            unsafe_offset=base + m - 1
+                        ]
+                        dp[unsafe_offset=base + m] = dp[
+                            unsafe_offset=base + m - 1
+                        ]
+                        m -= 1
+                    ixp[unsafe_offset=base + at] = c
+                    dp[unsafe_offset=base + at] = v
+                    n += 1
+
+    if short_rows:
+        parallel_ranges(N, SERIAL_BELOW, fill_rows_short)
+    else:
+        parallel_ranges(N, SERIAL_BELOW, fill_rows)
     _ = start^
     _ = incidence^
     _ = next^
-    _ = cols^
-    _ = vals^
     _ = counts^
     # canonical by construction (sorted, no duplicates)
     var A = CSRMatrix(N, N)

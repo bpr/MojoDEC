@@ -347,7 +347,14 @@ a block of outputs and adds only to those, in the serial order (dual
 volumes: faces by first vertex id, which can exceed the number of
 0-simplices when vertices are unused; `whitney_innerproduct`: matrix rows,
 each summed over its top simplices in increasing order, as `from_coo`
-would). Ownership by vertex blocks assumes the vertex numbering is
+would, in two passes, one counting each row's columns and one writing
+them straight into the result; short rows, up to 16 terms on average,
+keep their columns sorted by insertion, longer ones find a column's
+slot through a per-chunk marker array). `whitney_innerproduct`'s element loop for
+triangles in 2D and 3D and tetrahedra in 3D is `_whitney_element`,
+unrolled at compile time with the general loop's arithmetic and its
+fused multiply-adds explicit, the same bits (check a change by hashing
+every k's matrix against the committed build). Ownership by vertex blocks assumes the vertex numbering is
 spatially coherent: with randomly numbered vertices a tetrahedron touches
 3.6 blocks instead of 1.4 and the 3D walk on all cores takes 2.6× as long
 (`tet_40_shuffled` in `benchmarks/compare`), and every loop in face order

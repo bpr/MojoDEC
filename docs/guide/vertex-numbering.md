@@ -67,7 +67,7 @@ ms:
 | | grid order | Morton | Hilbert |
 |---|---:|---:|---:|
 | topology | 127 | 130 | 140 |
-| Whitney k = 0 | 95 | 127 | 152 |
+| Whitney k = 0 | 55 | 74 | 91 |
 | build | 295 | 314 | 321 |
 
 The two curves walk each tetrahedron in the dual walk equally often
@@ -132,19 +132,19 @@ i7-10875H (8 cores, 16 threads), in ms:
 | dual walk, all cores | 34 | 90 | 26 |
 | topology, 1 thread | 126 | 284 | 130 |
 | topology, all cores | 64 | 180 | 63 |
-| Whitney k = 0, 1 thread | 95 | 240 | 127 |
-| Whitney k = 1, 1 thread | 264 | 451 | 277 |
+| Whitney k = 0, 1 thread | 55 | 173 | 74 |
+| Whitney k = 1, 1 thread | 186 | 402 | 203 |
 
 | `tri_400` | grid order | shuffled | reordered |
 |---|---:|---:|---:|
 | build, 1 thread | 93 | 205 | 96 |
 | build, all cores | 50 | 121 | 48 |
-| Whitney k = 0, 1 thread | 39 | 107 | 42 |
+| Whitney k = 0, 1 thread | 30 | 114 | 34 |
 
 Reordering brings a shuffled mesh back to the speed of the grid's own
 numbering, and the 3D dual walk on all cores below it (26 against 34 ms,
 from the fewer revisits). It takes 30–40 ms, against 227 ms saved in a
-one-thread build of `tet_40_shuffled` and 113–174 ms in each Whitney
+one-thread build of `tet_40_shuffled` and 99–199 ms in each Whitney
 matrix.
 [Performance](performance.md#shuffled-vertex-numbers) has the full
 comparison.
