@@ -433,3 +433,115 @@ The exception is k = 0 on the shuffled triangles, 6% slower: with
 randomly numbered vertices a row's top simplices are scattered, and the
 two passes read them twice. `reorder_vertices` removes that case.
 
+
+## Topology
+
+`SimplicialComplex(V, E, compute_geometry=False)` builds every level's
+faces, `d`, and boundary matrix. Before the changes below, on `tet_40`
+it took 127 ms on one thread and 66 on all cores, 106 and 46 of them in
+the three bucket sorts (`_boundary_by_buckets`) and the rest in serial
+setup. Each change keeps every level's simplices, parities, `d`,
+boundary, and sort order equal to the last bit. That was checked by
+hashing them on `tet_40`, `tri_400`, and their shuffled versions, on one
+thread and on all cores.
+
+- **No pass sorting `d`'s rows.** A sorted simplex's faces come in
+  decreasing lexicographic order of the vertex left out. Leaving out a
+  later vertex leaves the smaller vertex at the first place the two
+  faces differ. So the face without vertex i is entry K − 1 − i of the
+  simplex's row in `d`. The pass over the sorted runs writes `d`'s
+  column indices in place, and its values (±1, by the simplex's
+  orientation and i) are written in simplex order. This replaced an
+  array of one face index per occurrence and a pass that sorted each
+  row.
+- **Faces and signs from the keys.** Each occurrence's packed key also
+  carries the sign of its boundary entry in its lowest bit. The pass
+  over the runs reads the face's vertices and the sign from the key, so
+  it never reads the simplices or their parities at random.
+- **Counters only for a chunk's band.** Each chunk used to count
+  occurrences in an array over all vertices. On `tri_400` that is 16 ×
+  160,801 entries, 20 MB per level, zeroed and then summed across chunks:
+  9 of the 23 ms of the bucket sorts on all cores. A chunk's rows only
+  reach the buckets from their smallest first vertex to their largest
+  second vertex. That band is narrow when the numbering is spatially
+  coherent, and now only it is counted. With a single chunk the band is
+  every vertex, and it is not computed.
+- **Unrolled for rows of 2–4 vertices.** The pass that scatters
+  occurrences into buckets, the pass over the runs, and `d`'s values
+  are compiled for each row width, without inner loops over a runtime
+  width. On `tet_40` with one thread, the unrolled scatter saved 17 ms
+  and the runs 10. `d`'s values, together with skipping the band on a
+  single chunk, saved 6.
+- **No sort for edges.** When the faces are vertices, each bucket is one
+  face, and its occurrences arrive in order.
+- **Serial setup.** Several steps ran serially or repeated work:
+  - `SimplicialComplex(V, E)` copied the mesh twice;
+  - `SimplicialMesh` checked the vertex numbers with scalar min and max
+    passes;
+  - every level's constructor checked serially whether its rows were
+    sorted, though faces are sorted by construction and
+    `require_distinct_simplices` had already checked the top level;
+  - the orientation check ran serially;
+  - each level scanned for its largest vertex number serially.
+
+  Now one SIMD pass copies the elements and checks their range (3.3 →
+  1.2 ms), the top level reuses the distinctness check's answer, and
+  the orientation check and the largest-vertex scan run in parallel.
+- **Elements out of order.** When the elements are not in lexicographic
+  order, as in the shuffled meshes and in most mesh files,
+  `require_distinct_simplices` sorted them by an LSD radix sort. Its
+  four passes read rows at random: 53 ms on `tet_40_shuffled`. It then
+  scanned the sorted rows for repeats, and the top level sorted them a
+  second time for its `_order`. Now `lexsort_rows` does a counting sort
+  by the first vertex, then sorts each run of equal first vertices by
+  insertion, in parallel (by merging past 32 rows). It finds repeated
+  rows as it goes, and its order becomes `_order`: 53 → 9 ms on all
+  cores.
+
+Best of 5 alternating rounds against the committed build (`7651d47`),
+in ms:
+
+| Mesh | | topology, 1 thread | topology, all cores | build, 1 thread | build, all cores |
+|---|---|---:|---:|---:|---:|
+| `tet_40` | old | 127.0 | 61.4 | 292.2 | 117.8 |
+| | new | 73.6 (0.58×) | 40.1 (0.65×) | 241.9 (0.83×) | 94.0 (0.80×) |
+| `tet_40_shuffled` | old | 293.3 | 186.9 | 533.8 | 276.3 |
+| | new | 122.0 (0.42×) | 58.8 (0.31×) | 365.9 (0.69×) | 147.4 (0.53×) |
+| `tri_400` | old | 47.8 | 33.2 | 92.5 | 49.0 |
+| | new | 27.8 (0.58×) | 19.2 (0.58×) | 75.5 (0.82×) | 33.8 (0.69×) |
+| `tri_400_shuffled` | old | 131.4 | 95.0 | 205.1 | 124.5 |
+| | new | 54.7 (0.42×) | 35.1 (0.37×) | 127.0 (0.62×) | 56.8 (0.46×) |
+
+**The benchmark's separate geometry phase reads slower.** On `tri_400`
+it is 1.10× on one thread and 1.23× on all cores, though the geometry
+code did not change. That phase times `compute_geometry` on a complex
+built while the previous one is still alive. In the same binary,
+`compute_geometry` takes 32 ms that way and 16 ms on a freshly built
+complex, before and after the change. Inside `build`, which is what a
+program pays, geometry takes about 17 ms both before and after (build
+minus topology).
+
+**Tried and not kept:**
+
+- **32-bit rank sort.** The bucket sort's ranking was rewritten on
+  32-bit keys, 8 per SIMD vector, holding the face's vertices relative
+  to the bucket's smallest and the key's position. The keys arrive in
+  occurrence order, so position breaks ties correctly. It saved at most
+  3% on one thread and nothing on all cores. In the level 2 bucket
+  sort on `tet_40`, ranking takes about 11 of 16 ms, about 13 cycles
+  per key, however the comparisons are arranged.
+- **A separate array for the first face.** A row's face without its
+  first vertex is in another bucket than its other faces, often one
+  owned by another thread. Writing it to its own array and copying it
+  into `d` in the pass over rows was slower in 7 of the 8 timings
+  above.
+
+**What is left.**
+
+- **One thread, `tet_40` (about 74 ms):** the bucket sorts take about
+  26 ms, the passes over the runs 14, the scatter 8, counting 4, `d`'s
+  values 4, and the serial setup about 8.
+- **All cores (about 40 ms):** the passes write the complex's 229 MB
+  of topology, and they stop scaling early. The pass over the runs at
+  level 2 takes the same time on 2 threads as on 16, so it is limited
+  by memory bandwidth.

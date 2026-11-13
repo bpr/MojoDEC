@@ -388,9 +388,9 @@ def lexsort_rows(a: IntArray) -> List[Int]:
 
     Equivalent to NumPy's `lexsort(a.T[::-1])`: the first column is the
     primary key. When the entries span a range not much larger than the
-    number of rows, as vertex ids in a simplex array do, this is a radix
-    sort (a counting sort per column, last column first); otherwise a merge
-    sort.
+    number of rows, as vertex ids in a simplex array do, this is a counting
+    sort by the first column, then a sort of each run of equal first
+    entries by the other columns, in parallel; otherwise a merge sort.
 
     Args:
         a: A 2-D integer array.
@@ -398,26 +398,37 @@ def lexsort_rows(a: IntArray) -> List[Int]:
     Returns:
         The row indices of `a` in sorted order.
     """
+    var duplicate = 0
+    return _lexsort_rows(a, duplicate)
+
+
+def _lexsort_rows(a: IntArray, mut duplicate: Int) -> List[Int]:
+    """`lexsort_rows`, also setting `duplicate` to the first position `t`
+    of the sorted order whose row equals the one before, -1 if there is
+    none, or -2 if it was not looked for (the merge sort's case)."""
+    duplicate = -1
     var n = rows_of(a)
     var perm = List[Int](capacity=n)
     for i in range(n):
         perm.append(i)
     if n < 2 or a.size == 0:
         return perm^
-    var lo = Int(a.unsafe_get(0))
+    var ap = a.unsafe_ptr()
+    var lo = Int(ap[unsafe_offset=0])
     var hi = lo
     for i in range(1, a.size):
-        var x = Int(a.unsafe_get(i))
+        var x = Int(ap[unsafe_offset=i])
         lo = min(lo, x)
         hi = max(hi, x)
     # hi - lo can overflow when lo < 0; lo + span cannot
     var span = 4 * n + 1024
     var narrow = hi - lo <= span if lo >= 0 else hi <= lo + span
     if narrow:
-        _radix_sort_rows(a, perm, lo, hi - lo + 1)
+        duplicate = _bucket_sort_rows(a, perm, lo, hi - lo + 1)
     else:
         var scratch = List[Int](length=n, fill=0)
         _merge_sort_rows(a, perm, scratch, 0, n)
+        duplicate = -2
     return perm^
 
 
@@ -496,6 +507,15 @@ def require_distinct_simplices(sorted_rows: IntArray, who: String) raises:
         If a simplex repeats a vertex, or two simplices have the same
         vertices (in any order).
     """
+    _ = _distinct_simplices_order(sorted_rows, who)
+
+
+def _distinct_simplices_order(
+    sorted_rows: IntArray, who: String
+) raises -> List[Int]:
+    """`require_distinct_simplices`, returning the rows' lexicographic order:
+    empty when the rows are already in increasing order, else
+    `lexsort_rows(sorted_rows)`."""
     var r = rows_of(sorted_rows)
     var c = cols_of(sorted_rows)
     # one pass, in parallel chunks: the first row of each chunk that
@@ -545,21 +565,40 @@ def require_distinct_simplices(sorted_rows: IntArray, who: String) raises:
         if unordered[k]:
             sorted = False
     if sorted:
-        return
-    var order = lexsort_rows(sorted_rows)
-    for t in range(1, r):
-        var a = order[t - 1]
-        var b = order[t]
-        var same = True
-        for j in range(c):
-            if iget(sorted_rows, a, j) != iget(sorted_rows, b, j):
-                same = False
-                break
-        if same:
+        return List[Int]()
+    var duplicate = 0
+    var order = _lexsort_rows(sorted_rows, duplicate)
+    if duplicate == -1:
+        return order^
+    # neighbors in sorted order with the same vertices: each chunk's first
+    var op = order.unsafe_ptr()
+    var firsts = List[Int](length=chunks, fill=-1)
+    var fp = firsts.unsafe_ptr()
+
+    def pairs(chunk: Int, lo: Int, hi: Int) {sp, op, fp, c}:
+        for t in range(max(lo, 1), hi):
+            var a = op[unsafe_offset=t - 1] * c
+            var b = op[unsafe_offset=t] * c
+            var same = True
+            for j in range(c):
+                if sp[unsafe_offset=a + j] != sp[unsafe_offset=b + j]:
+                    same = False
+                    break
+            if same:
+                fp[unsafe_offset=chunk] = t
+                return
+
+    parallel_ranges(r, SERIAL_BELOW, pairs)
+    for k in range(chunks):
+        var t = firsts[k]
+        if t >= 0:
+            var a = order[t - 1]
+            var b = order[t]
             raise Error(
                 String(who, ": simplices ", min(a, b), " and ", max(a, b))
                 + " have the same vertices"
             )
+    return order^
 
 
 def unique_sorted_rows(a: IntArray) raises -> IntArray:
@@ -581,6 +620,77 @@ def unique_sorted_rows(a: IntArray) raises -> IntArray:
     return take_int_rows(a, keep)
 
 
+def _copy_with_bounds(a: IntArray, mut lo: Int, mut hi: Int) raises -> IntArray:
+    """A copy of the non-empty array `a`, setting `lo` and `hi` to its
+    smallest and largest entries: one pass, in SIMD, and in parallel for
+    large arrays."""
+    if not a.flags.C_CONTIGUOUS:
+        lo = min_entry(a)
+        hi = max_entry(a)
+        return a.copy()
+    var out = IntArray(a.shape)
+    _scan_bounds[True](a, out, lo, hi)
+    return out^
+
+
+def _bounds(a: IntArray, mut lo: Int, mut hi: Int) raises:
+    """Set `lo` and `hi` to the smallest and largest entries of the
+    non-empty array `a`, in SIMD, and in parallel for large arrays."""
+    if not a.flags.C_CONTIGUOUS:
+        lo = min_entry(a)
+        hi = max_entry(a)
+        return
+    var unused = IntArray(Shape(0))
+    _scan_bounds[False](a, unused, lo, hi)
+
+
+def _scan_bounds[
+    copy: Bool
+](a: IntArray, mut out: IntArray, mut lo: Int, mut hi: Int):
+    """The range of the contiguous array `a`, also copied into `out` when
+    `copy` is set."""
+    var n = a.size
+    var src = a.unsafe_ptr()
+    var dst = out.unsafe_ptr()
+    comptime SERIAL_BELOW = 1 << 18
+    var chunks = num_chunks(n, SERIAL_BELOW)
+    var los = List[Int](length=chunks, fill=Int.MAX)
+    var his = List[Int](length=chunks, fill=Int.MIN)
+    var lp = los.unsafe_ptr()
+    var hp = his.unsafe_ptr()
+
+    def body(chunk: Int, start: Int, end: Int) {src, dst, lp, hp}:
+        comptime W = 4
+        var mn = SIMD[DType.int, W](Int.MAX)
+        var mx = SIMD[DType.int, W](Int.MIN)
+        var i = start
+        while i + W <= end:
+            var x = src.unsafe_load[width=W](i)
+            comptime if copy:
+                dst.unsafe_store(i, x)
+            mn = min(mn, x)
+            mx = max(mx, x)
+            i += W
+        var m0 = Int(mn.reduce_min())
+        var m1 = Int(mx.reduce_max())
+        while i < end:
+            var x = src[unsafe_offset=i]
+            comptime if copy:
+                dst[unsafe_offset=i] = x
+            m0 = min(m0, Int(x))
+            m1 = max(m1, Int(x))
+            i += 1
+        lp[unsafe_offset=chunk] = m0
+        hp[unsafe_offset=chunk] = m1
+
+    parallel_ranges(n, SERIAL_BELOW, body)
+    lo = Int.MAX
+    hi = Int.MIN
+    for c in range(chunks):
+        lo = min(lo, los[c])
+        hi = max(hi, his[c])
+
+
 def max_entry(a: IntArray) -> Int:
     """Largest entry of a non-empty integer array.
 
@@ -590,9 +700,10 @@ def max_entry(a: IntArray) -> Int:
     Returns:
         The largest entry.
     """
-    var m = Int(a.unsafe_get(0))
+    var ap = a.unsafe_ptr()
+    var m = Int(ap[unsafe_offset=0])
     for i in range(1, a.size):
-        m = max(m, Int(a.unsafe_get(i)))
+        m = max(m, Int(ap[unsafe_offset=i]))
     return m
 
 
@@ -605,9 +716,10 @@ def min_entry(a: IntArray) -> Int:
     Returns:
         The smallest entry.
     """
-    var m = Int(a.unsafe_get(0))
+    var ap = a.unsafe_ptr()
+    var m = Int(ap[unsafe_offset=0])
     for i in range(1, a.size):
-        m = min(m, Int(a.unsafe_get(i)))
+        m = min(m, Int(ap[unsafe_offset=i]))
     return m
 
 
@@ -939,29 +1051,105 @@ def _householder_rows(
 # ===----------------------------------------------------------------------=== #
 
 
-def _radix_sort_rows(a: IntArray, mut perm: List[Int], lo: Int, span: Int):
-    """Stable LSD radix sort of `perm` by the rows of `a`, whose entries lie
-    in `[lo, lo + span)`."""
+def _bucket_sort_rows(
+    a: IntArray, mut perm: List[Int], lo: Int, span: Int
+) -> Int:
+    """Stable sort of `perm` by the rows of `a`, whose entries lie in
+    `[lo, lo + span)`: a counting sort by the first column, then each
+    bucket of equal first entries by the other columns (insertion sort, in
+    parallel, up to `_BUCKET_INSERTION_TO` rows; merge sort beyond).
+
+    Returns the first position of the sorted order whose row equals the
+    one before (equal rows share a bucket), or -1."""
     var n = rows_of(a)
     var c = cols_of(a)
-    var tmp = List[Int](length=n, fill=0)
-    var count = List[Int](length=span + 1, fill=0)
-    var cp = count.unsafe_ptr()
-    for col in range(c - 1, -1, -1):
-        for v in range(span + 1):
-            cp[unsafe_offset=v] = 0
-        for i in range(n):
-            cp[unsafe_offset=Int(a.unsafe_get(i * c + col)) - lo + 1] += 1
-        for v in range(span):
-            cp[unsafe_offset=v + 1] += cp[unsafe_offset=v]
-        var pp = perm.unsafe_ptr()
-        var tp = tmp.unsafe_ptr()
-        for i in range(n):
-            var r = pp[unsafe_offset=i]
-            var key = Int(a.unsafe_get(r * c + col)) - lo
-            tp[unsafe_offset=cp[unsafe_offset=key]] = r
-            cp[unsafe_offset=key] += 1
-        swap(perm, tmp)
+    var ap = a.unsafe_ptr()
+    var start = List[Int](length=span + 1, fill=0)
+    var stp = start.unsafe_ptr()
+    for i in range(n):
+        stp[unsafe_offset=Int(ap[unsafe_offset=i * c]) - lo + 1] += 1
+    for v in range(span):
+        stp[unsafe_offset=v + 1] += stp[unsafe_offset=v]
+    var at = start.copy()
+    var atp = at.unsafe_ptr()
+    var pp = perm.unsafe_ptr()
+    for i in range(n):
+        var k = Int(ap[unsafe_offset=i * c]) - lo
+        pp[unsafe_offset=atp[unsafe_offset=k]] = i
+        atp[unsafe_offset=k] += 1
+    _ = at^
+    comptime SERIAL_BELOW = 16384
+    var chunks = num_chunks(span, SERIAL_BELOW)
+    var large = List[Bool](length=chunks, fill=False)
+    var dups = List[Int](length=chunks, fill=-1)
+    var lp = large.unsafe_ptr()
+    var dp = dups.unsafe_ptr()
+
+    def buckets(chunk: Int, v0: Int, v1: Int) {ap, pp, stp, lp, dp, c}:
+        for v in range(v0, v1):
+            var b0 = stp[unsafe_offset=v]
+            var b1 = stp[unsafe_offset=v + 1]
+            if b1 - b0 > _BUCKET_INSERTION_TO:
+                lp[unsafe_offset=chunk] = True
+                continue
+            for t in range(b0 + 1, b1):
+                var key = pp[unsafe_offset=t]
+                var u = t - 1
+                while u >= b0 and _row_tail_greater(
+                    ap, c, pp[unsafe_offset=u], key
+                ):
+                    pp[unsafe_offset=u + 1] = pp[unsafe_offset=u]
+                    u -= 1
+                pp[unsafe_offset=u + 1] = key
+            if dp[unsafe_offset=chunk] < 0:
+                for t in range(b0 + 1, b1):
+                    if not _row_tail_greater(
+                        ap, c, pp[unsafe_offset=t], pp[unsafe_offset=t - 1]
+                    ):
+                        dp[unsafe_offset=chunk] = t
+                        break
+
+    parallel_ranges(span, SERIAL_BELOW, buckets)
+    var duplicate = -1
+    for k in range(chunks):
+        if duplicate < 0:
+            duplicate = dups[k]
+    var any_large = False
+    for k in range(chunks):
+        any_large = any_large or large[k]
+    if not any_large:
+        return duplicate
+    var scratch = List[Int](length=n, fill=0)
+    for v in range(span):
+        var b0 = start[v]
+        var b1 = start[v + 1]
+        if b1 - b0 > _BUCKET_INSERTION_TO:
+            _merge_sort_rows(a, perm, scratch, b0, b1)
+            if duplicate < 0 or b0 < duplicate:
+                for t in range(b0 + 1, b1):
+                    if compare_rows(a, perm[t - 1], a, perm[t]) == 0:
+                        if duplicate < 0 or t < duplicate:
+                            duplicate = t
+                        break
+    return duplicate
+
+
+comptime _BUCKET_INSERTION_TO = 32
+"""`_bucket_sort_rows` sorts buckets up to this long by insertion."""
+
+
+@always_inline
+def _row_tail_greater(
+    ap: Pointer[Scalar[DType.int], _], c: Int, x: Int, y: Int
+) -> Bool:
+    """Whether row `x` of the `c`-column array at `ap` is greater than row
+    `y` from the second column on."""
+    for j in range(1, c):
+        var p = ap[unsafe_offset=x * c + j]
+        var q = ap[unsafe_offset=y * c + j]
+        if p != q:
+            return p > q
+    return False
 
 
 def _merge_sort_rows(

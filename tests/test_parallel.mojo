@@ -22,12 +22,16 @@ from mojodec import (
 from mojodec.core.parallel import num_chunks, parallel_ranges
 from mojodec.core.sparse import PARALLEL_NNZ
 from mojodec.core.utils import (
+    _lexsort_rows,
+    _merge_sort_rows,
+    compare_rows,
     fget,
     fset,
     iget,
     int_array,
     iset,
     int_vector,
+    lexsort_rows,
     real_vector,
     rows_of,
     sort_each_row,
@@ -284,6 +288,94 @@ def test_parallel_ranges_covers_once() raises:
     # below the threshold: one chunk on the calling thread
     assert_equal(num_chunks(10, 100), 1)
     assert_equal(num_chunks(0, 0), 0)
+
+
+def test_large_lexsort_rows() raises:
+    # past the 16384 first entries where the runs are sorted in parallel:
+    # the merge sort's order, with a run of 100 equal first entries (sorted
+    # by merging) and one pair of equal rows
+    var n = 40_000
+    var a = int_array(n, 3)
+    var state: UInt64 = 777
+    for i in range(n):
+        for j in range(3):
+            var x = Int((_lcg(state) + 1.0) * 30_000.0) % 60_000
+            iset(a, i, j, 0 if j == 0 and i % 400 == 0 else x)
+    for j in range(3):
+        iset(a, 30_000, j, iget(a, 1234, j))
+    var expected = List[Int](length=n, fill=0)
+    for i in range(n):
+        expected[i] = i
+    var scratch = List[Int](length=n, fill=0)
+    _merge_sort_rows(a, expected, scratch, 0, n)
+    assert_true(lexsort_rows(a) == expected)
+    var duplicate = 0
+    _ = _lexsort_rows(a, duplicate)
+    var first = -1
+    for t in range(1, n):
+        if compare_rows(a, expected[t - 1], a, expected[t]) == 0:
+            first = t
+            break
+    assert_true(first > 0)
+    assert_equal(duplicate, first)
+
+
+def _complex_error(mesh: SimplicialMesh, threads: String) raises -> String:
+    _ = setenv("MOJODEC_NUM_THREADS", threads)
+    var message = String()
+    try:
+        _ = SimplicialComplex(
+            mesh.vertices, mesh.elements, compute_geometry=False
+        )
+    except e:
+        message = String(e)
+    _ = unsetenv("MOJODEC_NUM_THREADS")
+    return message
+
+
+def test_large_meshes_check_orientation() raises:
+    # past the 50k faces where the orientation check goes parallel: the
+    # same error as the serial check, for the first bad face
+    var mesh = kuhn_grid([160, 160])
+    var E = mesh.elements.copy()
+    for t in [30_000, 20_000]:
+        var x = iget(E, t, 0)
+        iset(E, t, 0, iget(E, t, 1))
+        iset(E, t, 1, x)
+    var flipped = SimplicialMesh(mesh.vertices, E)
+    var serial = _complex_error(flipped, "1")
+    assert_true("induce the same orientation" in serial, serial)
+    assert_equal(_complex_error(flipped, "16"), serial)
+    # a third triangle on an edge of element 40000
+    var n = rows_of(mesh.elements)
+    var nv = rows_of(mesh.vertices)
+    var T = nm.zeros[DType.int](Shape(n + 1, 3))
+    for i in range(n):
+        for j in range(3):
+            iset(T, i, j, iget(mesh.elements, i, j))
+    iset(T, n, 0, iget(mesh.elements, 40_000, 0))
+    iset(T, n, 1, iget(mesh.elements, 40_000, 1))
+    iset(T, n, 2, nv)
+    var V = nm.zeros[DType.float64](Shape(nv + 1, 2))
+    for i in range(nv):
+        for j in range(2):
+            fset(V, i, j, fget(mesh.vertices, i, j))
+    var crowded = SimplicialMesh(V, T)
+    serial = _complex_error(crowded, "1")
+    assert_true("not a pseudomanifold" in serial, serial)
+    assert_equal(_complex_error(crowded, "16"), serial)
+
+
+def test_large_mesh_checks_indices() raises:
+    # past the 2^18 entries where the copy and range check go parallel
+    var mesh = kuhn_grid([210, 210])
+    var nv = rows_of(mesh.vertices)
+    _ = SimplicialMesh(mesh.vertices, mesh.elements)
+    for bad in [nv, -1]:
+        var E = mesh.elements.copy()
+        iset(E, 80_000, 1, bad)
+        with assert_raises(contains="invalid index value"):
+            _ = SimplicialMesh(mesh.vertices, E)
 
 
 def test_num_threads_env_caps_chunks() raises:

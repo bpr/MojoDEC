@@ -379,17 +379,29 @@ takes every page fault on one thread (it doubled the first call of
 `simplex_array_boundary` sorts face occurrences into one bucket per
 first vertex (`_boundary_by_buckets`, from 16384 occurrences with vertex
 ids in a narrow range; occurrences are `r << sh | i`, as divisions by
-the row width dominated the sort) and reads faces, `d`, and the boundary
-off the sorted runs, equal entry for entry to `_boundary_by_lexsort`.
-Each bucket sorts occurrences packed into one integer key (the rest of
-the face, then the occurrence) when that fits in 62 bits, and falls back
-to the `_occurrence_less` comparator otherwise (`pack=False` forces it,
-for tests); bit 62 marks each run's first occurrence. Sorts in topology
-avoid data-dependent branches, which mispredict more or less with the
-vertex numbering: sorting networks for rows of 3 and 4
+the row width dominated the sort; each chunk counts only the band of
+buckets from its rows' smallest first entry to their largest second) and
+reads faces, `d`, and the boundary off the sorted runs, equal entry for
+entry to `_boundary_by_lexsort`. Each bucket sorts occurrences packed
+into one integer key (the rest of the face, the occurrence, and the sign
+of its boundary entry) when that fits in 62 bits, and falls back to the
+`_occurrence_less` comparator otherwise (`pack=False` forces it, for
+tests); bit 62 marks each run's first occurrence, and the faces are read
+back from the keys. A sorted simplex's faces come in decreasing
+lexicographic order of the entry left out, so the runs write `d`'s
+columns in place, with no pass sorting its rows; with rows of 2 entries
+the buckets arrive sorted. The scatter, the runs, and `d`'s values are
+unrolled for rows of 2–4 entries (`_scatter_packed`, `_runs_packed`,
+`_d_rows`); check a change by hashing every level's simplices, parity,
+`d`, boundary, and `_order` against the committed build. Sorts in
+topology avoid data-dependent branches, which mispredict more or less
+with the vertex numbering: sorting networks for rows of 3 and 4
 (`sort_each_row`), parity by counting inversions, and rank sort (SIMD)
 for buckets of 17 to 64 keys. `require_distinct_simplices` skips its
-sort when the rows are already in strictly increasing order. `tests/test_parallel.mojo` uses meshes past
+sort when the rows are already in strictly increasing order; otherwise
+`lexsort_rows` (a counting sort by the first column, then each run by
+insertion in parallel, by merging past 32 rows) also reports the first
+repeated row, and its order becomes the top level's `_order`. `tests/test_parallel.mojo` uses meshes past
 every threshold, and compares each parallel path with the serial one
 exactly; the other tests' meshes run serially.
 

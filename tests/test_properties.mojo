@@ -30,8 +30,13 @@ from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.utils import (
+    IntArray,
+    _lexsort_rows,
+    compare_rows,
     int_array,
     int_vector,
+    lexsort_rows,
+    rows_of,
     real_array_from_rows,
     real_vector_from_list,
     require_distinct_simplices,
@@ -200,6 +205,37 @@ def _simplex_rows(
             flat.append(v)
         parity.append(data.draw(integers(0, 1)))
     return (K, flat^, parity^)
+
+
+def _int_rows(
+    mut data: ConjectureData,
+) raises -> Tuple[Int, List[Int]]:
+    """`N` rows of `K` integers (`K` in [1, 4], `N` in [1, 120]): from a
+    handful of values, so that rows repeat and runs of equal first entries
+    pass 32, or from a range too wide for a counting sort."""
+    var K = data.draw(integers(1, 4), "K")
+    var N = data.draw(integers(1, 120), "N")
+    var wide = data.draw(booleans(), "wide")
+    var hi = 1_000_000 if wide else data.draw(integers(1, 6), "values")
+    var flat = List[Int]()
+    for _ in range(N * K):
+        flat.append(data.draw(integers(0, hi - 1)))
+    return (K, flat^)
+
+
+def _stable_row_order(a: IntArray) -> List[Int]:
+    """The rows of `a` in lexicographic order, ties by index (insertion
+    sort)."""
+    var order = List[Int]()
+    for i in range(rows_of(a)):
+        order.append(i)
+        var t = len(order) - 1
+        while t > 0 and compare_rows(a, order[t - 1], a, order[t]) > 0:
+            var x = order[t]
+            order[t] = order[t - 1]
+            order[t - 1] = x
+            t -= 1
+    return order^
 
 
 def _grid_dims(mut data: ConjectureData) raises -> List[Int]:
@@ -633,6 +669,33 @@ def test_boundary_by_buckets_matches_lexsort() raises:
     given(composite(_simplex_rows), prop, quick())
 
 
+def test_lexsort_rows_is_stable_lexicographic() raises:
+    # the counting sort by the first column, with its runs sorted by
+    # insertion or (past 32 rows) by merging, and the merge sort for wide
+    # ranges give the stable order; _lexsort_rows also finds the first
+    # position whose row equals the one before
+    def prop(t: Tuple[Int, List[Int]]) raises:
+        var K = t[0]
+        var N = len(t[1]) // K
+        var a = int_array(N, K)
+        for i in range(N * K):
+            a.unsafe_set(i, Scalar[DType.int](t[1][i]))
+        var expected = _stable_row_order(a)
+        assert_true(lexsort_rows(a) == expected)
+        var duplicate = 0
+        assert_true(_lexsort_rows(a, duplicate) == expected)
+        if duplicate == -2:
+            return
+        var first = -1
+        for i in range(1, N):
+            if compare_rows(a, expected[i - 1], a, expected[i]) == 0:
+                first = i
+                break
+        assert_equal(duplicate, first)
+
+    given(composite(_int_rows), prop, quick())
+
+
 def test_require_distinct_simplices_finds_duplicates() raises:
     # raises exactly when two rows are equal, whether or not the rows are
     # in increasing order (the shortcut that skips sorting)
@@ -652,11 +715,25 @@ def test_require_distinct_simplices_finds_duplicates() raises:
                 if same:
                     duplicate = True
         var raised = False
+        var message = String()
         try:
             require_distinct_simplices(s, "prop")
-        except:
+        except e:
             raised = True
+            message = String(e)
         assert_equal(raised, duplicate)
+        if raised:
+            # the first equal neighbors in stable sorted order
+            var order = _stable_row_order(s)
+            for i in range(1, N):
+                if compare_rows(s, order[i - 1], s, order[i]) == 0:
+                    var a = min(order[i - 1], order[i])
+                    var b = max(order[i - 1], order[i])
+                    assert_true(
+                        String("simplices ", a, " and ", b) in message,
+                        message,
+                    )
+                    break
 
     given(composite(_simplex_rows), prop, quick())
 

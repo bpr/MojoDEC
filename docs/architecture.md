@@ -9,7 +9,8 @@ decided against.
 
 Measurements on this page use the Kuhn grids from `benchmarks/compare`.
 They were taken on an 8-core i7-10875H (16 threads, AVX2) at commit
-`48c8542`, built with `-D ASSERT=none`, best of 3.
+`48c8542`, built with `-D ASSERT=none`, best of 3. Topology and build
+were measured again after the topology work (best of 5).
 
 - **`tet_40`**: the unit cube, 40³ cells, 384,000 tetrahedra, 68,921
   vertices.
@@ -96,21 +97,23 @@ complex copies, and the runtime.
 
 | Step | Where | 1 thread | all cores |
 |---|---|---:|---:|
-| topology: faces, `d`, `boundary`, orientation check | `simplex_array_boundary`, `require_coherent_orientation` | 123 | 63 |
+| topology: faces, `d`, `boundary`, orientation check | `simplex_array_boundary`, `require_coherent_orientation` | 74 | 40 |
 | circumcenters | `compute_circumcenters` | 33 | 12 |
 | primal volumes | `compute_primal_volume` | 16 | 4.5 |
 | dual volumes | `compute_dual_volume` (`_DualWalk`) | 117 | 34 |
 | Hodge stars | `construct_hodge` | 5.6 | 6.0 |
-| **build** | | **297** | **129** |
+| **build** | | **242** | **94** |
 
-On `tri_400` the build takes 93 ms on one thread and 53 ms on all
-cores. Topology is 46 and 31 ms of that.
+On `tri_400` the build takes 76 ms on one thread and 34 ms on all
+cores. Topology is 28 and 19 ms of that.
 
 - **Topology** never sorts all the faces. A parallel counting sort puts
   face occurrences into one bucket per first vertex, each bucket is
   sorted with branch-free sorts, and the faces, `d`, and `boundary` are
-  read off the runs of equal faces. It is now the largest step on all
-  cores.
+  read off the runs of equal faces. `d` needs no sort of its own: a
+  sorted simplex's faces come in reverse order of the vertex left out.
+  It is still the largest step on all cores, where it is limited by
+  memory bandwidth.
 - **Circumcenters and volumes** are closed form where that is cheap and
   accurate: triangles in any dimension, and tetrahedra in 3D. Other
   shapes use Householder QR on positions relative to the first vertex.
@@ -186,7 +189,7 @@ sums into them in the serial order.
   otherwise fuses or splits them depending on the surrounding code.
 
 **Vertex numbering:** ownership by vertex blocks assumes the numbering
-is spatially coherent. A mesh numbered at random builds 2–3× slower,
+is spatially coherent. A mesh numbered at random builds 1.5–1.7× slower,
 and `reorder_vertices` fixes it. See
 [vertex numbering](guide/vertex-numbering.md).
 

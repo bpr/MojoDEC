@@ -44,12 +44,13 @@ from mojodec.core.subset import Subset
 from mojodec.core.utils import (
     IntArray,
     RealArray,
+    _copy_with_bounds,
     compare_rows,
     factorial,
     parallelotope_volume,
     int_vector,
     lexsort_rows,
-    require_distinct_simplices,
+    _distinct_simplices_order,
     real_array,
     real_vector,
     row_list,
@@ -133,13 +134,41 @@ struct SimplexLevel(Copyable, Movable):
         Raises:
             If the arrays cannot be read.
         """
+        var order = List[Int]()
+        for i in range(1, rows_of(simplices)):
+            if compare_rows(simplices, i - 1, simplices, i) > 0:
+                order = lexsort_rows(simplices)
+                break
+        self = Self(dim, simplices^, simplex_parity^, d^, boundary^, order^)
+
+    def __init__(
+        out self,
+        dim: Int,
+        var simplices: IntArray,
+        var simplex_parity: IntArray,
+        var d: CSRMatrix,
+        var boundary: CSRMatrix,
+        var order: List[Int],
+    ) raises:
+        """A level without geometry, given the permutation that sorts its
+        rows.
+
+        Args:
+            dim: The dimension k.
+            simplices: `N x (k+1)` vertex lists, each row sorted.
+            simplex_parity: The orientation of each row relative to its
+                sorted order (0 or 1).
+            d: The exterior derivative on k-cochains, `N_{k+1} x N`.
+            boundary: The boundary operator on k-chains, `N_{k-1} x N`.
+            order: `lexsort_rows(simplices)`, or empty when the rows are
+                already in lexicographic order.
+
+        Raises:
+            If NuMojo cannot allocate the empty geometry arrays.
+        """
         self.dim = dim
         self.num_simplices = rows_of(simplices)
-        self._order = List[Int]()
-        for i in range(1, self.num_simplices):
-            if compare_rows(simplices, i - 1, simplices, i) > 0:
-                self._order = lexsort_rows(simplices)
-                break
+        self._order = order^
         self.simplices = simplices^
         self.simplex_parity = simplex_parity^
         self.d = d^
@@ -358,7 +387,13 @@ struct SimplicialComplex(
             a coherently oriented pseudomanifold, or (with geometry) a
             simplex is degenerate.
         """
-        self = Self(SimplicialMesh(vertices, simplices), compute_geometry)
+        # the mesh copies the arrays; move it in rather than copy it again
+        self._data = ArcPointer(
+            ComplexData(SimplicialMesh(vertices, simplices))
+        )
+        self._build_complex()
+        if compute_geometry:
+            self.compute_geometry()
 
     # ===------------------------------------------------------------------=== #
     # Access
@@ -1342,10 +1377,15 @@ struct SimplicialComplex(
         """Faces and boundary operators of every dimension."""
         ref mesh = self._data[].mesh
         var K = cols_of(mesh.elements)
-        var s = mesh.elements.copy()
+        var lo = 0
+        var hi = -1
+        var s = (
+            _copy_with_bounds(mesh.elements, lo, hi) if mesh.elements.size
+            > 0 else mesh.elements.copy()
+        )
         var parity = simplex_array_parity(s)
         sort_each_row(s)
-        require_distinct_simplices(s, "SimplicialComplex")
+        var top_order = _distinct_simplices_order(s, "SimplicialComplex")
 
         # levels from the top down; each step's faces are the next level
         var simplices = List[IntArray]()
@@ -1386,8 +1426,11 @@ struct SimplicialComplex(
             swap(level_p, parities[j])
             swap(level_d, cochain[j])
             swap(level_b, chain[j])
+            # the faces come out in lexicographic order; the top level is
+            # in the mesh's order
+            var order = top_order.copy() if j == 0 else List[Int]()
             self._data[].levels.append(
-                SimplexLevel(k, level_s^, level_p^, level_d^, level_b^)
+                SimplexLevel(k, level_s^, level_p^, level_d^, level_b^, order^)
             )
 
     def _add_dual_pieces(

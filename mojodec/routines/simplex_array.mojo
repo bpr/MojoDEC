@@ -9,10 +9,12 @@ Largely inspired by `pydec.dec.simplex_array`. A simplex array is an
 `N x (k+1)` integer array whose rows are the vertex lists of `N` k-simplices.
 """
 
+from numojo.prelude import Shape
 from mojodec.core.parallel import num_chunks, parallel_ranges
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.utils import (
     IntArray,
+    _bounds,
     compare_rows,
     int_array,
     int_vector,
@@ -302,16 +304,135 @@ def _vertex_bound(s: IntArray) -> Int:
     """One more than the largest vertex id of `s`, or -1 if an id is
     negative or the range is wider than the number of entries (then one
     bucket per id would cost more than it saves)."""
-    var sp = s.unsafe_ptr()
+    if s.size == 0:
+        return 0
+    var lo = 0
     var hi = -1
-    for i in range(s.size):
-        var v = Int(sp[unsafe_offset=i])
-        if v < 0:
-            return -1
-        hi = max(hi, v)
+    try:
+        _bounds(s, lo, hi)
+    except:
+        return -1
+    if lo < 0:
+        return -1
     if hi + 1 > s.size + 1024:
         return -1
     return hi + 1
+
+
+@always_inline
+def _scatter_packed[
+    K: Int
+](
+    sp: _IntPtr,
+    pp: _IntPtr,
+    cp: _Ptr,
+    stp: _Ptr,
+    op: _Ptr,
+    base: Int,
+    lo: Int,
+    hi: Int,
+    sh: Int,
+    bV: Int,
+    kE: Int,
+):
+    """`_boundary_by_buckets`'s scatter of packed keys for rows of `K`
+    entries, unrolled: the same keys in the same places. Occurrences
+    1..K-1 of a row all go to the bucket of its first entry, in order."""
+    for r in range(lo, hi):
+        comptime assert K <= 4
+        var x = SIMD[DType.int, 4](0)
+        comptime for j in range(K):
+            x[j] = sp[unsafe_offset=r * K + j]
+        var par = Int(pp[unsafe_offset=r])
+        # occurrence 0, in the bucket of the row's second entry
+        var x0 = Int(x[0])
+        var x1 = Int(x[1])
+        var at0 = stp[unsafe_offset=x1] + cp[unsafe_offset=base + x1]
+        cp[unsafe_offset=base + x1] += 1
+        var key0 = 0
+        comptime for j in range(2, K):
+            key0 = (key0 << bV) | Int(x[j])
+        op[unsafe_offset=at0] = (key0 << kE) | ((r << sh) << 1) | (par & 1)
+        # the others, in the bucket of its first
+        var at = stp[unsafe_offset=x0] + cp[unsafe_offset=base + x0]
+        cp[unsafe_offset=base + x0] += K - 1
+        comptime for i in range(1, K):
+            var key = 0
+            comptime for j in range(1, K):
+                comptime if j != i:
+                    key = (key << bV) | Int(x[j])
+            op[unsafe_offset=at + i - 1] = (
+                (key << kE) | (((r << sh) | i) << 1) | ((par + i) & 1)
+            )
+
+
+@always_inline
+def _runs_packed[
+    K: Int
+](
+    op: _Ptr,
+    stp: _Ptr,
+    dsp: _Ptr,
+    fp: Pointer[Scalar[DType.int], MutUntrackedOrigin],
+    bip: _Ptr,
+    bix: _Ptr,
+    bdv: Pointer[Float64, MutUntrackedOrigin],
+    dix: _Ptr,
+    v0: Int,
+    v1: Int,
+    bV: Int,
+    kE: Int,
+):
+    """`_boundary_by_buckets`'s pass over the sorted packed keys of buckets
+    `v0..v1`, for rows of `K` entries, unrolled: the faces, the boundary,
+    and the column indices of d."""
+    comptime fw = K - 1
+    comptime sh = 1 if K <= 2 else 2
+    var e_mask = (1 << kE) - 1
+    var v_mask = (1 << bV) - 1
+    for v in range(v0, v1):
+        var f = dsp[unsafe_offset=v] - 1
+        for t in range(stp[unsafe_offset=v], stp[unsafe_offset=v + 1]):
+            var x = op[unsafe_offset=t]
+            var key = x & (_NEW_FACE - 1)
+            var occ_e = (key & e_mask) >> 1
+            if x != key:
+                f += 1
+                fp[unsafe_offset=f * fw] = Scalar[DType.int](v)
+                # the face's entries after the first, bV bits each, the
+                # last lowest
+                var rest = key >> kE
+                comptime for j in range(fw - 1, 0, -1):
+                    fp[unsafe_offset=f * fw + j] = Scalar[DType.int](
+                        rest & v_mask
+                    )
+                    rest >>= bV
+                bip[unsafe_offset=f] = t
+            var r = occ_e >> sh
+            var i = occ_e & ((1 << sh) - 1)
+            bix[unsafe_offset=t] = r
+            bdv[unsafe_offset=t] = Float64(1 - 2 * (key & 1))
+            dix[unsafe_offset=r * K + K - 1 - i] = f
+
+
+@always_inline
+def _d_rows[
+    K: Int
+](
+    pp: _IntPtr,
+    dip: _Ptr,
+    ddv: Pointer[Float64, MutUntrackedOrigin],
+    lo: Int,
+    hi: Int,
+):
+    """Row pointers and values of d for rows `lo..hi` of `K` entries: the
+    face without entry i, at `K - 1 - i`, has sign (-1)^i times the
+    simplex's orientation."""
+    for r in range(lo, hi):
+        var o = Float64(1 - 2 * Int(pp[unsafe_offset=r]))
+        dip[unsafe_offset=r] = r * K
+        comptime for i in range(K):
+            ddv[unsafe_offset=r * K + K - 1 - i] = o if i % 2 == 0 else -o
 
 
 def _face_entry(sp: _IntPtr, K: Int, sh: Int, e: Int, j: Int) -> Int:
@@ -491,7 +612,9 @@ def _boundary_by_buckets(
     `_boundary_by_lexsort`'s, entry for entry.
 
     When they fit in 62 bits, each occurrence is sorted as one integer key:
-    the face's entries after the first, `bV` bits each, then `e`. Keys
+    the face's entries after the first, `bV` bits each, then `e`, then a
+    bit set when its boundary entry is -1 (so that `runs` need not look up
+    the simplex's parity). Keys
     order as `_occurrence_less` does (by the rest of the face, then by
     simplex), and a bucket sorts with integer comparisons instead of
     rebuilding both faces from `s` at every one. Otherwise (or with
@@ -512,32 +635,68 @@ def _boundary_by_buckets(
         sh += 1
     var bV = _bit_length(V - 1)
     var bE = _bit_length(N - 1) + sh
-    var packed = pack and (K - 2) * bV + bE <= 62
-    var e_mask = (1 << bE) - 1
+    # packed keys end in e and the sign bit of the occurrence's entry in
+    # the boundary matrix
+    var packed = pack and (K - 2) * bV + bE + 1 <= 62
+    var kE = bE + 1
+    var e_mask = (1 << kE) - 1
 
-    # occurrences per (chunk of simplices, first vertex)
-    var counts = List[Int](length=C * V, fill=0)
+    # the buckets each chunk of simplices puts occurrences into lie between
+    # its smallest first vertex and its largest second one (the rows are
+    # sorted): a narrow band when the numbering is spatially coherent
+    var band_lo = List[Int](unsafe_uninit_length=C)
+    var band_hi = List[Int](unsafe_uninit_length=C)
+    var blp = band_lo.unsafe_ptr()
+    var bhp = band_hi.unsafe_ptr()
+
+    def bands(chunk: Int, lo: Int, hi: Int) {sp, blp, bhp, K}:
+        var a = Int(sp[unsafe_offset=lo * K])
+        var b = Int(sp[unsafe_offset=lo * K + 1])
+        for r in range(lo + 1, hi):
+            a = min(a, Int(sp[unsafe_offset=r * K]))
+            b = max(b, Int(sp[unsafe_offset=r * K + 1]))
+        blp[unsafe_offset=chunk] = a
+        bhp[unsafe_offset=chunk] = b + 1
+
+    if C > 1:
+        parallel_ranges(N, SERIAL_BELOW, bands)
+    else:
+        band_lo[0] = 0
+        band_hi[0] = V
+    # occurrences per (chunk of simplices, first vertex in its band); the
+    # counter of chunk c's bucket v is at band_base[c] + v
+    var band_base = List[Int](unsafe_uninit_length=C)
+    var total_band = 0
+    for c in range(C):
+        band_base[c] = total_band - band_lo[c]
+        total_band += band_hi[c] - band_lo[c]
+    var counts = List[Int](unsafe_uninit_length=total_band)
     var cp = counts.unsafe_ptr()
+    var bbp = band_base.unsafe_ptr()
 
-    def count(chunk: Int, lo: Int, hi: Int) {sp, cp, K, V}:
-        var base = chunk * V
+    def count(chunk: Int, lo: Int, hi: Int) {sp, cp, blp, bhp, bbp, K}:
+        var base = bbp[unsafe_offset=chunk]
+        for v in range(blp[unsafe_offset=chunk], bhp[unsafe_offset=chunk]):
+            cp[unsafe_offset=base + v] = 0
         for r in range(lo, hi):
             cp[unsafe_offset=base + Int(sp[unsafe_offset=r * K])] += K - 1
             cp[unsafe_offset=base + Int(sp[unsafe_offset=r * K + 1])] += 1
 
     parallel_ranges(N, SERIAL_BELOW, count)
     # bucket v holds occurrences start[v]:start[v + 1]; within it, chunk c
-    # writes from start[v] + counts[c * V + v] on
+    # writes from start[v] + counts[band_base[c] + v] on
     var start = List[Int](length=V + 1, fill=0)
     var stp = start.unsafe_ptr()
 
-    def totals(chunk: Int, lo: Int, hi: Int) {cp, stp, C, V}:
+    def totals(chunk: Int, lo: Int, hi: Int) {cp, stp, blp, bhp, bbp, C}:
         for v in range(lo, hi):
             var t = 0
             for c in range(C):
-                var x = cp[unsafe_offset=c * V + v]
-                cp[unsafe_offset=c * V + v] = t
-                t += x
+                if blp[unsafe_offset=c] <= v < bhp[unsafe_offset=c]:
+                    var at = bbp[unsafe_offset=c] + v
+                    var x = cp[unsafe_offset=at]
+                    cp[unsafe_offset=at] = t
+                    t += x
             stp[unsafe_offset=v + 1] = t
 
     parallel_ranges(V, 65536, totals)
@@ -546,10 +705,23 @@ def _boundary_by_buckets(
     var occ = List[Int](unsafe_uninit_length=M)
     var op = occ.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
 
+    var ppi = parity.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()
+    var cpm = cp.unsafe_origin_cast[MutUntrackedOrigin]()
+    var stpm = stp.unsafe_origin_cast[MutUntrackedOrigin]()
+
     def scatter(
         chunk: Int, lo: Int, hi: Int
-    ) {sp, cp, stp, op, K, V, sh, bV, bE, packed}:
-        var base = chunk * V
+    ) {sp, pp, ppi, cp, cpm, stp, stpm, op, bbp, K, sh, bV, kE, packed}:
+        var base = bbp[unsafe_offset=chunk]
+        if packed and K == 3:
+            _scatter_packed[3](sp, ppi, cpm, stpm, op, base, lo, hi, sh, bV, kE)
+            return
+        if packed and K == 4:
+            _scatter_packed[4](sp, ppi, cpm, stpm, op, base, lo, hi, sh, bV, kE)
+            return
+        if packed and K == 2:
+            _scatter_packed[2](sp, ppi, cpm, stpm, op, base, lo, hi, sh, bV, kE)
+            return
         for r in range(lo, hi):
             for i in range(K):
                 var v = Int(sp[unsafe_offset=r * K + (1 if i == 0 else 0)])
@@ -557,16 +729,21 @@ def _boundary_by_buckets(
                 cp[unsafe_offset=base + v] = cp[unsafe_offset=base + v] + 1
                 var e = (r << sh) | i
                 if packed:
-                    # the face's entries after its first, then e
+                    # the face's entries after its first, then e, then
+                    # whether the boundary entry is -1
                     var key = 0
                     for j in range(2 if i == 0 else 1, K):
                         if j != i:
                             key = (key << bV) | Int(sp[unsafe_offset=r * K + j])
-                    e = (key << bE) | e
+                    var odd = (Int(pp[unsafe_offset=r]) + i) & 1
+                    e = (key << kE) | (e << 1) | odd
                 op[unsafe_offset=at] = e
 
     parallel_ranges(N, SERIAL_BELOW, scatter)
     _ = counts^
+    _ = band_lo^
+    _ = band_hi^
+    _ = band_base^
 
     # blocks of buckets with about equal numbers of occurrences
     var blocks = List[Int](length=C + 1, fill=V)
@@ -583,7 +760,7 @@ def _boundary_by_buckets(
 
     def sort_buckets(
         chunk: Int, lo: Int, hi: Int
-    ) {sp, stp, op, bp, dsp, K, sh, bE, e_mask, packed}:
+    ) {sp, stp, op, bp, dsp, K, sh, kE, packed}:
         for b in range(lo, hi):
             var widest = 0
             for v in range(bp[unsafe_offset=b], bp[unsafe_offset=b + 1]):
@@ -599,17 +776,20 @@ def _boundary_by_buckets(
                 var e = stp[unsafe_offset=v + 1]
                 var n = 0
                 if packed:
-                    _sort_keys(op, a, e, tp)
-                    # back to occurrences, run starts marked
+                    # a bucket's keys arrive in increasing order of their
+                    # occurrence, so with K = 2, faces with no entries
+                    # after the first, they are already sorted
+                    if K != 2:
+                        _sort_keys(op, a, e, tp)
+                    # run starts marked; the keys stay, and `runs` reads
+                    # the faces from them
                     var prev = -1
                     for t in range(a, e):
                         var key = op[unsafe_offset=t]
-                        var occ_e = key & e_mask
-                        if t == a or (key >> bE) != prev:
-                            occ_e |= _NEW_FACE
+                        if t == a or (key >> kE) != prev:
+                            op[unsafe_offset=t] = key | _NEW_FACE
                             n += 1
-                        prev = key >> bE
-                        op[unsafe_offset=t] = occ_e
+                        prev = key >> kE
                 else:
                     _sort_occurrences(sp, K, sh, op, a, e, tp)
                     var prev = -1
@@ -627,45 +807,119 @@ def _boundary_by_buckets(
         dsp[unsafe_offset=v + 1] += dsp[unsafe_offset=v]
     var F = distinct[V]
 
-    # the unique faces, the boundary (one row per run), and each
-    # occurrence's face index
-    var faces = int_array(F, fw)
-    var fp = faces.unsafe_ptr()
+    # the unique faces, the boundary (one row per run), and d. A sorted
+    # simplex's faces, without entry i, are in decreasing lexicographic
+    # order of i (without a later entry, a face has the smaller entry at
+    # the first place they differ), so row r of d holds the face without
+    # entry i at r * K + K - 1 - i, in increasing face index.
     # every entry is written in the parallel loops below, which then also
     # touch the pages first
+    var faces = IntArray(Shape(F, fw))
+    var fp = faces.unsafe_ptr()
     var b_indptr = List[Int](unsafe_uninit_length=F + 1)
     b_indptr[F] = M
     var b_indices = List[Int](unsafe_uninit_length=M)
     var b_data = List[Float64](unsafe_uninit_length=M)
-    var face_of = List[Int](unsafe_uninit_length=M)
+    var d_indptr = List[Int](unsafe_uninit_length=N + 1)
+    var d_indices = List[Int](unsafe_uninit_length=M)
+    var d_data = List[Float64](unsafe_uninit_length=M)
     var bip = b_indptr.unsafe_ptr()
     var bix = b_indices.unsafe_ptr()
     var bdv = b_data.unsafe_ptr()
-    var fop = face_of.unsafe_ptr()
+    var dip = d_indptr.unsafe_ptr()
+    var dix = d_indices.unsafe_ptr()
+    var unrolled = packed and 2 <= K <= 4
+    var ddv = d_data.unsafe_ptr()
+
+    var fpm = fp.unsafe_origin_cast[MutUntrackedOrigin]()
+    var bipm = bip.unsafe_origin_cast[MutUntrackedOrigin]()
+    var bixm = bix.unsafe_origin_cast[MutUntrackedOrigin]()
+    var bdvm = bdv.unsafe_origin_cast[MutUntrackedOrigin]()
+    var dixm = dix.unsafe_origin_cast[MutUntrackedOrigin]()
+    var dspm = dsp.unsafe_origin_cast[MutUntrackedOrigin]()
 
     def runs(
         chunk: Int, lo: Int, hi: Int
-    ) {sp, pp, stp, op, bp, dsp, fp, bip, bix, bdv, fop, K, fw, sh}:
+    ) {
+        sp,
+        pp,
+        stp,
+        stpm,
+        op,
+        bp,
+        dsp,
+        dspm,
+        fp,
+        fpm,
+        bip,
+        bipm,
+        bix,
+        bixm,
+        bdv,
+        bdvm,
+        dix,
+        dixm,
+        unrolled,
+        K,
+        fw,
+        sh,
+        bV,
+        kE,
+        e_mask,
+        packed,
+    }:
+        if unrolled:
+            var v0 = bp[unsafe_offset=lo]
+            var v1 = bp[unsafe_offset=hi]
+            if K == 3:
+                _runs_packed[3](
+                    op, stpm, dspm, fpm, bipm, bixm, bdvm, dixm, v0, v1, bV, kE
+                )
+            elif K == 4:
+                _runs_packed[4](
+                    op, stpm, dspm, fpm, bipm, bixm, bdvm, dixm, v0, v1, bV, kE
+                )
+            else:
+                _runs_packed[2](
+                    op, stpm, dspm, fpm, bipm, bixm, bdvm, dixm, v0, v1, bV, kE
+                )
+            return
         for b in range(lo, hi):
             for v in range(bp[unsafe_offset=b], bp[unsafe_offset=b + 1]):
                 var f = dsp[unsafe_offset=v] - 1
                 for t in range(stp[unsafe_offset=v], stp[unsafe_offset=v + 1]):
                     var x = op[unsafe_offset=t]
-                    var occ_e = x & (_NEW_FACE - 1)
-                    if x != occ_e:
+                    var key = x & (_NEW_FACE - 1)
+                    var occ_e = (key & e_mask) >> 1 if packed else key
+                    if x != key:
                         f += 1
                         fp[unsafe_offset=f * fw] = Scalar[DType.int](v)
-                        for j in range(1, fw):
-                            fp[unsafe_offset=f * fw + j] = Scalar[DType.int](
-                                _face_entry(sp, K, sh, occ_e, j)
-                            )
+                        if packed:
+                            # the face's entries after the first, bV bits
+                            # each, the last lowest
+                            var rest = key >> kE
+                            for j in range(fw - 1, 0, -1):
+                                fp[unsafe_offset=f * fw + j] = Scalar[
+                                    DType.int
+                                ](rest & ((1 << bV) - 1))
+                                rest >>= bV
+                        else:
+                            for j in range(1, fw):
+                                fp[unsafe_offset=f * fw + j] = Scalar[
+                                    DType.int
+                                ](_face_entry(sp, K, sh, occ_e, j))
                         bip[unsafe_offset=f] = t
                     var r = occ_e >> sh
                     var i = occ_e & ((1 << sh) - 1)
-                    var o = 1 - 2 * Int(pp[unsafe_offset=r])
+                    var odd = (
+                        key
+                        & 1 if packed else (Int(pp[unsafe_offset=r]) + i)
+                        & 1
+                    )
+                    var sign = Float64(1 - 2 * odd)
                     bix[unsafe_offset=t] = r
-                    bdv[unsafe_offset=t] = Float64(o if i % 2 == 0 else -o)
-                    fop[unsafe_offset=r * K + i] = f
+                    bdv[unsafe_offset=t] = sign
+                    dix[unsafe_offset=r * K + K - 1 - i] = f
 
     parallel_ranges(C, 0, runs)
     _ = occ^
@@ -673,33 +927,31 @@ def _boundary_by_buckets(
     _ = blocks^
     _ = distinct^
 
-    # d: each simplex's faces in increasing index
-    var d_indptr = List[Int](unsafe_uninit_length=N + 1)
-    d_indptr[0] = 0
-    var d_indices = List[Int](unsafe_uninit_length=M)
-    var d_data = List[Float64](unsafe_uninit_length=M)
-    var dip = d_indptr.unsafe_ptr()
-    var dix = d_indices.unsafe_ptr()
-    var ddv = d_data.unsafe_ptr()
+    # d's values in simplex order: the face without entry i has sign
+    # (-1)^i, times the simplex's orientation
+    var ppr = parity.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()
+    var dipm = dip.unsafe_origin_cast[MutUntrackedOrigin]()
+    var ddvm = ddv.unsafe_origin_cast[MutUntrackedOrigin]()
 
-    def rows(chunk: Int, lo: Int, hi: Int) {pp, fop, dip, dix, ddv, K}:
-        for r in range(lo, hi):
-            var o = 1 - 2 * Int(pp[unsafe_offset=r])
-            var base = r * K
-            dip[unsafe_offset=r + 1] = base + K
-            for i in range(K):
-                var f = fop[unsafe_offset=base + i]
-                var x = Float64(o if i % 2 == 0 else -o)
-                var at = base + i
-                while at > base and dix[unsafe_offset=at - 1] > f:
-                    dix[unsafe_offset=at] = dix[unsafe_offset=at - 1]
-                    ddv[unsafe_offset=at] = ddv[unsafe_offset=at - 1]
-                    at -= 1
-                dix[unsafe_offset=at] = f
-                ddv[unsafe_offset=at] = x
+    def rows(chunk: Int, lo: Int, hi: Int) {ppr, dipm, ddvm, K, N}:
+        if K == 3:
+            _d_rows[3](ppr, dipm, ddvm, lo, hi)
+        elif K == 4:
+            _d_rows[4](ppr, dipm, ddvm, lo, hi)
+        elif K == 2:
+            _d_rows[2](ppr, dipm, ddvm, lo, hi)
+        else:
+            for r in range(lo, hi):
+                var o = Float64(1 - 2 * Int(ppr[unsafe_offset=r]))
+                dipm[unsafe_offset=r] = r * K
+                for i in range(K):
+                    ddvm[unsafe_offset=r * K + K - 1 - i] = (
+                        o if i % 2 == 0 else -o
+                    )
+        if hi == N:
+            dipm[unsafe_offset=N] = N * K
 
     parallel_ranges(N, SERIAL_BELOW, rows)
-    _ = face_of^
     # canonical by construction: sorted columns, no duplicates
     var d = CSRMatrix(N, F)
     d.indptr = d_indptr^
@@ -793,13 +1045,41 @@ def require_coherent_orientation(
         induce the same orientation on their shared face (the message says
         whether the mesh is orientable at all).
     """
-    _require_pseudomanifold(faces, boundary, who)
-    for f in range(boundary.nrows):
+    # one parallel pass: each chunk's first face with three or more
+    # elements, and its first face two elements orient the same way
+    var F = boundary.nrows
+    comptime SERIAL_BELOW = 50_000
+    var chunks = num_chunks(F, SERIAL_BELOW)
+    var crowded = List[Int](length=chunks, fill=-1)
+    var same = List[Int](length=chunks, fill=-1)
+    var ip = boundary.indptr.unsafe_ptr()
+    var dp = boundary.data.unsafe_ptr()
+    var cp = crowded.unsafe_ptr()
+    var sp = same.unsafe_ptr()
+
+    def faces_of_chunk(chunk: Int, lo: Int, hi: Int) {ip, dp, cp, sp}:
+        for f in range(lo, hi):
+            var a = ip[unsafe_offset=f]
+            var count = ip[unsafe_offset=f + 1] - a
+            if count > 2:
+                cp[unsafe_offset=chunk] = f
+                return
+            if (
+                count == 2
+                and sp[unsafe_offset=chunk] < 0
+                and dp[unsafe_offset=a] + dp[unsafe_offset=a + 1] != 0
+            ):
+                sp[unsafe_offset=chunk] = f
+
+    parallel_ranges(F, SERIAL_BELOW, faces_of_chunk)
+    for c in range(chunks):
+        if crowded[c] >= 0:
+            _require_pseudomanifold(faces, boundary, who)
+    for c in range(chunks):
+        var f = same[c]
+        if f < 0:
+            continue
         var lo = boundary.indptr[f]
-        if boundary.indptr[f + 1] - lo != 2:
-            continue
-        if boundary.data[lo] + boundary.data[lo + 1] == 0:
-            continue
         var t = boundary.indices[lo]
         var u = boundary.indices[lo + 1]
         if not _element_signs(boundary, coboundary):

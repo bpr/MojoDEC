@@ -16,11 +16,10 @@ from mojodec.core.simplex import Simplex
 from mojodec.core.utils import (
     IntArray,
     RealArray,
+    _copy_with_bounds,
     int_array,
     iget,
     iset,
-    max_entry,
-    min_entry,
     row_list,
     rows_of,
     cols_of,
@@ -61,12 +60,16 @@ struct SimplicialMesh(Copyable, Movable, Writable):
             raise Error(
                 "SimplicialMesh: index and vertex arrays must have rank 2"
             )
-        if elements.size > 0 and (
-            min_entry(elements) < 0 or max_entry(elements) >= rows_of(vertices)
-        ):
+        var lo = 0
+        var hi = -1
+        var copied = (
+            _copy_with_bounds(elements, lo, hi) if elements.size
+            > 0 else elements.copy()
+        )
+        if lo < 0 or hi >= rows_of(vertices):
             raise Error("SimplicialMesh: invalid index value")
         self.vertices = vertices.copy()
-        self.elements = elements.copy()
+        self.elements = copied^
 
     def indices(self) -> IntArray:
         """The element array (PyDEC's `indices` alias of `elements`).

@@ -93,10 +93,16 @@ right shape for that is opt-in.
 Ordered by the time at stake. Times are in ms on `tet_40`, one thread /
 all cores.
 
-- **Topology** (123 / 63) is the largest step of `build` on all cores.
-  The parts still serial at last count are the prefix sums over
-  vertices, the mesh copy, the orientation check, and the CSR
-  bookkeeping between the parallel passes.
+- **Topology** (74 / 40, from 127 / 66; see
+  [performance](guide/performance.md#topology)) is still the largest
+  step of `build` on all cores. What remains:
+  - **Bucket sorts:** about 26 ms on one thread. Ranking 17–64 keys
+    takes about 13 cycles per key, and a 32-bit rank sort, 8 keys per
+    vector, gained at most 3%.
+  - **All cores:** the passes are limited by memory bandwidth. They
+    write 229 MB of topology.
+  - **Elements out of order:** the counting sort by first vertex in
+    `lexsort_rows` is serial.
 - **Dual walk** (117 / 34): about 25 ms of the one-thread time is
   gathering vertex coordinates into the SIMD lanes.
 - **Whitney element loop**, several elements per SIMD vector. It takes
@@ -135,7 +141,7 @@ large enough that the complex no longer fits.
 ## Usability
 
 - **Warn about badly numbered meshes in `read_gmsh`.** A mesh numbered
-  without spatial coherence builds 2–3× slower (see
+  without spatial coherence builds 1.5–1.7× slower (see
   [vertex numbering](guide/vertex-numbering.md)). A cheap check, such as
   how many ownership blocks the average element touches, could point the
   user to `reorder_vertices`.

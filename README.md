@@ -40,7 +40,7 @@ Beyond PyDEC, MojoDEC adds:
 - icosahedron and icosphere meshes
 - `reorder_vertices`: renumbers a mesh (or a Gmsh file, with its groups)
   in Morton order, which makes meshes numbered at random in space build
-  2–3× faster
+  1.5–1.7× faster
 - its own dense and sparse linear algebra (pivoted LU, symmetric
   eigensolver, CG, LSQR, generalized eigenproblems), and a
   `DiagonalOperator` type for the Hodge stars
