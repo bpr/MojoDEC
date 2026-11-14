@@ -34,6 +34,7 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.mesh import SimplicialMesh
+from mojodec.core.parallel import chunk_scratch, num_chunks, parallel_ranges
 from mojodec.routines.simplex_array import coherent_orientation
 from mojodec.core.utils import (
     IntArray,
@@ -534,44 +535,184 @@ def morton_keys(vertices: RealArray) raises -> List[Int]:
             String("morton_keys: need 1 to 63 coordinates per point, got ", E)
         )
     var vp = vertices.unsafe_ptr()
+    # the bounding box, in parallel: each chunk's box, and its first
+    # coordinate that is not finite
+    comptime SERIAL_BELOW = 16384
+    var C = num_chunks(nv, SERIAL_BELOW)
+    var los = List[Float64](length=max(C, 1) * E, fill=0)
+    var his = List[Float64](length=max(C, 1) * E, fill=0)
+    var bad = List[Int](length=max(C, 1), fill=-1)
+    var lop = los.unsafe_ptr()
+    var hip = his.unsafe_ptr()
+    var badp = bad.unsafe_ptr()
+
+    def box(chunk: Int, i0: Int, i1: Int) {vp, lop, hip, badp, E}:
+        var lo = chunk_scratch[Float64](E, 0)
+        var hi = chunk_scratch[Float64](E, 0)
+        for i in range(i0, i1):
+            for a in range(E):
+                var x = Float64(vp[unsafe_offset=i * E + a])
+                if not isfinite(x):
+                    badp[unsafe_offset=chunk] = i * E + a
+                    return
+                if i == i0 or x < lo[a]:
+                    lo[a] = x
+                if i == i0 or x > hi[a]:
+                    hi[a] = x
+        for a in range(E):
+            lop[unsafe_offset=chunk * E + a] = lo[a]
+            hip[unsafe_offset=chunk * E + a] = hi[a]
+
+    parallel_ranges(nv, SERIAL_BELOW, box)
+    for c in range(C):
+        if bad[c] >= 0:
+            raise Error(
+                String(
+                    "morton_keys: coordinate ",
+                    bad[c] % E,
+                    " of point ",
+                    bad[c] // E,
+                    " is not finite",
+                )
+            )
+    # combined in order, as one pass would (the first of equal extremes)
     var lo = List[Float64](length=E, fill=0)
     var hi = List[Float64](length=E, fill=0)
-    for i in range(nv):
+    for c in range(C):
         for a in range(E):
-            var x = Float64(vp[unsafe_offset=i * E + a])
-            if not isfinite(x):
-                raise Error(
-                    String(
-                        "morton_keys: coordinate ",
-                        a,
-                        " of point ",
-                        i,
-                        " is not finite",
-                    )
-                )
-            if i == 0 or x < lo[a]:
+            var x = los[c * E + a]
+            var y = his[c * E + a]
+            if c == 0 or x < lo[a]:
                 lo[a] = x
-            if i == 0 or x > hi[a]:
-                hi[a] = x
+            if c == 0 or y > hi[a]:
+                hi[a] = y
     var bits = min(21, 63 // E)
     var top = (1 << bits) - 1
     var scale = Float64(1 << bits)
-    var q = List[Int](length=E, fill=0)
-    var keys = List[Int](length=nv, fill=0)
-    for i in range(nv):
-        for a in range(E):
-            var width = hi[a] - lo[a]
-            if width > 0:
-                var t = (Float64(vp[unsafe_offset=i * E + a]) - lo[a]) / width
-                q[a] = min(Int(t * scale), top)
-            else:
-                q[a] = 0
-        var key = 0
-        for l in range(bits):
+    var keys = List[Int](unsafe_uninit_length=nv)
+    var kp = keys.unsafe_ptr()
+    var lp = lo.unsafe_ptr()
+    var hp = hi.unsafe_ptr()
+
+    def codes(
+        chunk: Int, i0: Int, i1: Int
+    ) {vp, kp, lp, hp, E, bits, scale, top}:
+        if E == 3:
+            for i in range(i0, i1):
+                kp[unsafe_offset=i] = (
+                    _spread3(_quantize(vp, lp, hp, E, scale, top, i, 0))
+                    | (
+                        _spread3(_quantize(vp, lp, hp, E, scale, top, i, 1))
+                        << 1
+                    )
+                    | (
+                        _spread3(_quantize(vp, lp, hp, E, scale, top, i, 2))
+                        << 2
+                    )
+                )
+            return
+        if E == 2:
+            for i in range(i0, i1):
+                kp[unsafe_offset=i] = _spread2(
+                    _quantize(vp, lp, hp, E, scale, top, i, 0)
+                ) | (_spread2(_quantize(vp, lp, hp, E, scale, top, i, 1)) << 1)
+            return
+        var q = chunk_scratch[Int](E, 0)
+        for i in range(i0, i1):
             for a in range(E):
-                key |= ((q[a] >> l) & 1) << (l * E + a)
-        keys[i] = key
+                q[a] = _quantize(vp, lp, hp, E, scale, top, i, a)
+            var key = 0
+            for l in range(bits):
+                for a in range(E):
+                    key |= ((q[a] >> l) & 1) << (l * E + a)
+            kp[unsafe_offset=i] = key
+
+    parallel_ranges(nv, SERIAL_BELOW, codes)
+    _ = lo^
+    _ = hi^
     return keys^
+
+
+@always_inline
+def _quantize(
+    vp: Pointer[Float64, _],
+    lp: Pointer[Float64, _],
+    hp: Pointer[Float64, _],
+    E: Int,
+    scale: Float64,
+    top: Int,
+    i: Int,
+    a: Int,
+) -> Int:
+    """Coordinate `a` of point `i` scaled to the box `[lo, hi]` and
+    quantized for `morton_keys`; 0 on an axis where the box is flat."""
+    var width = hp[unsafe_offset=a] - lp[unsafe_offset=a]
+    if width > 0:
+        var t = (vp[unsafe_offset=i * E + a] - lp[unsafe_offset=a]) / width
+        return min(Int(t * scale), top)
+    return 0
+
+
+@always_inline
+def _spread2(x: Int) -> Int:
+    """Bit `l` of `x` (21 bits) moved to bit `2 l`."""
+    var y = x & 0x1FFFFF
+    y = (y | (y << 16)) & 0x0000FFFF0000FFFF
+    y = (y | (y << 8)) & 0x00FF00FF00FF00FF
+    y = (y | (y << 4)) & 0x0F0F0F0F0F0F0F0F
+    y = (y | (y << 2)) & 0x3333333333333333
+    return (y | (y << 1)) & 0x5555555555555555
+
+
+@always_inline
+def _spread3(x: Int) -> Int:
+    """Bit `l` of `x` (21 bits) moved to bit `3 l`."""
+    var y = x & 0x1FFFFF
+    y = (y | (y << 32)) & 0x001F00000000FFFF
+    y = (y | (y << 16)) & 0x001F0000FF0000FF
+    y = (y | (y << 8)) & 0x100F00F00F00F00F
+    y = (y | (y << 4)) & 0x10C30C30C30C30C3
+    return (y | (y << 2)) & 0x1249249249249249
+
+
+def _radix_order(keys: List[Int]) -> List[Int]:
+    """The stable order of the non-negative `keys`: an LSD radix sort by
+    11-bit digits, skipping digits that all keys share."""
+    var n = len(keys)
+    var perm = List[Int](unsafe_uninit_length=n)
+    var k = keys.copy()
+    var k2 = List[Int](unsafe_uninit_length=n)
+    var p2 = List[Int](unsafe_uninit_length=n)
+    var top = 0
+    for i in range(n):
+        perm[i] = i
+        top |= keys[i]
+    comptime D = 11
+    comptime R = 1 << D
+    var count = List[Int](length=R + 1, fill=0)
+    var shift = 0
+    # a shift by 64 or more is undefined (it gave garbage, and 29 passes
+    # instead of 6 for 63-bit keys)
+    while shift < 64 and (top >> shift) != 0:
+        for d in range(R + 1):
+            count[d] = 0
+        for i in range(n):
+            count[((k[i] >> shift) & (R - 1)) + 1] += 1
+        var shared = False
+        for d in range(R):
+            shared = shared or count[d + 1] == n
+            count[d + 1] += count[d]
+        if not shared:
+            for i in range(n):
+                var d = (k[i] >> shift) & (R - 1)
+                var at = count[d]
+                count[d] = at + 1
+                k2[at] = k[i]
+                p2[at] = perm[i]
+            swap(k, k2)
+            swap(perm, p2)
+        shift += D
+    return perm^
 
 
 def reorder_vertices(mesh: SimplicialMesh) raises -> ReorderedMesh:
@@ -614,39 +755,57 @@ def reorder_vertices(mesh: SimplicialMesh) raises -> ReorderedMesh:
     var nv = rows_of(mesh.vertices)
     var ne = rows_of(mesh.elements)
     var K = cols_of(mesh.elements)
-    var keys = morton_keys(mesh.vertices)
-    var key_col = int_array(nv, 1)
-    for i in range(nv):
-        key_col.unsafe_set(i, Scalar[DType.int](keys[i]))
-    var old_vertex = lexsort_rows(key_col)
+    var old_vertex = _radix_order(morton_keys(mesh.vertices))
     var new_vertex = List[Int](length=nv, fill=0)
     for i in range(nv):
         new_vertex[old_vertex[i]] = i
-    # every element in the new numbering, and a copy with sorted rows
+    # every element in the new numbering (in parallel, each chunk noting
+    # its first entry that names no vertex), and a copy with sorted rows
     var ep = mesh.elements.unsafe_ptr()
     var renamed = int_array(ne, K)
-    for i in range(ne * K):
-        var v = Int(ep[unsafe_offset=i])
-        if v < 0 or v >= nv:
+    var rp = renamed.unsafe_ptr()
+    var nvp = new_vertex.unsafe_ptr()
+    comptime SERIAL_BELOW = 65536
+    var C = num_chunks(ne * K, SERIAL_BELOW)
+    var bad = List[Int](length=max(C, 1), fill=-1)
+    var badp = bad.unsafe_ptr()
+
+    def rename(chunk: Int, i0: Int, i1: Int) {ep, rp, nvp, badp, nv}:
+        for i in range(i0, i1):
+            var v = Int(ep[unsafe_offset=i])
+            if v < 0 or v >= nv:
+                badp[unsafe_offset=chunk] = i
+                return
+            rp[unsafe_offset=i] = Scalar[DType.int](nvp[unsafe_offset=v])
+
+    parallel_ranges(ne * K, SERIAL_BELOW, rename)
+    for c in range(C):
+        if bad[c] >= 0:
             raise Error(
                 String(
                     "reorder_vertices: element ",
-                    i // K,
+                    bad[c] // K,
                     " names vertex ",
-                    v,
+                    Int(ep[unsafe_offset=bad[c]]),
                     " of ",
                     nv,
                 )
             )
-        renamed.unsafe_set(i, Scalar[DType.int](new_vertex[v]))
     var sorted_rows = renamed.copy()
     sort_each_row(sorted_rows)
     var old_element = lexsort_rows(sorted_rows)
     var elements = int_array(ne, K)
-    for t in range(ne):
-        var r = old_element[t]
-        for j in range(K):
-            elements.unsafe_set(t * K + j, renamed.unsafe_get(r * K + j))
+    var elp = elements.unsafe_ptr()
+    var oep = old_element.unsafe_ptr()
+
+    def gather(chunk: Int, t0: Int, t1: Int) {elp, rp, oep, K}:
+        for t in range(t0, t1):
+            var r = oep[unsafe_offset=t]
+            for j in range(K):
+                elp[unsafe_offset=t * K + j] = rp[unsafe_offset=r * K + j]
+
+    parallel_ranges(ne, SERIAL_BELOW // 4, gather)
+    _ = bad^
     var vertices = take_rows(mesh.vertices, old_vertex)
     return ReorderedMesh(
         SimplicialMesh(vertices, elements),

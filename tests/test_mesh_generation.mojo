@@ -45,6 +45,7 @@ from mojodec.routines.mesh_generation import (
     orient_coherently,
     morton_keys,
     reorder_vertices,
+    _radix_order,
 )
 from mojodec.core.abstract_simplicial_complex import AbstractSimplicialComplex
 from mojodec.routines.simplex_array import coherent_orientation
@@ -432,6 +433,29 @@ def test_morton_keys() raises:
     var bad = real_array_from_rows([[0.0, 0.0], [1.0, Float64.MAX * 2]])
     with assert_raises(contains="coordinate 1 of point 1 is not finite"):
         _ = morton_keys(bad)
+
+
+def test_radix_order() raises:
+    # keys using all 63 bits (the passes must stop at shift 63: a larger
+    # shift is undefined), with ties, which keep their order
+    var n = 5000
+    var keys = List[Int](length=n, fill=0)
+    var state: UInt64 = 99
+    for i in range(n):
+        state = state * 6364136223846793005 + 1442695040888963407
+        keys[i] = Int(state >> 1) if i % 3 != 0 else Int(state >> 1) % 7
+    keys[n - 1] = (1 << 63) - 1
+    var order = _radix_order(keys)
+    var seen = List[Bool](length=n, fill=False)
+    for i in order:
+        assert_true(not seen[i])
+        seen[i] = True
+    for t in range(1, n):
+        var a = keys[order[t - 1]]
+        var b = keys[order[t]]
+        assert_true(a < b or (a == b and order[t - 1] < order[t]))
+    assert_equal(order[n - 1], n - 1)
+    assert_true(_radix_order(List[Int]()) == List[Int]())
 
 
 def _lcg(mut state: UInt64) -> Int:

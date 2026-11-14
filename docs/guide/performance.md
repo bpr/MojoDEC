@@ -218,7 +218,8 @@ against `tet_40` (best of 3 alternating rounds): build 1.06× on one thread
 and 1.00× on all cores, topology 1.21× and 1.11×, the dual walk on all
 cores 0.82× (69 against 84 ms), Whitney k = 0 1.33× on one thread and the
 rest within 1.05×. `tri_400_shuffled` reordered: build 1.04× and 0.98×.
-Reordering takes 30–40 ms.
+Reordering took 30–40 ms then (see
+[Reordering in parallel](#reordering-in-parallel)).
 
 ## Sorting without branches
 
@@ -975,3 +976,45 @@ triangles (`tri_400` 13.5 against 10.3).
 **What is left.** On `tet_40` with one thread, the square roots and the
 divisions normalizing edges still take about 20 ms of the walk's 55.
 Neither can become a multiplication with the same bits.
+
+## Reordering in parallel
+
+`reorder_vertices` took 24–38 ms on one thread and hardly less on all
+cores. On `tri_400_shuffled` with one thread, in ms: sorting the
+vertices by Morton code 20.6, the codes 8.0, renaming and gathering the
+elements 2.7, and sorting the elements 4.1 (already parallel). Three
+changes, with the same results:
+
+- **The vertices sort by radix.** Morton codes take up to 63 bits, far
+  more than the number of vertices, so `lexsort_rows` took its serial
+  merge sort, comparing rows of one entry. Now an LSD radix sort orders
+  them by 11-bit digits, skipping the digits all codes share, stable
+  so that equal codes keep their old order: 20.6 → 3.5 ms. A first
+  version stopped when the shifted codes were 0, and with 63-bit codes
+  shifted by 66, 77, and so on (undefined in LLVM) it ran 29 passes
+  instead of 6.
+- **The codes are computed in parallel**, and for 2 and 3 coordinates
+  the bits are interleaved by shifts and masks instead of one bit at a
+  time: 8.0 → 2.2 ms on one thread, 0.8 on all cores. The bounding box
+  is found in parallel too, and a coordinate that is not finite is
+  reported as before: the first one.
+- **The elements are renamed and gathered in parallel**, with an
+  element naming no vertex reported as before.
+
+`reorder_vertices`, best of 5 alternating rounds against the committed
+build (`57a2fb7`), in ms:
+
+| Mesh | 1 thread | all cores |
+|---|---:|---:|
+| `tet_40` | 23.8 → 20.2 | 21.5 → 12.7 |
+| `tet_40_shuffled` | 29.4 → 21.2 | 26.7 → 12.8 |
+| `tri_400` | 25.0 → 15.7 | 23.3 → 12.4 |
+| `tri_400_shuffled` | 38.3 → 17.3 | 38.4 → 12.4 |
+
+The codes, both permutations, and the reordered mesh were checked
+against the committed build's on 14 meshes, on 1 thread and on all
+cores.
+
+**What is left.** The radix sort (2–4 ms) and inverting the vertex
+permutation are serial. On `tet_40` with one thread the sort of the
+elements takes about 7 ms of the 20.

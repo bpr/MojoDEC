@@ -128,7 +128,9 @@ all cores.
   two-pass assembly, because with random numbering a row's triangles
   are scattered and are read twice. `reorder_vertices` avoids it; fix it
   only if it costs nothing on the ordered meshes.
-- **`reorder_vertices`:** its sort is serial.
+- **`reorder_vertices`** (20 / 13 ms on `tet_40`, from 24 / 22; see
+  [performance](guide/performance.md#reordering-in-parallel)): the
+  radix sort of the Morton codes is serial, 2–4 ms.
 
 ## Memory
 

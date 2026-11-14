@@ -101,7 +101,8 @@ are farthest apart in it (median 1681).
 
 The result does not depend on the numbering the mesh came with, when the
 codes are distinct, and reordering it again changes nothing. It takes
-30–40 ms for 384k tetrahedra or 320k triangles, on one thread.
+16–21 ms for 384k tetrahedra or 320k triangles on one thread, and about
+13 ms on all cores.
 
 ## Carrying data across
 
@@ -144,7 +145,7 @@ walk, and Whitney were measured again after later work (best of 5):
 
 Reordering brings a shuffled mesh back to the speed of the grid's own
 numbering, and the 3D dual walk on all cores below it (15 against 18 ms,
-from the fewer revisits). It takes 30–40 ms, against 100 ms saved in a
+from the fewer revisits). It takes 13–21 ms, against 100 ms saved in a
 one-thread build of `tet_40_shuffled` and 63–179 ms in each Whitney
 matrix.
 [Performance](performance.md#shuffled-vertex-numbers) has the full

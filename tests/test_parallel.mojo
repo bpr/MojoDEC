@@ -16,6 +16,8 @@ from mojodec import (
     SimplicialComplex,
     SimplicialMesh,
     kuhn_grid,
+    morton_keys,
+    reorder_vertices,
     simplicial_grid_2d,
     whitney_innerproduct,
 )
@@ -328,6 +330,43 @@ def _check_large_lexsort_rows(c: Int) raises:
             break
     assert_true(first > 0)
     assert_equal(duplicate, first)
+
+
+def test_large_reorder_vertices() raises:
+    # past the 16384 vertices (26^3 here) where the Morton keys are
+    # computed in parallel and the 65536 entries where the elements are renamed in
+    # parallel: the same result as on one thread, and the first of two
+    # errors in different chunks
+    var mesh = _jittered([25, 25, 25], shuffle=True)
+    _ = setenv("MOJODEC_NUM_THREADS", "1")
+    var one = reorder_vertices(mesh)
+    var keys_one = morton_keys(mesh.vertices)
+    _ = unsetenv("MOJODEC_NUM_THREADS")
+    var all = reorder_vertices(mesh)
+    assert_true(morton_keys(mesh.vertices) == keys_one)
+    assert_true(all.old_vertex == one.old_vertex)
+    assert_true(all.new_vertex == one.new_vertex)
+    assert_true(all.old_element == one.old_element)
+    for i in range(one.mesh.elements.size):
+        assert_equal(
+            all.mesh.elements.unsafe_get(i), one.mesh.elements.unsafe_get(i)
+        )
+    var nv = rows_of(mesh.vertices)
+    var ne = rows_of(mesh.elements)
+    var bad = SimplicialMesh(mesh.vertices.copy(), mesh.elements.copy())
+    iset(bad.elements, ne - 2, 1, nv + 5)
+    iset(bad.elements, ne // 3, 2, -1)
+    with assert_raises(
+        contains=String("element ", ne // 3, " names vertex -1 of ", nv)
+    ):
+        _ = reorder_vertices(bad)
+    var far = mesh.vertices.copy()
+    fset(far, nv - 3, 0, Float64.MAX * 2)
+    fset(far, nv // 2, 1, Float64.MAX * 2)
+    with assert_raises(
+        contains=String("coordinate 1 of point ", nv // 2, " is not finite")
+    ):
+        _ = morton_keys(far)
 
 
 def _complex_error(mesh: SimplicialMesh, threads: String) raises -> String:
