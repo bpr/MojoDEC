@@ -1640,10 +1640,21 @@ struct _DualWalk(Copyable, Movable):
         sorted simplex means entry `p` omits the vertex of rank `dim - p`;
         the chains are visited in that order, as `_add_dual_pieces` does,
         so every sum is added in the same order with the same arithmetic.
+
+        Triangles in 2D and 3D and tetrahedra in 3D take `_run_fixed`.
         """
         var n = self.n
-        var w = n + 1
         var E = self.E
+        if n == 3 and E == 3:
+            self._run_fixed[3, 3](lo, hi)
+            return
+        if n == 2 and E == 2:
+            self._run_fixed[2, 2](lo, hi)
+            return
+        if n == 2 and E == 3:
+            self._run_fixed[2, 3](lo, hi)
+            return
+        var w = n + 1
         var size = 1 << w
         var top = self.simplices[n]
         var q = chunk_scratch[Float64](max(n, 1) * E, 0)
@@ -1685,26 +1696,86 @@ struct _DualWalk(Copyable, Movable):
                 dp[unsafe_offset=t] = dp[unsafe_offset=t] + 1
             if n == 0:
                 continue
-            if n == 3 and E == 3:
-                self._gather_fixed[3, 3](t, tab)
-                self._walk_soa[3, 3](tab, t, lo, hi)
-            elif n == 2 and E == 2:
-                self._gather_fixed[2, 2](t, tab)
-                self._walk_soa[2, 2](tab, t, lo, hi)
-            elif n == 2 and E == 3:
-                self._gather_fixed[2, 3](t, tab)
-                self._walk_soa[2, 3](tab, t, lo, hi)
-            else:
-                self._gather(t, size, pop, tab)
-                self._walk(size - 1, n, 1.0, 1.0, tab, t, lo, hi)
+            self._gather(t, size, pop, tab)
+            self._walk(size - 1, n, 1.0, 1.0, tab, t, lo, hi)
         _ = q^
         _ = gidx^
         _ = cen^
         _ = lbary^
         _ = bitpos^
 
+    def _run_fixed[n: Int, E: Int](self, lo: Int, hi: Int):
+        """`run` for a complex of dimension `n` in `E` dimensions known at
+        compile time, by `_gather_fixed` and `_walk_soa`. The faces of the
+        next top simplex are gathered, into a second set of tables, before
+        the current one is walked: the gather's loads overlap the walk,
+        and the walk's vector loads don't wait on stores still in
+        flight."""
+        comptime w = n + 1
+        comptime size = 1 << w
+        comptime CEN = _face_slots(n) * E
+        comptime BARY = _bary_base(n, n - 1)
+        # two sets in separate allocations (in one, the walk took 1.3x
+        # as long)
+        var gidx = chunk_scratch[Int](size, 0)
+        var cen = chunk_scratch[Float64](CEN, 0)
+        var bary = chunk_scratch[Float64](BARY, 0)
+        var gidx2 = chunk_scratch[Int](size, 0)
+        var cen2 = chunk_scratch[Float64](CEN, 0)
+        var bary2 = chunk_scratch[Float64](BARY, 0)
+        var cur = _FixedTables(
+            gidx.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+            cen.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+            bary.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        )
+        var nxt = _FixedTables(
+            gidx2.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+            cen2.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+            bary2.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        )
+        var top = self.simplices[n]
+        var dp = self.dual[n]
+        var t = self._next_touching[w](0, lo, hi)
+        if t < self.num_top:
+            self._gather_fixed[n, E](t, cur)
+        while t < self.num_top:
+            var t2 = self._next_touching[w](t + 1, lo, hi)
+            if t2 < self.num_top:
+                self._gather_fixed[n, E](t2, nxt)
+            # the dual of a top simplex is its circumcenter: unit volume
+            var first = Int(top[unsafe_offset=t * w])
+            if first >= lo and first < hi:
+                dp[unsafe_offset=t] = dp[unsafe_offset=t] + 1
+            self._walk_soa[n, E](cur, t, lo, hi)
+            var done = cur.copy()
+            cur = nxt.copy()
+            nxt = done^
+            t = t2
+        _ = gidx^
+        _ = cen^
+        _ = bary^
+        _ = gidx2^
+        _ = cen2^
+        _ = bary2^
+
     @always_inline
-    def _gather_fixed[n: Int, E: Int](self, t: Int, tab: _LocalTables):
+    def _next_touching[w: Int](self, start: Int, lo: Int, hi: Int) -> Int:
+        """The first top simplex from `start` with a vertex in `[lo, hi)`
+        (the others own no face), or `num_top`."""
+        var top = self.simplices[w - 1]
+        var t = start
+        while t < self.num_top:
+            var touches = False
+            comptime for j in range(w):
+                var v = Int(top[unsafe_offset=t * w + j])
+                touches = touches or (v >= lo and v < hi)
+            if touches:
+                return t
+            t += 1
+        return self.num_top
+
+    @always_inline
+    def _gather_fixed[n: Int, E: Int](self, t: Int, tab: _FixedTables):
         """`_gather` for a complex of dimension `n` in `E` dimensions known
         at compile time: the masks of each dimension are unrolled."""
         comptime w = n + 1
@@ -1720,26 +1791,43 @@ struct _DualWalk(Copyable, Movable):
             comptime L = n - i
             var ip = self.indptr[L - 1]
             var ix = self.indices[L - 1]
+            # each face is read from the row of the first L-simplex
+            # containing it (rows that name no new face are skipped)
             comptime for M in range(size):
-                comptime if _popcount(M) == L + 1:
+                comptime if _popcount(M) == L + 1 and _names_new_face(n, M, L):
                     var base = ip[unsafe_offset=tab.gidx[unsafe_offset=M]]
                     comptime for p in range(L + 1):
                         comptime face = M ^ (1 << _set_bit(M, L - p))
-                        tab.gidx[unsafe_offset=face] = ix[
-                            unsafe_offset=base + p
-                        ]
+                        comptime if _first_container(n, face, L) == M:
+                            tab.gidx[unsafe_offset=face] = ix[
+                                unsafe_offset=base + p
+                            ]
+        # circumcenters by coordinate, each face at its slot
+        comptime S = _face_slots(n)
         comptime for M in range(1, size):
             comptime L = _popcount(M) - 1
+            comptime slot = _face_slot(n, M)
             var g = tab.gidx[unsafe_offset=M]
             var c = self.center[L]
             comptime for k in range(E):
-                tab.cen[unsafe_offset=M * E + k] = c[unsafe_offset=g * E + k]
-            comptime if L >= 2:
-                var b = self.bary[L]
-                comptime for r in range(L + 1):
-                    tab.bary[unsafe_offset=M * w + r] = b[
-                        unsafe_offset=g * (L + 1) + r
-                    ]
+                tab.cen[unsafe_offset=k * S + slot] = c[unsafe_offset=g * E + k]
+        # the barycentric coordinate signing each chain, in chain order
+        # (levels whose parents are triangles or larger; padding lanes
+        # repeat the last chain)
+        comptime for m in range(n - 1):
+            comptime pd = n - m
+            comptime cnt = _chains(n, m)
+            var b = self.bary[pd]
+            comptime for c in range(4 * ((cnt + 3) // 4)):
+                comptime cc = min(c, cnt - 1)
+                comptime P = (size - 1) if m == 0 else _chain_mask(
+                    n, m - 1, cc // (n + 1 - m)
+                )
+                comptime r = pd - cc % (n + 1 - m)
+                comptime at = _bary_base(n, m) + c
+                tab.bary[unsafe_offset=at] = b[
+                    unsafe_offset=tab.gidx[unsafe_offset=P] * (pd + 1) + r
+                ]
 
     def _gather(self, t: Int, size: Int, pop: List[Int], tab: _LocalTables):
         """Fill the local tables of top simplex `t`: every face's global
@@ -1787,7 +1875,7 @@ struct _DualWalk(Copyable, Movable):
     @always_inline
     def _walk_soa[
         n: Int, E: Int
-    ](self, tab: _LocalTables, t: Int, lo: Int, hi: Int):
+    ](self, tab: _FixedTables, t: Int, lo: Int, hi: Int):
         """`_walk` from top simplex `t`, breadth first and four chains at a
         time, for a complex of dimension `n` in `E` dimensions known at
         compile time.
@@ -1799,8 +1887,12 @@ struct _DualWalk(Copyable, Movable):
         operation for operation (the multiply-adds that the compiler fuses
         in `_walk` are explicit fused multiply-adds here); the chains of a
         level are independent, so their square roots and divisions
-        overlap, where `_walk` waits on each in turn. The pieces are then
-        added to the dual volumes level by level in `_walk`'s order, so
+        overlap, where `_walk` waits on each in turn. A lane vector's
+        inputs (circumcenters, the parent's barycentric coordinates, and
+        the ancestors' edges, volumes, and signs) are one or two vector
+        loads and a shuffle, as the tables are laid out for it (see
+        `_FixedTables` and `_lanes`). The pieces are then added to the
+        dual volumes face by face, each face's in `_walk`'s order, so
         every sum is `_walk`'s, bit for bit.
         """
         comptime w = n + 1
@@ -1813,9 +1905,11 @@ struct _DualWalk(Copyable, Movable):
         comptime PC0 = SGN0 + n * L
         var st = stack_allocation[PC0 + n * L, DType.float64]()
         comptime V4 = SIMD[DType.float64, 4]
+        comptime S = _face_slots(n)
+        comptime ROOT = _face_slot(n, full)
         var rootv = SIMD[DType.float64, 4](0)
         comptime for k in range(E):
-            rootv[k] = tab.cen[unsafe_offset=full * E + k]
+            rootv[k] = tab.cen[unsafe_offset=k * S + ROOT]
         comptime for m in range(n):
             comptime cnt = _chains(n, m)
             comptime pdim = n - m
@@ -1830,12 +1924,12 @@ struct _DualWalk(Copyable, Movable):
                 comptime M3 = _chain_mask(n, m, c3)
                 # new edges from the root circumcenter
                 comptime for k in range(E):
-                    var e = V4(
-                        tab.cen[unsafe_offset=M0 * E + k],
-                        tab.cen[unsafe_offset=M1 * E + k],
-                        tab.cen[unsafe_offset=M2 * E + k],
-                        tab.cen[unsafe_offset=M3 * E + k],
-                    ) - V4(rootv[k])
+                    var e = _lanes[
+                        _face_slot(n, M0),
+                        _face_slot(n, M1),
+                        _face_slot(n, M2),
+                        _face_slot(n, M3),
+                    ](tab.cen, k * S) - V4(rootv[k])
                     st.unsafe_store((m * E + k) * L + 4 * g, e)
                 # orthogonalized against the ancestors' edges
                 comptime for j in range(m):
@@ -1843,21 +1937,15 @@ struct _DualWalk(Copyable, Movable):
                     var proj = V4(0)
                     comptime for k in range(E):
                         comptime o = (j * E + k) * L
-                        var qj = V4(
-                            st[unsafe_offset=o + c0 // D],
-                            st[unsafe_offset=o + c1 // D],
-                            st[unsafe_offset=o + c2 // D],
-                            st[unsafe_offset=o + c3 // D],
+                        var qj = _lanes[c0 // D, c1 // D, c2 // D, c3 // D](
+                            st, o
                         )
                         var e = st.unsafe_load[width=4]((m * E + k) * L + 4 * g)
                         proj = qj.fma(e, proj)
                     comptime for k in range(E):
                         comptime o = (j * E + k) * L
-                        var qj = V4(
-                            st[unsafe_offset=o + c0 // D],
-                            st[unsafe_offset=o + c1 // D],
-                            st[unsafe_offset=o + c2 // D],
-                            st[unsafe_offset=o + c3 // D],
+                        var qj = _lanes[c0 // D, c1 // D, c2 // D, c3 // D](
+                            st, o
                         )
                         comptime at = (m * E + k) * L + 4 * g
                         st.unsafe_store(
@@ -1882,29 +1970,15 @@ struct _DualWalk(Copyable, Movable):
                     comptime P = n + 1 - m
                     comptime ov = VOL0 + (m - 1) * L
                     comptime os = SGN0 + (m - 1) * L
-                    pvol = V4(
-                        st[unsafe_offset=ov + c0 // P],
-                        st[unsafe_offset=ov + c1 // P],
-                        st[unsafe_offset=ov + c2 // P],
-                        st[unsafe_offset=ov + c3 // P],
-                    )
-                    psgn = V4(
-                        st[unsafe_offset=os + c0 // P],
-                        st[unsafe_offset=os + c1 // P],
-                        st[unsafe_offset=os + c2 // P],
-                        st[unsafe_offset=os + c3 // P],
-                    )
+                    pvol = _lanes[c0 // P, c1 // P, c2 // P, c3 // P](st, ov)
+                    psgn = _lanes[c0 // P, c1 // P, c2 // P, c3 // P](st, os)
                 var vol = pvol * h
                 var sgn = psgn
                 comptime if pdim >= 2:
                     # flip where the parent's barycentric coordinate at
                     # the omitted vertex is < 0 or -0 (an edge's are 1/2)
-                    var b = V4(
-                        tab.bary[unsafe_offset=_chain_bary(n, m, c0)],
-                        tab.bary[unsafe_offset=_chain_bary(n, m, c1)],
-                        tab.bary[unsafe_offset=_chain_bary(n, m, c2)],
-                        tab.bary[unsafe_offset=_chain_bary(n, m, c3)],
-                    )
+                    comptime B = _bary_base(n, m) + 4 * g
+                    var b = tab.bary.unsafe_load[width=4](B)
                     var neg = (bitcast[DType.uint64, 4](b) >> 63).eq(1) & b.eq(
                         b
                     )
@@ -1913,21 +1987,38 @@ struct _DualWalk(Copyable, Movable):
                 st.unsafe_store(SGN0 + m * L + 4 * g, sgn)
                 var piece = sgn * vol
                 comptime if m >= 1:
-                    piece = piece / V4(self.fact.unsafe_get(m + 1))
+                    # (m + 1)!, a constant: the division by 2 becomes an
+                    # exact multiplication by 1/2
+                    comptime fact = Float64(_chains(m, m))
+                    piece = piece / V4(fact)
                 st.unsafe_store(PC0 + m * L + 4 * g, piece)
-        # add the pieces in _walk's order, to the faces the block owns
+        # add the pieces to the faces the block owns. A face's pieces are
+        # summed in a register, in _walk's order (chain order), and stored
+        # once, so every sum is _walk's, bit for bit, without a round trip
+        # through memory per piece.
         var top = self.simplices[n]
+        # rows are sorted: every face's first vertex is in the block when
+        # the first and last vertices are
+        var all_owned = (
+            Int(top[unsafe_offset=t * w]) >= lo
+            and Int(top[unsafe_offset=t * w + n]) < hi
+        )
         comptime for m in range(n):
             var fdual = self.dual[n - 1 - m]
-            comptime for c in range(_chains(n, m)):
-                comptime Mc = _chain_mask(n, m, c)
-                var first = Int(top[unsafe_offset=t * w + _set_bit(Mc, 0)])
-                if first >= lo and first < hi:
-                    var f = tab.gidx[unsafe_offset=Mc]
-                    fdual[unsafe_offset=f] = (
-                        fdual[unsafe_offset=f]
-                        + st[unsafe_offset=PC0 + m * L + c]
-                    )
+            comptime for F in range(1 << w):
+                comptime if _popcount(F) == n - m:
+                    comptime F0 = _set_bit(F, 0)
+                    var owned = all_owned
+                    if not owned:
+                        var first = Int(top[unsafe_offset=t * w + F0])
+                        owned = first >= lo and first < hi
+                    if owned:
+                        var f = tab.gidx[unsafe_offset=F]
+                        var acc = fdual[unsafe_offset=f]
+                        comptime for c in range(_chains(n, m)):
+                            comptime if _chain_mask(n, m, c) == F:
+                                acc = acc + st[unsafe_offset=PC0 + m * L + c]
+                        fdual[unsafe_offset=f] = acc
 
     def _walk(
         self,
@@ -2011,6 +2102,22 @@ struct _DualWalk(Copyable, Movable):
                 )
             if dim > 1:
                 self._walk(child, dim - 1, s, new_vol, tab, t, lo, hi)
+
+
+@fieldwise_init
+struct _FixedTables(Copyable, Movable):
+    """Scratch tables of one top simplex for `_gather_fixed` and
+    `_walk_soa`, laid out so that each lane vector of the walk is one or
+    two vector loads and a shuffle."""
+
+    var gidx: Pointer[Int, MutUntrackedOrigin]
+    """Global index of each face, by mask."""
+    var cen: _FloatPtr
+    """Circumcenters by coordinate: coordinate `k` of face `M` at
+    `k * _face_slots(n) + _face_slot(n, M)`."""
+    var bary: _FloatPtr
+    """The barycentric coordinate signing each chain, in chain order:
+    level `m`'s from `_bary_base(n, m)`."""
 
 
 @fieldwise_init
@@ -2101,14 +2208,107 @@ def _chain_mask(n: Int, m: Int, c: Int) -> Int:
     return M
 
 
-def _chain_bary(n: Int, m: Int, c: Int) -> Int:
-    """The barycentric-table offset of the coordinate that signs chain `c`
-    of level `m`: its parent's, at the vertex the chain drops."""
-    var P = (1 << (n + 1)) - 1
-    if m > 0:
-        P = _chain_mask(n, m - 1, c // (n + 1 - m))
-    var p = c % (n + 1 - m)
-    return P * (n + 1) + (n - m) - p
+def _first_container(n: Int, face: Int, L: Int) -> Int:
+    """The smallest mask of an `n`-simplex's face with `L + 1` vertices
+    containing `face`."""
+    for M in range(1 << (n + 1)):
+        if _popcount(M) == L + 1 and M & face == face:
+            return M
+    return -1
+
+
+def _names_new_face(n: Int, M: Int, L: Int) -> Bool:
+    """Whether the `d` row of face `M` (`L + 1` vertices) of an
+    `n`-simplex names a face not named by the row of an earlier mask (see
+    `_first_container`)."""
+    for j in range(n + 1):
+        if (M >> j) & 1 == 1 and _first_container(n, M ^ (1 << j), L) == M:
+            return True
+    return False
+
+
+def _bary_base(n: Int, m: Int) -> Int:
+    """Where level `m`'s chains start in `_walk_soa`'s barycentric table:
+    each level takes its chains rounded up to a multiple of 4."""
+    var b = 0
+    for j in range(m):
+        b += 4 * ((_chains(n, j) + 3) // 4)
+    return b
+
+
+def _binomial(n: Int, k: Int) -> Int:
+    var c = 1
+    for j in range(k):
+        c = c * (n - j) // (j + 1)
+    return c
+
+
+def _face_slots(n: Int) -> Int:
+    """The number of slots per coordinate in `_walk_soa`'s circumcenter
+    table (see `_face_slot`)."""
+    var total = 0
+    for k in range(1, n + 2):
+        total += 4 * ((_binomial(n + 1, k) + 3) // 4)
+    return total
+
+
+def _face_slot(n: Int, M: Int) -> Int:
+    """The slot of face `M` of an `n`-simplex in `_walk_soa`'s circumcenter
+    table: faces by number of vertices, each size taking a multiple of 4
+    slots, in the order they first appear among the chains of their level.
+    The 4 lanes of a chain vector then come from one or two aligned groups
+    of 4 slots."""
+    var k = _popcount(M)
+    var base = 0
+    for s in range(1, k):
+        base += 4 * ((_binomial(n + 1, s) + 3) // 4)
+    if k == n + 1:
+        return base
+    var m = n - k
+    var rank = 0
+    for c in range(_chains(n, m)):
+        var Mc = _chain_mask(n, m, c)
+        var seen = False
+        for c2 in range(c):
+            if _chain_mask(n, m, c2) == Mc:
+                seen = True
+        if seen:
+            continue
+        if Mc == M:
+            return base + rank
+        rank += 1
+    return -1
+
+
+@always_inline
+def _lanes[
+    s0: Int, s1: Int, s2: Int, s3: Int
+](p: Pointer[Float64, _], base: Int) -> SIMD[DType.float64, 4]:
+    """`(p[base + s0], ..., p[base + s3])`: when the slots lie in one or
+    two aligned groups of 4, by vector loads and a shuffle."""
+    comptime g0 = s0 // 4
+    comptime g3 = s3 // 4
+    comptime one = s1 // 4 == g0 and s2 // 4 == g0 and g3 == g0
+    comptime two = (s1 // 4 == g0 or s1 // 4 == g3) and (
+        s2 // 4 == g0 or s2 // 4 == g3
+    )
+    comptime if one:
+        return p.unsafe_load[width=4](base + 4 * g0).shuffle[
+            s0 - 4 * g0, s1 - 4 * g0, s2 - 4 * g0, s3 - 4 * g0
+        ]()
+    elif two:
+        comptime i1 = s1 - 4 * g0 if s1 // 4 == g0 else s1 - 4 * g3 + 4
+        comptime i2 = s2 - 4 * g0 if s2 // 4 == g0 else s2 - 4 * g3 + 4
+        return p.unsafe_load[width=4](base + 4 * g0).shuffle[
+            s0 - 4 * g0, i1, i2, s3 - 4 * g3 + 4
+        ](p.unsafe_load[width=4](base + 4 * g3))
+    else:
+        return SIMD[DType.float64, 4](
+            p[unsafe_offset=base + s0],
+            p[unsafe_offset=base + s1],
+            p[unsafe_offset=base + s2],
+            p[unsafe_offset=base + s3],
+        )
 
 
 def _factorials(n: Int) -> List[Float64]:

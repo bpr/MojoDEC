@@ -158,7 +158,12 @@ plan). Key design points that span several files:
   `_walk_soa` for triangles in 2D and 3D and tetrahedra in 3D, the
   recursive `_walk` otherwise, the same sums bit for bit; check a change
   there against the committed build on jittered meshes, serial and
-  parallel, by the bits of every level's dual volumes);
+  parallel, by the bits of every level's dual volumes). `_run_fixed`
+  gathers one top simplex ahead into `_FixedTables`, laid out so that
+  each lane vector is one or two vector loads and a shuffle (`_lanes`,
+  `_face_slot`); the scatter sums each face's pieces in a register, in
+  chain order. Its two sets of tables are separate allocations: in one,
+  the walk took 1.3x as long;
   `dual_edge_piece_values` runs the
   same walk to keep the edge pieces per top simplex, which `flat` and
   `dual_edge_pieces` use. In loops, look faces up with

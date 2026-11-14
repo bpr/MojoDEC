@@ -9,8 +9,8 @@ decided against.
 
 Measurements on this page use the Kuhn grids from `benchmarks/compare`.
 They were taken on an 8-core i7-10875H (16 threads, AVX2) at commit
-`48c8542`, built with `-D ASSERT=none`, best of 3. Topology and build
-were measured again after the topology work (best of 5).
+`48c8542`, built with `-D ASSERT=none`, best of 3. Topology, dual
+volumes, and build were measured again after later work (best of 5).
 
 - **`tet_40`**: the unit cube, 40³ cells, 384,000 tetrahedra, 68,921
   vertices.
@@ -100,11 +100,11 @@ complex copies, and the runtime.
 | topology: faces, `d`, `boundary`, orientation check | `simplex_array_boundary`, `require_coherent_orientation` | 74 | 40 |
 | circumcenters | `compute_circumcenters` | 33 | 12 |
 | primal volumes | `compute_primal_volume` | 16 | 4.5 |
-| dual volumes | `compute_dual_volume` (`_DualWalk`) | 117 | 34 |
+| dual volumes | `compute_dual_volume` (`_DualWalk`) | 62 | 18 |
 | Hodge stars | `construct_hodge` | 5.6 | 6.0 |
-| **build** | | **242** | **94** |
+| **build** | | **191** | **85** |
 
-On `tri_400` the build takes 76 ms on one thread and 34 ms on all
+On `tri_400` the build takes 68 ms on one thread and 36 ms on all
 cores. Topology is 28 and 19 ms of that.
 
 - **Topology** never sorts all the faces. A parallel counting sort puts
@@ -121,7 +121,10 @@ cores. Topology is 28 and 19 ms of that.
 - **Dual volumes** come from one walk down the chains of circumcenters,
   from each top simplex to its vertices. For triangles in 2D and 3D and
   tetrahedra in 3D the walk runs breadth first, four chains per SIMD
-  vector.
+  vector. Each top simplex's faces are gathered one simplex ahead, into
+  tables laid out so that each vector is a vector load and a shuffle,
+  and each face's pieces are summed in a register. What is left is
+  mostly the square roots and divisions.
 
 ## Whitney inner products
 

@@ -545,3 +545,79 @@ minus topology).
   of topology, and they stop scaling early. The pass over the runs at
   level 2 takes the same time on 2 threads as on 16, so it is limited
   by memory bandwidth.
+
+## The dual walk's gather and scatter
+
+After the walk went [breadth first](#the-dual-walk-breadth-first), most
+of its time was spent around the arithmetic rather than in it. On
+`tet_40` with one thread, taking a part out showed what it cost: of
+117 ms, the scatter of the pieces into the dual volumes took about
+40 ms, and building the SIMD lanes from the gathered tables about 14.
+Four changes, all with the same bits:
+
+- **Each face's pieces are summed in a register.** A tetrahedron adds
+  40 pieces to 14 faces, 6 of them to each vertex. Each piece was a
+  load, an add, and a store to the dual volume, and the next piece for
+  the same vertex waited on that store. Now each face's pieces are
+  added in a register, in the same order, and the sum is stored once.
+  When every vertex of the tetrahedron is in the block, no face's
+  ownership is checked.
+- **Tables laid out for the lanes.** Each SIMD lane takes one chain, and
+  the chains' faces were gathered into a table by face, so each vector
+  took four scalar loads and three shuffles. Now:
+  - the circumcenters are stored by coordinate, with the faces of each
+    size in the order they first appear among the chains, so a lane
+    vector is one or two vector loads and a shuffle;
+  - the barycentric coordinates that sign the chains are stored in
+    chain order, so they are one vector load;
+  - the parents' edges, volumes, and signs are a shuffle of one of the
+    parent level's vectors.
+- **One simplex ahead.** The faces of the next top simplex are gathered
+  into a second set of tables before the current one is walked. The
+  gather's loads overlap the walk. Without this, the vector loads read
+  the gather's scalar stores before they had left the store buffer, and
+  `tri_400` got slower (16 → 17 ms).
+- **Fewer loads in the gather.** Each edge's index is read from one
+  triangle's row of `d`, not two: three of a tetrahedron's four rows
+  name all six edges. The factorial that divides each piece is a
+  constant, so the division by 2 is an exact multiplication by 1/2.
+
+The dual walk timed alone (best of 15, alternating) and `build` (best
+of 5 alternating rounds), against the committed build (`2a00011`), in
+ms:
+
+| Mesh | walk, 1 thread | walk, all cores | build, 1 thread | build, all cores |
+|---|---:|---:|---:|---:|
+| `tet_40` | 116 → 62 | 33 → 18 | 231 → 191 | 96 → 85 |
+| `tet_40_shuffled` | 178 → 109 | 61 → 37 | 365 → 301 | 152 → 123 |
+| `tet_40`, reordered | 126 → 66 | 26 → 15 | 256 → 201 | 90 → 79 |
+| `tri_400` | 21 → 14 | 5.6 → 4.7 | 74 → 68 | 36 → 36 |
+| `tri_400_shuffled` | 37 → 24 | 13 → 10 | 127 → 113 | 63 → 63 |
+| `tri_400`, reordered | 22 → 15 | 5.1 → 4.4 | 78 → 71 | 35 → 38 |
+
+On one thread the walk is 0.53–0.66× of before. On all cores it is
+0.55–0.84×, and `build` on `tri_400` doesn't change, as the walk is
+about 5 of its 36 ms. (The `tri_400` reordered build on all cores,
+35 → 38 ms, is within its round-to-round noise; the walk in it got
+faster.) Every level's dual volumes were checked against the committed
+build by their bits, plain and jittered, on all six meshes, a Hilbert
+order, a triangulated surface in 3D, and a small grid, on 1 thread and
+on all cores.
+
+**Tried and not kept:**
+
+- **A branch-free scatter**, summing the faces a block doesn't own into
+  a spare slot instead of skipping them: 82 → 91 ms on one thread.
+- **Gathering two simplices ahead**, with three sets of tables: no
+  faster than one ahead (66 against 65 ms).
+- **Gathering after the walk** instead of before it: `tri_400` 14.5 →
+  16 ms.
+- **Both sets of tables in one allocation:** the walk took 1.3× as long
+  as with separate ones.
+
+**What is left.** On `tet_40` with one thread (about 62 ms), the 10
+square roots and 18 divisions per tetrahedron, 4 lanes each, take about
+26 ms: the divider handles one 4-lane square root or division every 8
+to 12 cycles. Replacing them with multiplications would change the
+bits. The gather takes about 20 ms, 13 of it the circumcenters, and
+the scatter about 7.

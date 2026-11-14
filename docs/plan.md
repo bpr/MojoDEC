@@ -103,12 +103,15 @@ all cores.
     write 229 MB of topology.
   - **Elements out of order:** the counting sort by first vertex in
     `lexsort_rows` is serial.
-- **Dual walk** (117 / 34): about 25 ms of the one-thread time is
-  gathering vertex coordinates into the SIMD lanes.
 - **Whitney element loop**, several elements per SIMD vector. It takes
   72 ms of k = 1's 186, and 74 of k = 2's 137. Today each element is
   unrolled but computed alone. Any change must keep the bits of every k
   equal to the committed build (see AGENTS.md).
+- **Dual walk** (62 / 18, from 117 / 34; see
+  [performance](guide/performance.md#the-dual-walks-gather-and-scatter)).
+  On one thread, the square roots and divisions take about 26 ms and
+  can't become multiplications without changing the bits. Gathering
+  the faces takes about 20 ms, 13 of it the circumcenters.
 - **Whitney assembly page faults:** about 35 ms of k = 1's 76 ms fill is
   first-touch faults on the 123 MB result. The memory is unavoidable;
   faulting it in parallel ahead of the fill might hide some of the cost.
