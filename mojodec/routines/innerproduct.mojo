@@ -291,17 +291,11 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
     )
     var badp = degenerate.unsafe_ptr()
     var fixed = (p == 3 and dim == 3) or (p == 2 and (dim == 2 or dim == 3))
-    var formsp = forms.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-    var setsp = sets.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-    var maskp = face_mask.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
 
     def simplices(
         chunk: Int, lo: Int, hi: Int
     ) {
         fixed,
-        formsp,
-        setsp,
-        maskp,
         k,
         p,
         dim,
@@ -340,37 +334,32 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
         var Dp = grads.unsafe_ptr()
         var mp = minors.unsafe_ptr()
         var dp = dets.unsafe_ptr()
-        var gidx = chunk_scratch[Int](size, 0)
+        # the fixed shapes' face masks, four simplices at a time
+        var gidx = chunk_scratch[Int](4 * size, 0)
         var gp = gidx.unsafe_ptr()
+        # triangles in 2D and 3D and tetrahedra in 3D: the same arithmetic
+        # unrolled at compile time, four simplices to a SIMD vector
+        if fixed:
+            var args = _ElementArgs(
+                Xp.unsafe_origin_cast[MutUntrackedOrigin](),
+                Sp.unsafe_origin_cast[MutUntrackedOrigin](),
+                volp.unsafe_origin_cast[MutUntrackedOrigin](),
+                scale_integration,
+                facesp.unsafe_origin_cast[MutUntrackedOrigin](),
+                datap.unsafe_origin_cast[MutUntrackedOrigin](),
+                gp.unsafe_origin_cast[MutUntrackedOrigin](),
+            )
+            var bad: Int
+            if p == 3:
+                bad = _whitney_fixed[3, 3](k, lo, hi, args, d_indptr, d_indices)
+            elif dim == 3:
+                bad = _whitney_fixed[2, 3](k, lo, hi, args, d_indptr, d_indices)
+            else:
+                bad = _whitney_fixed[2, 2](k, lo, hi, args, d_indptr, d_indices)
+            if bad >= 0:
+                badp[unsafe_offset=chunk] = bad
+            return
         for i in range(lo, hi):
-            # triangles in 2D and 3D and tetrahedra in 3D: the same
-            # arithmetic unrolled at compile time
-            if fixed:
-                var ok: Bool
-                var args = _ElementArgs(
-                    Xp.unsafe_origin_cast[MutUntrackedOrigin](),
-                    Sp.unsafe_origin_cast[MutUntrackedOrigin](),
-                    volp.unsafe_origin_cast[MutUntrackedOrigin](),
-                    scale_integration,
-                    tpp.unsafe_origin_cast[MutUntrackedOrigin](),
-                    tcp.unsafe_origin_cast[MutUntrackedOrigin](),
-                    formsp,
-                    setsp,
-                    maskp,
-                    facesp.unsafe_origin_cast[MutUntrackedOrigin](),
-                    datap.unsafe_origin_cast[MutUntrackedOrigin](),
-                    gp.unsafe_origin_cast[MutUntrackedOrigin](),
-                )
-                if p == 3:
-                    ok = _whitney_fixed[3, 3](k, i, args, d_indptr, d_indices)
-                elif dim == 3:
-                    ok = _whitney_fixed[2, 3](k, i, args, d_indptr, d_indices)
-                else:
-                    ok = _whitney_fixed[2, 2](k, i, args, d_indptr, d_indices)
-                if not ok:
-                    badp[unsafe_offset=chunk] = i
-                    return
-                continue
             gp[unsafe_offset=size - 1] = i
             for L in range(p, k, -1):
                 var ip = d_indptr[L - 1]
@@ -471,16 +460,6 @@ struct _ElementArgs(Copyable, Movable):
     """Top simplices' primal volumes."""
     var scale: Float64
     """`k!^2 / ((p + 2)(p + 1))`."""
-    var term_pair: _NPtr
-    """Entry `t`'s terms' indices into the table of pair determinants."""
-    var term_coef: _FPtr
-    """Entry `t`'s terms' coefficients."""
-    var forms: _NPtr
-    """The k-forms' vertex positions, `k` each."""
-    var sets: _NPtr
-    """The k-subsets of the frame's axes, `k` each."""
-    var face_mask: _NPtr
-    """Each k-face's mask of vertex positions."""
     var faces: _NPtr
     """Output: the k-face indices of each top simplex."""
     var data: _FPtr
@@ -494,200 +473,323 @@ def _whitney_fixed[
     p: Int, dim: Int
 ](
     k: Int,
-    i: Int,
+    lo: Int,
+    hi: Int,
     args: _ElementArgs,
     d_indptr: List[_NPtr],
     d_indices: List[_NPtr],
-) -> Bool:
-    """`_whitney_element` for the run-time degree `k`."""
+) -> Int:
+    """`_whitney_range` for the run-time degree `k`."""
     comptime for kk in range(p + 1):
         if k == kk:
-            return _whitney_element[p, dim, kk](i, args, d_indptr, d_indices)
-    return False
+            return _whitney_range[p, dim, kk](lo, hi, args, d_indptr, d_indices)
+    return -1
 
 
-@always_inline
-def _whitney_element[
+def _whitney_range[
+    p: Int, dim: Int, k: Int
+](
+    lo: Int,
+    hi: Int,
+    args: _ElementArgs,
+    d_indptr: List[_NPtr],
+    d_indices: List[_NPtr],
+) -> Int:
+    """`_whitney_element` for top simplices `lo` to `hi - 1`, four to a SIMD
+    vector and the rest one at a time. Returns the first degenerate one, or
+    -1."""
+    comptime W = 4
+    var i = lo
+    while i + W <= hi:
+        if not _whitney_element[p, dim, k, W](i, args, d_indptr, d_indices):
+            for j in range(i, i + W):
+                if not _whitney_one[p, dim, k](j, args, d_indptr, d_indices):
+                    return j
+        i += W
+    while i < hi:
+        if not _whitney_one[p, dim, k](i, args, d_indptr, d_indices):
+            return i
+        i += 1
+    return -1
+
+
+def _whitney_one[
     p: Int, dim: Int, k: Int
 ](
     i: Int, args: _ElementArgs, d_indptr: List[_NPtr], d_indices: List[_NPtr]
 ) -> Bool:
-    """Top simplex `i`'s k-faces and local mass matrix, as the general loop
-    of `whitney_innerproduct` computes them, with the dimensions known at
-    compile time: the loops unroll and the small matrices stay on the stack.
-    The arithmetic is the general loop's, operation for operation; the
-    multiply-adds the compiler fuses there (in `_householder_rows`, the back
-    substitution of `frame_dual_basis`, `_minor_det`, and the sums of pair
-    determinants and of terms) are explicit fused multiply-adds here, so the
-    results are the same bit for bit. Returns False for a degenerate
-    simplex."""
+    """`_whitney_element` for top simplex `i` alone."""
+    return _whitney_element[p, dim, k, 1](i, args, d_indptr, d_indices)
+
+
+@always_inline
+def _ld[W: Int](ptr: _FPtr, idx: Int) -> SIMD[DType.float64, W]:
+    """Vector `idx` of a stack array of `W`-lane vectors."""
+    return ptr.unsafe_load[width=W](idx * W)
+
+
+@always_inline
+def _st[W: Int](ptr: _FPtr, idx: Int, v: SIMD[DType.float64, W]):
+    """Stores vector `idx` of a stack array of `W`-lane vectors."""
+    ptr.unsafe_store(idx * W, v)
+
+
+@always_inline
+def _element_faces[
+    p: Int, k: Int, W: Int
+](i: Int, args: _ElementArgs, d_indptr: List[_NPtr], d_indices: List[_NPtr]):
+    """The k-faces of top simplices `i` to `i + W - 1`, from the rows of d,
+    as the general loop of `whitney_innerproduct` finds them: level by
+    level, the `W` simplices' rows together so that their loads overlap.
+    Each face is read from one row only, that of `_first_container`, and
+    rows naming no face that way are skipped."""
     comptime w = p + 1
     comptime size = 1 << w
     comptime nkf = _binom(p + 1, k + 1)
-    comptime nfp = nkf * nkf
-    comptime nforms = _binom(p + 1, k)
-    comptime nsets = _binom(p, k)
-    comptime T = (k + 1) * (k + 1)
     var gp = args.gidx
-    # the k-faces, from the rows of d, as the general loop finds them
-    gp[unsafe_offset=size - 1] = i
+    comptime for l in range(W):
+        gp[unsafe_offset=l * size + size - 1] = i + l
     comptime for jj in range(p - k):
         comptime L = p - jj
         var ip = d_indptr[L - 1]
         var ix = d_indices[L - 1]
         comptime for M in range(size):
-            comptime if _bit_count(M) == L + 1:
-                var base = ip[unsafe_offset=gp[unsafe_offset=M]]
-                comptime for q in range(L + 1):
-                    comptime face = M ^ (1 << _nth_bit(M, L - q))
-                    gp[unsafe_offset=face] = ix[unsafe_offset=base + q]
+            # a row without position 0 names no face by _first_container
+            comptime if _bit_count(M) == L + 1 and M & 1 == 1:
+                comptime for l in range(W):
+                    var base = ip[unsafe_offset=gp[unsafe_offset=l * size + M]]
+                    comptime for q in range(L + 1):
+                        comptime face = M ^ (1 << _nth_bit(M, L - q))
+                        comptime if _first_container(w, face) == M:
+                            gp[unsafe_offset=l * size + face] = ix[
+                                unsafe_offset=base + q
+                            ]
     comptime for a in range(nkf):
-        args.faces[unsafe_offset=i * nkf + a] = gp[
-            unsafe_offset=args.face_mask[unsafe_offset=a]
-        ]
-    var dets = stack_allocation[nforms * nforms, DType.float64]()
+        comptime mask = _comb_mask(w, k + 1, a)
+        comptime for l in range(W):
+            args.faces[unsafe_offset=(i + l) * nkf + a] = gp[
+                unsafe_offset=l * size + mask
+            ]
+
+
+def _first_container(w: Int, F: Int) -> Int:
+    """The face mask whose row of d `_element_faces` reads face mask `F`
+    from: `F` with its lowest missing position (below `w`) added, so it
+    always contains position 0."""
+    for b in range(w):
+        if (F >> b) & 1 == 0:
+            return F | (1 << b)
+    return -1
+
+
+@always_inline
+def _whitney_element[
+    p: Int, dim: Int, k: Int, W: Int
+](
+    i: Int, args: _ElementArgs, d_indptr: List[_NPtr], d_indices: List[_NPtr]
+) -> Bool:
+    """The k-faces and local mass matrices of top simplices `i` to
+    `i + W - 1`, as the general loop of `whitney_innerproduct` computes
+    them, with the dimensions known at compile time: the loops unroll and
+    the small matrices stay on the stack, one SIMD lane per simplex. The
+    arithmetic is the general loop's, operation for operation (lane by
+    lane: the row pivoting of `_minor_det` becomes selects); the
+    multiply-adds the compiler fuses there (in `_householder_rows`, the
+    back substitution of `frame_dual_basis`, `_minor_det`, and the sums of
+    pair determinants and of terms) are explicit fused multiply-adds here,
+    so the results are the same bit for bit, whatever `W`. Returns False
+    if any of the simplices is degenerate."""
+    comptime V = SIMD[DType.float64, W]
+    comptime w = p + 1
+    comptime nkf = _binom(p + 1, k + 1)
+    comptime nfp = nkf * nkf
+    comptime nforms = _binom(p + 1, k)
+    comptime nsets = _binom(p, k)
+    comptime T = (k + 1) * (k + 1)
+    _element_faces[p, k, W](i, args, d_indptr, d_indices)
+    var dets = stack_allocation[nforms * nforms * W, DType.float64]()
     comptime if k == 0:
-        dets[unsafe_offset=0] = 1.0
+        _st[W](dets, 0, V(1.0))
     else:
         # edges from vertex 0, then Householder QR as _householder_rows
-        var A = stack_allocation[p * dim, DType.float64]()
-        var v0 = Int(args.S[unsafe_offset=i * w])
+        var A = stack_allocation[p * dim * W, DType.float64]()
         comptime for r in range(p):
-            var v = Int(args.S[unsafe_offset=i * w + r + 1])
             comptime for c in range(dim):
-                A[unsafe_offset=r * dim + c] = (
-                    args.X[unsafe_offset=v * dim + c]
-                    - args.X[unsafe_offset=v0 * dim + c]
-                )
-        var diag = stack_allocation[p, DType.float64]()
+                var e = V()
+                comptime for l in range(W):
+                    var v0 = Int(args.S[unsafe_offset=(i + l) * w])
+                    var v = Int(args.S[unsafe_offset=(i + l) * w + r + 1])
+                    e[l] = (
+                        args.X[unsafe_offset=v * dim + c]
+                        - args.X[unsafe_offset=v0 * dim + c]
+                    )
+                _st[W](A, r * dim + c, e)
+        var diag = stack_allocation[p * W, DType.float64]()
         comptime for j in range(p):
-            var norm2: Float64 = 0
+            var norm2 = V(0)
             comptime for c in range(j, dim):
-                var x = A[unsafe_offset=j * dim + c]
+                var x = _ld[W](A, j * dim + c)
                 norm2 = x.fma(x, norm2)
             var norm = sqrt(norm2)
-            if norm == 0:
+            if norm.eq(0).reduce_or():
                 return False
-            var x0 = A[unsafe_offset=j * dim + j]
-            var alpha = -norm if x0 >= 0 else norm
-            diag[unsafe_offset=j] = alpha
-            A[unsafe_offset=j * dim + j] = x0 - alpha
-            var vv: Float64 = 0
+            var x0 = _ld[W](A, j * dim + j)
+            var alpha = x0.ge(0).select(-norm, norm)
+            _st[W](diag, j, alpha)
+            _st[W](A, j * dim + j, x0 - alpha)
+            var vv = V(0)
             comptime for c in range(j, dim):
-                var x = A[unsafe_offset=j * dim + c]
+                var x = _ld[W](A, j * dim + c)
                 vv = x.fma(x, vv)
             comptime for l in range(j + 1, p):
-                var dot: Float64 = 0
+                var dot = V(0)
                 comptime for c in range(j, dim):
-                    dot = A[unsafe_offset=j * dim + c].fma(
-                        A[unsafe_offset=l * dim + c], dot
+                    dot = _ld[W](A, j * dim + c).fma(
+                        _ld[W](A, l * dim + c), dot
                     )
                 var f = 2 * dot / vv
                 comptime for c in range(j, dim):
-                    A[unsafe_offset=l * dim + c] = (-f).fma(
-                        A[unsafe_offset=j * dim + c],
-                        A[unsafe_offset=l * dim + c],
+                    _st[W](
+                        A,
+                        l * dim + c,
+                        (-f).fma(
+                            _ld[W](A, j * dim + c), _ld[W](A, l * dim + c)
+                        ),
                     )
         # R^-1 by back substitution, as frame_dual_basis
-        var Rinv = stack_allocation[p * p, DType.float64]()
+        var Rinv = stack_allocation[p * p * W, DType.float64]()
         comptime for c in range(p):
             comptime for ii in range(p):
                 comptime r = p - 1 - ii
                 comptime if r <= c:
-                    var t: Float64 = 1 if r == c else 0
+                    var t = V(1 if r == c else 0)
                     comptime for kk in range(r + 1, c + 1):
-                        t = (-A[unsafe_offset=kk * dim + r]).fma(
-                            Rinv[unsafe_offset=kk * p + c], t
+                        t = (-_ld[W](A, kk * dim + r)).fma(
+                            _ld[W](Rinv, kk * p + c), t
                         )
-                    Rinv[unsafe_offset=r * p + c] = t / diag[unsafe_offset=r]
+                    _st[W](Rinv, r * p + c, t / _ld[W](diag, r))
                 else:
-                    Rinv[unsafe_offset=r * p + c] = 0
+                    _st[W](Rinv, r * p + c, V(0))
         # the gradients in the frame: rows 1..p of R^-1, row 0 minus their sum
-        var D = stack_allocation[(p + 1) * p, DType.float64]()
+        var D = stack_allocation[(p + 1) * p * W, DType.float64]()
         comptime for c in range(p):
-            var t: Float64 = 0
+            var t = V(0)
             comptime for r in range(p):
-                var g = Rinv[unsafe_offset=r * p + c]
-                D[unsafe_offset=(r + 1) * p + c] = g
+                var g = _ld[W](Rinv, r * p + c)
+                _st[W](D, (r + 1) * p + c, g)
                 t += g
-            D[unsafe_offset=c] = -t
-        var minors = stack_allocation[nforms * nsets, DType.float64]()
+            _st[W](D, c, -t)
+        var minors = stack_allocation[nforms * nsets * W, DType.float64]()
         comptime for a in range(nforms):
             comptime for q in range(nsets):
-                minors[unsafe_offset=a * nsets + q] = _minor_fixed[p, k](
-                    D, args.forms, a * k, args.sets, q * k
-                )
+                _st[W](minors, a * nsets + q, _minor_fixed[p, k, a, q, W](D))
         comptime for a in range(nforms):
             comptime for b in range(a, nforms):
-                var det: Float64 = 0
+                var det = V(0)
                 comptime for q in range(nsets):
-                    det = minors[unsafe_offset=a * nsets + q].fma(
-                        minors[unsafe_offset=b * nsets + q], det
+                    det = _ld[W](minors, a * nsets + q).fma(
+                        _ld[W](minors, b * nsets + q), det
                     )
-                dets[unsafe_offset=a * nforms + b] = det
-                dets[unsafe_offset=b * nforms + a] = det
-    var weight = abs(args.vol[unsafe_offset=i]) * args.scale
-    comptime for t in range(nfp):
-        var s: Float64 = 0
+                _st[W](dets, a * nforms + b, det)
+                _st[W](dets, b * nforms + a, det)
+    var vol = V()
+    comptime for l in range(W):
+        vol[l] = args.vol[unsafe_offset=i + l]
+    var weight = abs(vol) * args.scale
+
+    @always_inline
+    def entry[t: Int]() {dets, weight} -> SIMD[DType.float64, W]:
+        var s = V(0)
         comptime for q in range(T):
-            s = args.term_coef[unsafe_offset=t * T + q].fma(
-                dets[unsafe_offset=args.term_pair[unsafe_offset=t * T + q]], s
-            )
-        args.data[unsafe_offset=i * nfp + t] = s * weight
+            comptime coef = _term_coef(p, k, t, q)
+            comptime pair = _term_pair(p, k, t, q)
+            s = V(coef).fma(_ld[W](dets, pair), s)
+        return s * weight
+
+    comptime if W == 4 and nfp % 4 == 0:
+        # four entries at a time, transposed to four simplices' rows
+        comptime for g in range(nfp // 4):
+            var x0 = rebind[SIMD[DType.float64, 4]](entry[4 * g]())
+            var x1 = rebind[SIMD[DType.float64, 4]](entry[4 * g + 1]())
+            var x2 = rebind[SIMD[DType.float64, 4]](entry[4 * g + 2]())
+            var x3 = rebind[SIMD[DType.float64, 4]](entry[4 * g + 3]())
+            var a = x0.shuffle[0, 4, 2, 6](x1)
+            var b = x0.shuffle[1, 5, 3, 7](x1)
+            var c = x2.shuffle[0, 4, 2, 6](x3)
+            var d = x2.shuffle[1, 5, 3, 7](x3)
+            var at = i * nfp + 4 * g
+            args.data.unsafe_store(at, a.shuffle[0, 1, 4, 5](c))
+            args.data.unsafe_store(at + nfp, b.shuffle[0, 1, 4, 5](d))
+            args.data.unsafe_store(at + 2 * nfp, a.shuffle[2, 3, 6, 7](c))
+            args.data.unsafe_store(at + 3 * nfp, b.shuffle[2, 3, 6, 7](d))
+    else:
+        comptime for t in range(nfp):
+            var x = entry[t]()
+            comptime for l in range(W):
+                args.data[unsafe_offset=(i + l) * nfp + t] = x[l]
     return True
 
 
 @always_inline
 def _minor_fixed[
-    p: Int, k: Int
-](D: _FPtr, rows: _NPtr, r0: Int, cols: _NPtr, c0: Int) -> Float64:
-    """`_minor_det` of the `(p + 1) x p` gradients `D` for a degree `k`
-    known at compile time, with its fused multiply-adds explicit."""
+    p: Int, k: Int, form: Int, axes: Int, W: Int
+](D: _FPtr) -> SIMD[DType.float64, W]:
+    """`_minor_det` of the `(p + 1) x p` gradients `D` (`W`-lane vectors)
+    for a degree `k` known at compile time, with its fused multiply-adds
+    explicit and its row pivoting done by selects: the minor in the rows of
+    k-form `form` (vertex positions, in the order of `combinations`) and
+    the columns of k-subset `axes` of the frame's axes."""
+    comptime V = SIMD[DType.float64, W]
+    comptime N = SIMD[DType.int, W]
 
     @always_inline
-    def g(a: Int, b: Int) {D, rows, r0, cols, c0} -> Float64:
-        return D[
-            unsafe_offset=rows[unsafe_offset=r0 + a] * p
-            + cols[unsafe_offset=c0 + b]
-        ]
+    def g[a: Int, b: Int]() {D} -> SIMD[DType.float64, W]:
+        comptime row = _nth_bit(_comb_mask(p + 1, k, form), a)
+        comptime col = _nth_bit(_comb_mask(p, k, axes), b)
+        return _ld[W](D, row * p + col)
 
     comptime if k == 1:
-        return g(0, 0)
+        return g[0, 0]()
     elif k == 2:
-        return g(0, 0).fma(g(1, 1), -(g(0, 1) * g(1, 0)))
+        return g[0, 0]().fma(g[1, 1](), -(g[0, 1]() * g[1, 0]()))
     else:
-        var work = stack_allocation[k * k, DType.float64]()
+        var work = stack_allocation[k * k * W, DType.float64]()
         comptime for a in range(k):
             comptime for b in range(k):
-                work[unsafe_offset=a * k + b] = g(a, b)
-        var det: Float64 = 1
+                _st[W](work, a * k + b, g[a, b]())
+        var det = V(1)
+        var zero = SIMD[DType.bool, W](fill=False)
         comptime for c in range(k):
-            var piv = c
+            # the first row from c with the largest magnitude in column c
+            var piv = N(c)
+            var best = abs(_ld[W](work, c * k + c))
             comptime for r in range(c + 1, k):
-                if abs(work[unsafe_offset=r * k + c]) > abs(
-                    work[unsafe_offset=piv * k + c]
-                ):
-                    piv = r
-            var pv = work[unsafe_offset=piv * k + c]
-            if pv == 0:
-                return 0
-            if piv != c:
-                det = -det
+                var x = abs(_ld[W](work, r * k + c))
+                var m = x.gt(best)
+                piv = m.select(N(r), piv)
+                best = m.select(x, best)
+            det = piv.ne(N(c)).select(-det, det)
+            comptime for r in range(c + 1, k):
+                var m = piv.eq(N(r))
                 comptime for b in range(k):
-                    var t = work[unsafe_offset=c * k + b]
-                    work[unsafe_offset=c * k + b] = work[
-                        unsafe_offset=piv * k + b
-                    ]
-                    work[unsafe_offset=piv * k + b] = t
+                    var x = _ld[W](work, c * k + b)
+                    var y = _ld[W](work, r * k + b)
+                    _st[W](work, c * k + b, m.select(y, x))
+                    _st[W](work, r * k + b, m.select(x, y))
+            var pv = _ld[W](work, c * k + c)
+            zero |= pv.eq(0)
             det *= pv
             comptime for r in range(c + 1, k):
-                var f = work[unsafe_offset=r * k + c] / pv
+                var f = _ld[W](work, r * k + c) / pv
                 comptime for b in range(c + 1, k):
-                    work[unsafe_offset=r * k + b] = (-f).fma(
-                        work[unsafe_offset=c * k + b],
-                        work[unsafe_offset=r * k + b],
+                    _st[W](
+                        work,
+                        r * k + b,
+                        (-f).fma(
+                            _ld[W](work, c * k + b), _ld[W](work, r * k + b)
+                        ),
                     )
-        return det
+        return zero.select(V(0), det)
 
 
 def _binom(n: Int, r: Int) -> Int:
@@ -720,6 +822,68 @@ def _nth_bit(M: Int, r: Int) -> Int:
                 return j
             c += 1
     return -1
+
+
+def _lex_less(A: Int, B: Int) -> Bool:
+    """Whether the sorted positions of mask `A` come before those of mask
+    `B` (of the same size) in lexicographic order."""
+    var a = A
+    var b = B
+    while a != 0 and b != 0:
+        var la = _nth_bit(a, 0)
+        var lb = _nth_bit(b, 0)
+        if la != lb:
+            return la < lb
+        a &= a - 1
+        b &= b - 1
+    return False
+
+
+def _comb_rank(n: Int, M: Int) -> Int:
+    """The index of mask `M` (positions below `n`) among the combinations of
+    its size, in the order of `combinations`."""
+    var r = 0
+    for M2 in range(1 << n):
+        if _bit_count(M2) == _bit_count(M) and _lex_less(M2, M):
+            r += 1
+    return r
+
+
+def _comb_mask(n: Int, r: Int, idx: Int) -> Int:
+    """The mask of combination `idx` of `r` of the positions `0..n-1`, in
+    the order of `combinations` (0 when `r <= 0`)."""
+    for M in range(1 << n):
+        if _bit_count(M) == max(r, 0) and _comb_rank(n, M) == idx:
+            return M
+    return -1
+
+
+def _term_parts(p: Int, k: Int, t: Int, q: Int) -> Tuple[Int, Int]:
+    """Term `q` of local entry `t`, as `whitney_innerproduct`'s tables have
+    it: the index `a * num_forms + b` of its pair determinant, and its
+    coefficient."""
+    var nkf = _binom(p + 1, k + 1)
+    var nforms = _binom(p + 1, k)
+    var M1 = _comb_mask(p + 1, k + 1, t // nkf)
+    var M2 = _comb_mask(p + 1, k + 1, t % nkf)
+    var n = q // (k + 1)
+    var m = q % (k + 1)
+    var v1 = _nth_bit(M1, n)
+    var v2 = _nth_bit(M2, m)
+    var a = _comb_rank(p + 1, M1 ^ (1 << v1))
+    var b = _comb_rank(p + 1, M2 ^ (1 << v2))
+    var coef = (2 if v1 == v2 else 1) * (1 if (n + m) % 2 == 0 else -1)
+    return (a * nforms + b, coef)
+
+
+def _term_pair(p: Int, k: Int, t: Int, q: Int) -> Int:
+    """The pair-determinant index of term `q` of local entry `t`."""
+    return _term_parts(p, k, t, q)[0]
+
+
+def _term_coef(p: Int, k: Int, t: Int, q: Int) -> Float64:
+    """The coefficient of term `q` of local entry `t`."""
+    return Float64(_term_parts(p, k, t, q)[1])
 
 
 def _assemble(

@@ -93,6 +93,14 @@ right shape for that is opt-in.
 Ordered by the time at stake. Times are in ms on `tet_40`, one thread /
 all cores.
 
+- **Whitney assembly** (k = 1: about 120 of 137 ms on one thread, and
+  nearly all of 47 on all cores; the element loop takes the rest, see
+  [performance](guide/performance.md#whitney-elements-four-at-a-time)).
+  Counting each row's columns takes about 38 ms. About 35 ms of the
+  76 ms fill is first-touch faults on the 123 MB result. The memory is
+  unavoidable; faulting it in parallel ahead of the fill might hide some
+  of the cost. Any change must keep the bits of every k equal to the
+  committed build (see AGENTS.md).
 - **Topology** (74 / 40, from 127 / 66; see
   [performance](guide/performance.md#topology)) is still the largest
   step of `build` on all cores. What remains:
@@ -103,18 +111,11 @@ all cores.
     write 229 MB of topology.
   - **Elements out of order:** the counting sort by first vertex in
     `lexsort_rows` is serial.
-- **Whitney element loop**, several elements per SIMD vector. It takes
-  72 ms of k = 1's 186, and 74 of k = 2's 137. Today each element is
-  unrolled but computed alone. Any change must keep the bits of every k
-  equal to the committed build (see AGENTS.md).
 - **Dual walk** (62 / 18, from 117 / 34; see
   [performance](guide/performance.md#the-dual-walks-gather-and-scatter)).
   On one thread, the square roots and divisions take about 26 ms and
   can't become multiplications without changing the bits. Gathering
   the faces takes about 20 ms, 13 of it the circumcenters.
-- **Whitney assembly page faults:** about 35 ms of k = 1's 76 ms fill is
-  first-touch faults on the 123 MB result. The memory is unavoidable;
-  faulting it in parallel ahead of the fill might hide some of the cost.
 - **`tri_400_shuffled`, Whitney k = 0:** 114 ms against 107 before the
   two-pass assembly, because with random numbering a row's triangles
   are scattered and are read twice. `reorder_vertices` avoids it; fix it

@@ -621,3 +621,70 @@ square roots and 18 divisions per tetrahedron, 4 lanes each, take about
 to 12 cycles. Replacing them with multiplications would change the
 bits. The gather takes about 20 ms, 13 of it the circumcenters, and
 the scatter about 7.
+
+## Whitney elements four at a time
+
+After the [unrolling](#whitney-matrices), the element loop of
+`whitney_innerproduct` still took 14, 65, 72, and 53 ms for k = 0 to 3
+on `tet_40` with one thread. Each element was computed alone. Its 3
+square roots and 9 divisions form one chain of dependencies, too long
+for the processor to overlap two elements. Its local matrix's terms
+were read from run-time tables. Four changes, all with the same bits:
+
+- **The term tables are compile-time constants.** Each entry of the
+  local matrix is a signed sum of determinants of pairs of forms. Which
+  pairs, and which signs, depend only on the dimension and the degree.
+  They were read from tables at run time, three loads per term: the
+  coefficient, the pair's index, and the determinant. Now they are
+  constants, the determinants stay in registers, and the coefficients
+  (±1 and ±2) are folded in. Alone, this took k = 1 to 3 from 65, 72,
+  and 53 ms to 40, 43, and 36.
+- **Four elements per SIMD vector.** Each lane holds one top simplex,
+  and every operation is the one-element code's, lane by lane. The sign
+  in each Householder step is a select. So is the row pivoting in the
+  3 × 3 minors of k = 3, with a lane whose pivot is zero giving 0, as
+  before. A batch with a degenerate simplex is redone one at a time, to
+  name the simplex. The one-lane form is the same code and also takes
+  the last few simplices of each chunk.
+- **Each face is gathered once, four simplices at a time.** The k-faces
+  come from the rows of `d`, from the top simplex down. Each face is
+  now read from one row only (three of a tetrahedron's four triangle
+  rows name all six edges), and the four simplices' rows are read level
+  by level, so their loads overlap.
+- **Whole rows are stored.** For tetrahedra, whose local matrices have
+  16 or 36 entries, four entries of four simplices are transposed and
+  stored as one vector per simplex.
+
+The element loop alone (an instrumented build, best of 7) and the whole
+call (best of 5 alternating rounds), against the committed build
+(`c291d71`), in ms:
+
+| Mesh | k | loop, 1 thread | loop, all cores | call, 1 thread | call, all cores |
+|---|---|---:|---:|---:|---:|
+| `tet_40` | 0 | 14 → 7.6 | 6.6 → 5.0 | 55 → 49 | 20 → 19 |
+| | 1 | 65 → 16 | 12 → 8.8 | 185 → 137 | 46 → 48 |
+| | 2 | 72 → 14 | 8.5 → 5.2 | 138 → 80 | 31 → 28 |
+| | 3 | 53 → 9.5 | 5.4 → 1.3 | 54 → 10 | 5.8 → 2.0 |
+| `tet_40_shuffled` | 0 | 44 → 22 | 8.3 → 6.8 | 171 → 152 | 36 → 37 |
+| | 1 | 83 → 30 | 13 → 12 | 398 → 347 | 82 → 83 |
+| | 2 | 79 → 18 | 9.3 → 5.0 | 219 → 160 | 52 → 45 |
+| | 3 | 56 → 10 | 7.6 → 1.3 | 58 → 11 | 6.6 → 2.9 |
+| `tri_400` | 0 | 6.2 → 3.7 | 2.6 → 2.6 | 31 → 29 | 11 → 11 |
+| | 1 | 24 → 5.9 | 2.8 → 2.7 | 54 → 36 | 14 → 16 |
+| | 2 | 17 → 2.9 | 1.7 → 0.6 | 18 → 3.4 | 2.3 → 1.5 |
+
+On one thread the element loop is 0.17–0.6× of before, and the
+top-degree matrices (k = n), which are nothing but the element loop,
+0.19×. On all cores the calls for k = 0 and 1 don't change: there
+assembly takes nearly all the time, limited by memory bandwidth (the
+`tri_400` k = 1 call, 14 → 16 ms, is within its noise; on the
+reordered mesh it went 14.7 → 14.5). Every k's matrix was checked
+against the committed build by its bits: `tet_40`, `tri_400`, and
+`tet_40_shuffled`, plain and jittered, the triangles also lifted onto
+a surface in 3D, and small Kuhn grids whose element counts leave
+remainders, on 1 thread and on all cores.
+
+**What is left.** Of k = 1's 137 ms on `tet_40` with one thread, the
+element loop is now 16: about 6 gathering the faces, 3 storing the
+110 MB of local matrices, and the rest arithmetic. Assembly takes the
+other 120 or so: counting each row's columns, and filling the rows.

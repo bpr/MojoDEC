@@ -363,8 +363,16 @@ keep their columns sorted by insertion, longer ones find a column's
 slot through a per-chunk marker array). `whitney_innerproduct`'s element loop for
 triangles in 2D and 3D and tetrahedra in 3D is `_whitney_element`,
 unrolled at compile time with the general loop's arithmetic and its
-fused multiply-adds explicit, the same bits (check a change by hashing
-every k's matrix against the committed build). Ownership by vertex blocks assumes the vertex numbering is
+fused multiply-adds explicit, four top simplices to a SIMD vector
+(`_whitney_range`; the remainder, and a batch with a degenerate
+simplex, take the one-lane form of the same code). `_minor_det`'s row
+pivoting becomes selects, the term tables are compile-time constants
+(`_term_pair`, `_term_coef`, `_comb_mask`; bind them with `comptime`),
+and `_element_faces` reads each face from one row of d
+(`_first_container`), the four simplices' rows level by level. The
+bits are the general loop's (check a change by hashing every k's
+matrix against the committed build, on meshes whose element counts
+leave remainders too). Ownership by vertex blocks assumes the vertex numbering is
 spatially coherent: with randomly numbered vertices a tetrahedron touches
 3.6 blocks instead of 1.4 and the 3D walk on all cores takes 2.6× as long
 (`tet_40_shuffled` in `benchmarks/compare`), and every loop in face order

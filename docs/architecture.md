@@ -10,7 +10,8 @@ decided against.
 Measurements on this page use the Kuhn grids from `benchmarks/compare`.
 They were taken on an 8-core i7-10875H (16 threads, AVX2) at commit
 `48c8542`, built with `-D ASSERT=none`, best of 3. Topology, dual
-volumes, and build were measured again after later work (best of 5).
+volumes, build, and Whitney times were measured again after later work
+(best of 5).
 
 - **`tet_40`**: the unit cube, 40³ cells, 384,000 tetrahedra, 68,921
   vertices.
@@ -135,7 +136,8 @@ three steps:
 2. **Element loop:** each top simplex's local matrix, `fps × fps`
    values, where `fps` is the number of its k-faces. Triangles in 2D and
    3D and tetrahedra in 3D take `_whitney_element`, which is unrolled at
-   compile time. Other shapes take the general loop.
+   compile time and computes four elements per SIMD vector. Other shapes
+   take the general loop.
 3. **Assembly:** each row of the result is the sum over the top
    simplices containing its face, in increasing order. One pass counts
    each row's columns. A second writes the row into its place in the
@@ -146,14 +148,14 @@ Times in ms on `tet_40`:
 
 | k | 1 thread | all cores | nonzeros | result (MB) | peak memory (MB) |
 |---|---:|---:|---:|---:|---:|
-| 0 | 55 | 21 | 1.0 M | 16 | 484 |
-| 1 | 186 | 46 | 7.4 M | 123 | 694 |
-| 2 | 137 | 32 | 5.4 M | 92 | 574 |
-| 3 | 54 | 6.8 | 0.38 M | 9 | 417 |
+| 0 | 49 | 19 | 1.0 M | 16 | 484 |
+| 1 | 137 | 47 | 7.4 M | 123 | 694 |
+| 2 | 80 | 28 | 5.4 M | 92 | 574 |
+| 3 | 10 | 2.0 | 0.38 M | 9 | 417 |
 
 "Peak memory" is the whole process: the complex plus one call.
 
-- **k = 1, one thread:** the element loop takes about 72 ms. Assembly
+- **k = 1, one thread:** the element loop takes about 16 ms. Assembly
   takes the rest: incidence 8 ms, counting 38 ms, and filling 76 ms,
   about 35 of which is page faults on the fresh result.
 - **The call's own peak:** about 280 MB over the complex for k = 1. The
