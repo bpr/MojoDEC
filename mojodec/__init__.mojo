@@ -172,6 +172,7 @@ from mojodec.routines.mesh_generation import (
     orient_coherently,
     ReorderedMesh,
     morton_keys,
+    numbering_spread,
     reorder_vertices,
     icosahedron,
     icosphere,

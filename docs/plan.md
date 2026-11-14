@@ -131,6 +131,10 @@ all cores.
 - **`reorder_vertices`** (20 / 13 ms on `tet_40`, from 24 / 22; see
   [performance](guide/performance.md#reordering-in-parallel)): the
   radix sort of the Morton codes is serial, 2–4 ms.
+- **`read_gmsh`** takes longer than building the complex it reads:
+  250–540 ms for ASCII files of 13–24 MB (270k–480k elements, made by
+  Gmsh 4.15), against 92–501 ms for the build on one thread. It is
+  serial and not profiled yet.
 
 ## Memory
 
@@ -151,11 +155,3 @@ large enough that the complex no longer fits.
 - **Whitney k = 1 peak:** the call peaks at about 280 MB over the
   complex. The local matrices are 111 MB of that, kept until assembly
   has read them. No plan yet.
-
-## Usability
-
-- **Warn about badly numbered meshes in `read_gmsh`.** A mesh numbered
-  without spatial coherence builds 1.5–1.7× slower (see
-  [vertex numbering](guide/vertex-numbering.md)). A cheap check, such as
-  how many ownership blocks the average element touches, could point the
-  user to `reorder_vertices`.

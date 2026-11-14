@@ -36,9 +36,10 @@ a tetrahedron of a spatially numbered grid is walked 1.38 times on
 average; with random numbers, 3.64 times.
 
 Meshes generated in code (`kuhn_grid`, `simplicial_grid_2d`, `refine`)
-are numbered in space already. Meshes read from files may not be: Gmsh
-numbers nodes by the geometric entity they lie on, and meshes that went
-through other tools can arrive in any order.
+are numbered in space already. Meshes read from files may not be: Gmsh's
+numbering is nearly as scattered as a random one (see
+[Gmsh meshes](#gmsh-meshes)), and meshes that went through other tools
+can arrive in any order.
 
 ## Morton order
 
@@ -118,6 +119,71 @@ codes are distinct, and reordering it again changes nothing. It takes
 and the physical groups renumbered too, so `msh.subset(sc, name, k)`
 works on the complex built from the reordered `msh.mesh()`, and each
 vertex keeps its node tag from the file.
+
+## Measuring the numbering
+
+`numbering_spread(mesh)` says how scattered a numbering is. It splits
+the vertex numbers into 16 equal blocks and counts the blocks that each
+element's vertices fall in, on average. That is the number of times the
+parallel dual walk visits each element with 16 chunks, and elements that
+touch many blocks have neighbors far apart in memory. It takes one pass
+over the elements, about 6 ms for 480k triangles.
+
+| Numbering | spread |
+|---|---:|
+| Morton order (`reorder_vertices`), 50k elements or more | 1.0–1.4 |
+| `kuhn_grid` in its own order: 40³ / 30³ / 20³ cells | 1.38 / 1.52 / 1.79 |
+| Gmsh, 2D | 2.1–2.2 |
+| Gmsh, 3D | 2.6–3.6 |
+| random, triangles / tetrahedra | 2.8 / 3.6 |
+
+Small meshes score higher in any order, since their blocks are small: a
+Gmsh cube of 1140 tetrahedra scores 2.0 after reordering. The Kuhn grids
+number their vertices in slabs, which score high while a block is only a
+layer or two thick but are fast to build (see [Results](#results)).
+
+## Gmsh meshes
+
+Gmsh numbers nodes by the geometric entity they lie on (corners, then
+curves, surfaces, and volumes), and within an entity in an order that
+scatters neighbors too, by the spreads below. These meshes were made by
+Gmsh 4.15 with default options (Delaunay, and HXT for one box) in
+OpenCASCADE geometries: the unit square, a 2 × 1 plate with five holes,
+the unit cube, and a 2 × 1 × 1 box with two spherical inclusions. Build
+times are in ms on one thread, best of 3:
+
+| Mesh | elements | spread | build | reordered spread | reordered build |
+|---|---:|---:|---:|---:|---:|
+| square | 479k | 2.13 | 204 | 1.01 | 104 |
+| plate | 269k | 2.13 | 92 | 1.02 | 58 |
+| plate | 67k | 2.11 | 18.4 | 1.04 | 14.0 |
+| box | 438k | 3.65 | 501 | 1.14 | 230 |
+| box (HXT) | 383k | 2.65 | 329 | 1.15 | 204 |
+| box | 111k | 3.54 | 99 | 1.22 | 56 |
+| box | 37k | 3.50 | 24 | 1.33 | 18.5 |
+| inclusions | 347k | 3.29 | 373 | 1.17 | 181 |
+| inclusions | 76k | 3.15 | 57 | 1.28 | 39 |
+
+On all cores the 438k box builds in 245 ms, and in 98 ms reordered. A
+Gmsh mesh of 100k elements or more builds 1.6–2.2× faster after
+`reorder_vertices`, which takes about 20 ms. Below about 50k elements
+the saving is a few ms.
+
+So `read_gmsh` warns, on stderr, when a mesh has 50,000 elements or more
+and a spread above 1.9:
+
+```
+read_gmsh: warning: the vertex numbering of box.msh is scattered (numbering_spread 3.65), so building a complex on it can take about twice as long; call .reorder_vertices() on the result, or pass warn=False
+```
+
+The threshold sits above the Kuhn grids' slabs (1.75 at 21³ cells, the
+smallest grid with 50,000 tetrahedra) and below every Gmsh mesh above.
+Reorder, or pass `warn=False` when the mesh will be reordered later or
+the numbering must stay as read:
+
+```mojo
+var msh = read_gmsh("box.msh", warn=False).reorder_vertices()
+```
 
 ## Results
 

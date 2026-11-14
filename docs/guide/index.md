@@ -47,7 +47,8 @@ how to use it, and what can go wrong.
   limit, dispersion, mesh requirements, and boundary conditions.
 - **[Vertex numbering](vertex-numbering.md)**: why a mesh numbered at
   random in space builds 1.5–1.7× slower, Morton order (`morton_keys`),
-  renumbering a mesh or a Gmsh file with `reorder_vertices`, carrying
+  measuring a numbering (`numbering_spread`), renumbering a mesh or a
+  Gmsh file with `reorder_vertices` and when `read_gmsh` warns, carrying
   data across, and not reordering between refinements.
 - **[Performance against other DEC libraries](performance.md)**: build,
   geometry, and Whitney matrices timed against PyDEC, dexterior, and

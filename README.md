@@ -40,7 +40,9 @@ Beyond PyDEC, MojoDEC adds:
 - icosahedron and icosphere meshes
 - `reorder_vertices`: renumbers a mesh (or a Gmsh file, with its groups)
   in Morton order, which makes meshes numbered at random in space build
-  1.5–1.7× faster
+  1.5–1.7× faster, and large Gmsh meshes 1.6–2.2× faster;
+  `numbering_spread` measures a numbering, and `read_gmsh` warns about
+  badly numbered ones
 - its own dense and sparse linear algebra (pivoted LU, symmetric
   eigensolver, CG, LSQR, generalized eigenproblems), and a
   `DiagonalOperator` type for the Hodge stars
@@ -247,7 +249,8 @@ the published mathematics:
   to carry data across; `GmshMesh.reorder_vertices()` renumbers node tags
   and physical groups too. A mesh numbered at random in space builds 2.3×
   slower on all cores (384k tetrahedra) than a spatially numbered one;
-  reordered, it builds as fast. See `docs/guide/vertex-numbering.md`.
+  reordered, it builds as fast. `numbering_spread(mesh)` measures how
+  scattered a numbering is. See `docs/guide/vertex-numbering.md`.
 - **Betti numbers** over the rationals on every complex type:
   `betti_numbers()`, `betti_numbers(cells)` for a subcomplex such as a
   link, and `relative_betti_numbers()` (relative to the boundary) or
@@ -418,6 +421,10 @@ the published mathematics:
   `dim=2` makes a file without triangles an error rather than a mesh of
   edges. 2D meshes come back with two coordinate columns. Unnamed groups
   are reached by tag: `msh.subset(sc, group_dim=1, tag=42, dim=0)`.
+  Gmsh's node numbering scatters neighbors, and large meshes build
+  1.6–2.2× faster after `msh.reorder_vertices()`; `read_gmsh` warns on
+  stderr about meshes of 50,000 elements or more that need it
+  (`warn=False` silences it).
 - **The Sphere example**, a check of the Hodge-Laplacian spectrum against
   the spherical harmonics, for 0-, 1-, and 2-forms.
 - **The Neighborhoods and Neighborhoods3D examples**, which draw stars,

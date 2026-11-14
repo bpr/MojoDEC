@@ -30,6 +30,7 @@ from mojodec.core.utils import (
     cols_of,
     sort_each_row,
     take_rows,
+    int_array,
 )
 from mojodec.core.mesh import SimplicialMesh
 from mojodec.routines.geometry import signed_volume, unsigned_volume
@@ -44,6 +45,7 @@ from mojodec.routines.mesh_generation import (
     mobius_band,
     orient_coherently,
     morton_keys,
+    numbering_spread,
     reorder_vertices,
     _radix_order,
 )
@@ -514,6 +516,34 @@ def _jittered_cube(n: Int, shuffle: Bool) raises -> SimplicialMesh:
         for j in range(4):
             iset(E, q[e], j, p[iget(mesh.elements, e, j)])
     return SimplicialMesh(V, E)
+
+
+def test_numbering_spread() raises:
+    # a path of 32 vertices: blocks of 2 vertices, so edge (i, i + 1) is in
+    # one block for even i and two for odd i
+    var V = real_array(32, 1)
+    var E = int_array(31, 2)
+    for i in range(31):
+        fset(V, i, 0, Float64(i))
+        iset(E, i, 0, i)
+        iset(E, i, 1, i + 1)
+    fset(V, 31, 0, 31.0)
+    var path = SimplicialMesh(V, E)
+    assert_equal(numbering_spread(path), 46.0 / 31.0)
+    assert_equal(numbering_spread(SimplicialMesh(V, int_array(0, 2))), 0.0)
+    # numbered in space, at random, and in Morton order
+    var grid = _jittered_cube(20, shuffle=False)
+    var shuffled = _jittered_cube(20, shuffle=True)
+    # grid order: slabs, about one layer thick per block at this size
+    assert_true(numbering_spread(grid) < 1.9)
+    assert_true(numbering_spread(shuffled) > 3.5)
+    # Morton order: 1.36 at this size, 1.17 at 40³ cells
+    assert_true(numbering_spread(reorder_vertices(shuffled).mesh) < 1.45)
+    # an element naming a vertex that does not exist (set after
+    # SimplicialMesh checked)
+    iset(path.elements, 30, 1, 32)
+    with assert_raises(contains="element 30 names vertex 32 of 32"):
+        _ = numbering_spread(path)
 
 
 def test_reorder_vertices_small() raises:

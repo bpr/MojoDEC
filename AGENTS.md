@@ -388,7 +388,11 @@ spatially coherent: with randomly numbered vertices a tetrahedron touches
 loses locality; `reorder_vertices` (`routines/mesh_generation.mojo`:
 Morton order by a radix sort of the codes, which are computed in
 parallel; elements sorted by their sorted rows, orientations kept)
-restores it (see `docs/guide/vertex-numbering.md`). It must not run
+restores it (see `docs/guide/vertex-numbering.md`). `numbering_spread`
+measures a numbering (blocks per element, 16 blocks), and `read_gmsh`
+prints a warning to stderr for 50k+ elements above 1.9 (Gmsh's own
+numbering is 2.1–3.6; `warn=False` silences it, and tests check the
+message through `_numbering_warning`). It must not run
 between refinements, whose numbering keeps shapes bounded. Mojo's `>>`
 by 64 or more is undefined (it gave garbage): bound shift loops. Allocate a body's scratch with `chunk_scratch(n, fill)`, never a
 bare `List(length=...)`: two chunks' small lists can share a cache line,

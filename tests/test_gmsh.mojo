@@ -14,9 +14,11 @@ from mojodec import (
     Subset,
     TypedComplex,
     TypedSubset,
+    kuhn_grid,
     read_gmsh,
 )
 from mojodec.core.utils import cols_of, fget, iget, rows_of
+from mojodec.routines.io.gmsh import _numbering_warning
 
 # Fixtures: tests/meshes/gmsh/*.geo, meshed by Gmsh 4.15 in each format.
 comptime DIR = "tests/meshes/gmsh/"
@@ -217,6 +219,32 @@ def test_reorder_vertices() raises:
                 for x in range(len(ca)):
                     # sums in another order
                     assert_almost_equal(ca[x], cb[x], atol=1e-12, rtol=1e-13)
+
+
+def test_numbering_warning() raises:
+    # 82,944 tetrahedra in grid order, then numbered by v -> 7919 v mod nv
+    # (a bijection: nv = 25^3), which scatters neighbors
+    var mesh = kuhn_grid([24, 24, 24])
+    var nv = rows_of(mesh.vertices)
+    assert_equal(_numbering_warning("grid.msh", mesh.elements, nv), "")
+    var scrambled = mesh.elements.copy()
+    for i in range(scrambled.size):
+        var v = Int(scrambled.unsafe_get(i))
+        scrambled.unsafe_set(i, Scalar[DType.int](v * 7919 % nv))
+    var message = _numbering_warning("grid.msh", scrambled, nv)
+    assert_true("vertex numbering of grid.msh is scattered" in message)
+    assert_true("reorder_vertices()" in message)
+    # small meshes are not checked
+    var small = kuhn_grid([4, 4, 4])
+    var few = small.elements.copy()
+    var n = rows_of(small.vertices)
+    for i in range(few.size):
+        few.unsafe_set(i, Scalar[DType.int](Int(few.unsafe_get(i)) * 7 % n))
+    assert_equal(_numbering_warning("small.msh", few, n), "")
+    # warn=False reads the same mesh
+    var a = read_gmsh(DIR + "cube_v41.msh")
+    var b = read_gmsh(DIR + "cube_v41.msh", warn=False)
+    assert_equal(rows_of(a.elements), rows_of(b.elements))
 
 
 def _write(text: String) raises:

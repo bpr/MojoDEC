@@ -36,6 +36,8 @@ or the triangles are missing. Passing the expected `dim` turns that into an
 error instead of a mesh of line segments.
 """
 
+from std.sys import stderr
+
 import numojo as nm
 from numojo.prelude import *
 
@@ -57,8 +59,17 @@ from mojodec.core.utils import (
 )
 from mojodec.routines.io.scan import ByteReader
 from mojodec.routines.mesh_generation import (
+    _numbering_spread,
     reorder_vertices as _reorder_mesh,
 )
+
+comptime _WARN_MIN_ELEMENTS = 50_000
+"""`read_gmsh` checks the numbering of meshes with this many elements or
+more; smaller ones build in a few ms whatever their numbering."""
+comptime _WARN_SPREAD = 1.9
+"""`read_gmsh` warns above this `numbering_spread`: Morton order gives
+1.0–1.4, Gmsh's numbering 2.1–3.6, and a 21³ `kuhn_grid` in its own
+order 1.75."""
 
 
 struct GmshGroup(Copyable, Movable, Writable):
@@ -433,7 +444,10 @@ def _group_subset(
 
 
 def read_gmsh(
-    path: String, dim: Optional[Int] = None, drop_z: Bool = True
+    path: String,
+    dim: Optional[Int] = None,
+    drop_z: Bool = True,
+    warn: Bool = True,
 ) raises -> GmshMesh:
     """Read a Gmsh `.msh` file (format 4.1 or 2.2, ASCII or binary).
 
@@ -442,6 +456,12 @@ def read_gmsh(
     triangles, and tetrahedra are read; other element types (quadrangles,
     hexahedra, second-order elements) raise. Elements repeated because they
     belong to several physical groups (format 2.2) are kept once.
+
+    Gmsh numbers nodes in an order that scatters neighbors, and a mesh
+    numbered that way builds 1.3–2.2× slower than after
+    `GmshMesh.reorder_vertices` (see the guide's vertex numbering page).
+    So for a mesh of 50,000 elements or more whose `numbering_spread` is
+    above 1.9, `read_gmsh` prints a warning to stderr that suggests it.
 
     ```mojo
     var msh = read_gmsh("square.msh", dim=2)
@@ -457,6 +477,9 @@ def read_gmsh(
             line segments (tag the domain too, or set `Mesh.SaveAll = 1`).
         drop_z: Return two coordinate columns when the mesh has dimension at
             most 2 and every z is zero (Gmsh always writes three).
+        warn: Warn on stderr when a large mesh is badly numbered (pass
+            `False` when the mesh will be reordered or speed does not
+            matter).
 
     Returns:
         The mesh and its physical groups.
@@ -576,7 +599,31 @@ def read_gmsh(
             for i in range(len(cells)):
                 array.unsafe_set(i, Scalar[DType.int](cells.unsafe_get(i)))
             groups.append(GmshGroup(raw.name_of(d, p), d, p, array^))
+    if warn:
+        var message = _numbering_warning(path, elements, len(node_tags))
+        if message:
+            print(message, file=stderr)
     return GmshMesh(vertices^, elements^, node_tags^, groups^)
+
+
+def _numbering_warning(
+    path: String, elements: IntArray, nv: Int
+) raises -> String:
+    """`read_gmsh`'s warning about a badly numbered mesh, or an empty
+    string when the mesh is small or well numbered."""
+    if rows_of(elements) < _WARN_MIN_ELEMENTS:
+        return ""
+    var spread = _numbering_spread(elements, nv)
+    if spread <= _WARN_SPREAD:
+        return ""
+    return String(
+        "read_gmsh: warning: the vertex numbering of ",
+        path,
+        " is scattered (numbering_spread ",
+        round(spread, 2),
+        "), so building a complex on it can take about twice as long;",
+        " call .reorder_vertices() on the result, or pass warn=False",
+    )
 
 
 def _unique_rows(nodes: List[Int], w: Int) raises -> List[Int]:
