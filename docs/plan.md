@@ -102,12 +102,13 @@ all cores.
   slower. On all cores the fill is close to the memory bandwidth. Any
   change must keep the bits of every k equal to the committed build (see
   AGENTS.md).
-- **Topology** (74 / 40, from 127 / 66; see
+- **Topology** (66 / 38, from 127 / 66; see
   [performance](guide/performance.md#topology)) is still the largest
   step of `build` on all cores. What remains:
-  - **Bucket sorts:** about 26 ms on one thread. Ranking 17–64 keys
-    takes about 13 cycles per key, and a 32-bit rank sort, 8 keys per
-    vector, gained at most 3%.
+  - **Bucket sorts:** about 16 ms on one thread, from 24 (see
+    [performance](guide/performance.md#bucket-sorts-in-topology)).
+    About 6 ms of that is moving the keys and marking the runs. Ranking
+    edges as 32-bit floats saved another 1.5 ms but was not kept.
   - **All cores:** the passes are limited by memory bandwidth. They
     write 229 MB of topology.
   - **Elements out of order:** the counting sort by first vertex in

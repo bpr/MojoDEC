@@ -768,3 +768,83 @@ sorting each row. Page faults are not what limits it: touching the
 result's pages first did not make the fill faster. On all cores it takes
 about 18 ms and moves about 250 MB, which is close to this machine's
 memory bandwidth.
+
+## Bucket sorts in topology
+
+After the [topology changes](#topology), the bucket sorts were the
+largest part left of building `tet_40`'s topology on one thread: about
+24 of 74 ms. Its buckets hold 24 keys (level 3, triangles in
+tetrahedra) and 36 (level 2, edges in triangles). Each bucket of 17 to
+64 keys was sorted by rank: each key's place is the number of smaller
+keys, counted by comparing it with every key of the bucket, four at a
+time. Three changes, all with the same bits:
+
+- **The keys are compared as doubles.** AVX2 compares 64-bit integers
+  (`vpcmpgtq`) on one port of this CPU, and doubles (`vcmppd`) on two. A
+  key is below 2⁶², so key + 2⁵² is the bit pattern of a positive normal
+  double. Positive doubles order as their bit patterns do, so the
+  comparison is exact.
+- **Sixteen keys are ranked at a time.** The old loop took one key,
+  compared it with the whole bucket, and summed its count's four lanes:
+  a broadcast and a horizontal sum for every key, on the same port as
+  the compares. Now the counts of 16 keys stay in four registers while
+  each key of the bucket is loaded once, already broadcast, and compared
+  with all 16. The last block takes 8 or 4 keys, so a bucket is padded
+  to a multiple of 4, not 16.
+- **New thresholds.** Ranking now takes over from insertion above 8
+  keys, not 16, and from merging two ranked halves at up to 96 keys, not
+  64. On keys that arrive nearly in order, insertion takes about 1.2 ns
+  a key and ranking 3. On keys in random order, insertion takes 7–8 ns a
+  key at 6–8 keys, as its branches mispredict. Ranking takes 4.7 ns a key
+  at 64 keys against 5.8 for merging ranked halves, and 8.2 against 7.6
+  at 128.
+
+The sort pass alone, one thread, in ms (the keys after the scatter,
+sorted bucket by bucket, best of 5):
+
+| Mesh | level 2 | level 3 |
+|---|---:|---:|
+| `tet_40` | 15.0 → 10.5 | 8.5 → 5.8 |
+| `tet_40_shuffled` | 21.3 → 15.5 | 13.4 → 9.1 |
+| `tri_400` | 3.1 → 3.0 | |
+| `tri_400_shuffled` | 8.3 → 5.8 | |
+
+`tri_400`'s buckets hold 6 keys, still sorted by insertion.
+
+Topology, `SimplicialComplex(V, E, compute_geometry=False)`, best of 5
+alternating rounds against the committed build (`b7c8940`), in ms:
+
+| Mesh | 1 thread | all cores |
+|---|---:|---:|
+| `tet_40` | 72.9 → 65.9 | 38.7 → 38.0 |
+| `tet_40_shuffled` | 119.5 → 106.9 | 60.2 → 58.0 |
+| `tet_40_reordered` | 76.3 → 69.6 | 42.8 → 41.7 |
+| `tri_400` | 27.3 → 27.6 | 20.0 → 20.7 |
+| `tri_400_shuffled` | 52.9 → 50.1 | 34.0 → 36.0 |
+| `tri_400_reordered` | 28.2 → 28.1 | 20.4 → 20.7 |
+
+The changes on all cores, and on `tri_400` and `tri_400_reordered`, are
+within the noise of this machine. On all cores the sorts were already a
+small part, and the passes around them are limited by memory bandwidth.
+`build` on `tet_40` with one thread went 186 → 181 ms. Every level's
+simplices, parities, `d`, boundary, and `_order` were checked against
+the committed build by their bits, on these meshes and on Morton-ordered
+ones, on 1 thread and on all cores.
+
+**Tried and not kept:**
+
+- **A table of each bucket's distinct faces.** A bucket of 36 edge
+  occurrences holds only about 7 distinct edges. So each key could look
+  up its face in a small table of the bucket's faces so far, and the
+  keys could then be placed by counting. Level 3 of `tet_40` took
+  20 ms against 8.5. Half the keys there bring a new face, and that
+  branch mispredicts.
+- **32-bit keys for edges.** When the faces are edges (v, w), the key
+  (w − v) · 128 + position fits in 30 bits and can be ranked as a float,
+  eight per vector. Level 2 of `tet_40` went 10.5 → 9.0 ms. That is a
+  second ranking path for one face width, for 2% of the topology.
+
+**What is left.** On `tet_40` with one thread the sorts take about
+16 ms. About 6 ms of that is reading the keys, writing them back, and
+marking the runs, which a pass over the buckets does without sorting
+them.

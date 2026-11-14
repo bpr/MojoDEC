@@ -414,7 +414,9 @@ unrolled for rows of 2–4 entries (`_scatter_packed`, `_runs_packed`,
 topology avoid data-dependent branches, which mispredict more or less
 with the vertex numbering: sorting networks for rows of 3 and 4
 (`sort_each_row`), parity by counting inversions, and rank sort (SIMD)
-for buckets of 17 to 64 keys. `require_distinct_simplices` skips its
+for buckets of 9 to 96 keys. The rank sort compares keys as doubles
+(key + 2^52 is a positive normal double's bit pattern, so keys must stay
+below 2^62), since AVX2 compares 64-bit integers on one port only. `require_distinct_simplices` skips its
 sort when the rows are already in strictly increasing order; otherwise
 `lexsort_rows` (a counting sort by the first column, then each run by
 insertion in parallel, by merging past 32 rows) also reports the first

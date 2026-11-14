@@ -507,12 +507,32 @@ def _sort_occurrences(
         out += 1
 
 
+@always_inline
+def _rank_block[
+    L: Int
+](
+    keys: Pointer[Float64, MutUntrackedOrigin],
+    ranks: Pointer[Scalar[DType.int], MutUntrackedOrigin],
+    j: Int,
+    n: Int,
+    at: Int,
+):
+    """The ranks of keys `j..j+L` among `keys[0:n]` (for each, how many
+    keys are smaller), into `ranks[at + j:]`."""
+    var kv = keys.unsafe_load[width=L](j)
+    var acc = SIMD[DType.int, L](0)
+    for i in range(n):
+        var b = SIMD[DType.float64, L](keys[unsafe_offset=i])
+        acc += kv.gt(b).cast[DType.int]()
+    ranks.unsafe_store(at + j, acc)
+
+
 def _sort_keys(op: _Ptr, lo: Int, hi: Int, tmp: _Ptr):
-    """Sort the distinct integers `op[lo:hi]`, all below `Int.MAX`.
+    """Sort the distinct integers `op[lo:hi]`, all at least 0 and below 2^62.
 
     Up to `_INSERTION_SORT_TO` keys by insertion; up to `_RANK_SORT_TO` by
     rank; longer runs by merge sort over halves. `tmp` holds at least
-    `max((hi - lo) / 2 + 1, _RANK_SORT_TO)` entries.
+    `max((hi - lo) / 2 + 1, 2 * _RANK_SORT_TO)` entries.
     """
     var n0 = hi - lo
     if n0 <= _INSERTION_SORT_TO:
@@ -528,22 +548,33 @@ def _sort_keys(op: _Ptr, lo: Int, hi: Int, tmp: _Ptr):
         # each key's place is the number of smaller keys (they are
         # distinct): more comparisons than insertion sort, but in SIMD and
         # with no branch to mispredict, so the cost does not depend on how
-        # the keys arrive; padded with Int.MAX, which counts for none
+        # the keys arrive. The keys are compared as doubles, which AVX2
+        # compares on two ports where 64-bit integers take one: key + 2^52
+        # is the bit pattern of a positive normal double below 4, and such
+        # doubles order as their bit patterns do. Each key is compared with
+        # 16 others at a time, so the counts stay in registers. Padded with
+        # infinity, which counts for none; the ranks follow the keys in tmp.
         comptime W = 4
         var padded = (n0 + W - 1) // W * W
         for a in range(n0):
-            tmp[unsafe_offset=a] = op[unsafe_offset=lo + a]
+            tmp[unsafe_offset=a] = op[unsafe_offset=lo + a] + _F64_BIAS
         for a in range(n0, padded):
-            tmp[unsafe_offset=a] = Int.MAX
-        var tv = rebind[Pointer[Scalar[DType.int], MutUntrackedOrigin]](tmp)
+            tmp[unsafe_offset=a] = _F64_INF
+        var keys = rebind[Pointer[Float64, MutUntrackedOrigin]](tmp)
+        var ranks = rebind[Pointer[Scalar[DType.int], MutUntrackedOrigin]](tmp)
+        var j = 0
+        while j + 4 * W <= padded:
+            _rank_block[4 * W](keys, ranks, j, n0, padded)
+            j += 4 * W
+        if padded - j >= 2 * W:
+            _rank_block[2 * W](keys, ranks, j, n0, padded)
+            j += 2 * W
+        if padded > j:
+            _rank_block[W](keys, ranks, j, n0, padded)
         for a in range(n0):
-            var key = tmp[unsafe_offset=a]
-            var kv = SIMD[DType.int, W](key)
-            var acc = SIMD[DType.int, W](0)
-            for b in range(0, padded, W):
-                var v = tv.unsafe_load[width=W](b)
-                acc += v.lt(kv).cast[DType.int]()
-            op[unsafe_offset=lo + Int(acc.reduce_add())] = key
+            op[unsafe_offset=lo + tmp[unsafe_offset=padded + a]] = (
+                tmp[unsafe_offset=a] - _F64_BIAS
+            )
         return
     var mid = (lo + hi) // 2
     _sort_keys(op, lo, mid, tmp)
@@ -572,15 +603,21 @@ def _sort_keys(op: _Ptr, lo: Int, hi: Int, tmp: _Ptr):
         out += 1
 
 
-comptime _INSERTION_SORT_TO = 16
-"""Runs up to this long are sorted by insertion in `_sort_keys`: few
-comparisons, so mispredicted ones cost little."""
-comptime _RANK_SORT_TO = 64
+comptime _INSERTION_SORT_TO = 8
+"""Runs up to this long are sorted by insertion in `_sort_keys`. On keys
+that arrive nearly in order, as in a complex numbered coherently,
+insertion takes about 1.2 ns a key against 3 by rank; on keys in random
+order it takes 7–8 ns a key at 6–8 keys, as its branches mispredict."""
+comptime _RANK_SORT_TO = 96
 """Longer runs up to this long are sorted by rank in `_sort_keys` (a
-multiple of the SIMD width 4). With ranking instead of insertion above
-16, the topology of `tet_40` on one thread takes 125 ms instead of 133 in
-Morton order and 238 instead of 264 numbered at random, but 120 instead
-of 114 in grid order."""
+multiple of the SIMD width 4). On keys in random order, ranking takes
+4.7 ns a key at 64 keys against 5.8 for sorting two halves by rank and
+merging them, and 8.2 against 7.6 at 128."""
+comptime _F64_BIAS = 1 << 52
+"""Added to a key below 2^62 in `_sort_keys`, it gives the bit pattern of
+a positive normal double."""
+comptime _F64_INF = 0x7FF0000000000000
+"""The bit pattern of positive infinity: above every biased key."""
 
 
 def _bit_length(x: Int) -> Int:
@@ -768,7 +805,7 @@ def _boundary_by_buckets(
                     widest, stp[unsafe_offset=v + 1] - stp[unsafe_offset=v]
                 )
             var tmp = List[Int](
-                length=max(widest // 2 + 1, _RANK_SORT_TO), fill=0
+                length=max(widest // 2 + 1, 2 * _RANK_SORT_TO), fill=0
             )
             var tp = tmp.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
             for v in range(bp[unsafe_offset=b], bp[unsafe_offset=b + 1]):

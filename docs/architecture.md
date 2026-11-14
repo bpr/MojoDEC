@@ -98,19 +98,20 @@ complex copies, and the runtime.
 
 | Step | Where | 1 thread | all cores |
 |---|---|---:|---:|
-| topology: faces, `d`, `boundary`, orientation check | `simplex_array_boundary`, `require_coherent_orientation` | 74 | 40 |
+| topology: faces, `d`, `boundary`, orientation check | `simplex_array_boundary`, `require_coherent_orientation` | 66 | 38 |
 | circumcenters | `compute_circumcenters` | 33 | 12 |
 | primal volumes | `compute_primal_volume` | 16 | 4.5 |
 | dual volumes | `compute_dual_volume` (`_DualWalk`) | 62 | 18 |
 | Hodge stars | `construct_hodge` | 5.6 | 6.0 |
-| **build** | | **191** | **85** |
+| **build** | | **181** | **80** |
 
 On `tri_400` the build takes 68 ms on one thread and 36 ms on all
 cores. Topology is 28 and 19 ms of that.
 
 - **Topology** never sorts all the faces. A parallel counting sort puts
   face occurrences into one bucket per first vertex, each bucket is
-  sorted with branch-free sorts, and the faces, `d`, and `boundary` are
+  sorted with branch-free sorts (ranks in SIMD for 9 to 96 keys), and
+  the faces, `d`, and `boundary` are
   read off the runs of equal faces. `d` needs no sort of its own: a
   sorted simplex's faces come in reverse order of the vertex left out.
   It is still the largest step on all cores, where it is limited by

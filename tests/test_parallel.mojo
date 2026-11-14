@@ -238,6 +238,9 @@ def test_boundary_by_buckets_matches_lexsort() raises:
     _check_boundary_paths(
         _with_unused_vertices(_jittered([12, 12, 12], True), 5)
     )
+    # buckets of 65 to _RANK_SORT_TO, sorted by rank
+    _check_boundary_paths(_fan(40, 3))
+    _check_boundary_paths(_fan(30, 4))
     # buckets past _RANK_SORT_TO, sorted by merging
     _check_boundary_paths(_fan(5000, 3))
     _check_boundary_paths(_fan(3000, 4))
