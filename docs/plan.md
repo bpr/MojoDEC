@@ -93,14 +93,15 @@ right shape for that is opt-in.
 Ordered by the time at stake. Times are in ms on `tet_40`, one thread /
 all cores.
 
-- **Whitney assembly** (k = 1: about 120 of 137 ms on one thread, and
-  nearly all of 47 on all cores; the element loop takes the rest, see
-  [performance](guide/performance.md#whitney-elements-four-at-a-time)).
-  Counting each row's columns takes about 38 ms. About 35 ms of the
-  76 ms fill is first-touch faults on the 123 MB result. The memory is
-  unavoidable; faulting it in parallel ahead of the fill might hide some
-  of the cost. Any change must keep the bits of every k equal to the
-  committed build (see AGENTS.md).
+- **Whitney assembly, general faces** (k = 1: about 108 of 126 ms on
+  one thread, and most of 43 on all cores; see
+  [performance](guide/performance.md#whitney-assembly)). Filling the
+  rows takes about 75 ms: finding each term's column in its row (half of
+  those branches mispredict), reading the local matrices, and sorting
+  each row. Fills without branches and by sorting each row's terms were
+  slower. On all cores the fill is close to the memory bandwidth. Any
+  change must keep the bits of every k equal to the committed build (see
+  AGENTS.md).
 - **Topology** (74 / 40, from 127 / 66; see
   [performance](guide/performance.md#topology)) is still the largest
   step of `build` on all cores. What remains:

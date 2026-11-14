@@ -357,10 +357,14 @@ a block of outputs and adds only to those, in the serial order (dual
 volumes: faces by first vertex id, which can exceed the number of
 0-simplices when vertices are unused; `whitney_innerproduct`: matrix rows,
 each summed over its top simplices in increasing order, as `from_coo`
-would, in two passes, one counting each row's columns and one writing
-them straight into the result; short rows, up to 16 terms on average,
-keep their columns sorted by insertion, longer ones find a column's
-slot through a per-chunk marker array). `whitney_innerproduct`'s element loop for
+would). Faces of codimension 1 take `_assemble_codim1`: in a
+pseudomanifold each lies in one or two top simplices (the rows of the
+top level's `boundary`), which share no other face, so a row is their
+faces merged, each simplex's faces being in increasing order. Other
+faces take `_assemble`: `_incidence` (a stable counting sort, parallel
+by blocks of faces, 32-bit entries), then two passes, one counting each
+row's columns (each slot marked with the row, no branch) and one
+writing them straight into the result through a per-chunk slot array. `whitney_innerproduct`'s element loop for
 triangles in 2D and 3D and tetrahedra in 3D is `_whitney_element`,
 unrolled at compile time with the general loop's arithmetic and its
 fused multiply-adds explicit, four top simplices to a SIMD vector

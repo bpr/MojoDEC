@@ -440,6 +440,19 @@ def whitney_innerproduct(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
             ixp[unsafe_offset=i] = i
         A.data = data^
         return A^
+    if k == p - 1:
+        var Nk = sc[k].num_simplices
+        var A: Optional[CSRMatrix]
+        if num_k_faces == 3:
+            A = _assemble_codim1[3](Nk, 3, faces, data, sc[p].boundary)
+        elif num_k_faces == 4:
+            A = _assemble_codim1[4](Nk, 4, faces, data, sc[p].boundary)
+        else:
+            A = _assemble_codim1[0](
+                Nk, num_k_faces, faces, data, sc[p].boundary
+            )
+        if A:
+            return A.take()
     return _assemble(sc[k].num_simplices, num_k_faces, faces, data)
 
 
@@ -886,6 +899,216 @@ def _term_coef(p: Int, k: Int, t: Int, q: Int) -> Float64:
     return Float64(_term_parts(p, k, t, q)[1])
 
 
+def _assemble_codim1[
+    F: Int
+](
+    N: Int,
+    fps_: Int,
+    faces: List[Int],
+    values: List[Float64],
+    cofaces: CSRMatrix,
+) -> Optional[CSRMatrix]:
+    """`_assemble` for the faces of codimension 1, from the top simplices
+    containing each (the rows of `cofaces`, the top level's boundary).
+    In a pseudomanifold a face lies in one or two top simplices, which
+    share no other face, so its row has `1 + (fps - 1) m` entries for `m`
+    top simplices: their faces merged, with the face itself summed
+    `v_1 + v_2` in increasing `s`. The same matrix as `_assemble`, bit for
+    bit; None if some face lies in more than two top simplices. `F` is
+    `fps` when it is known at compile time, 0 otherwise. Each top
+    simplex's faces are in increasing order (its vertices are sorted, and
+    its faces listed in lexicographic order)."""
+    var fps = F if F > 0 else fps_
+    var cp = cofaces.indptr.unsafe_ptr()
+    var cx = cofaces.indices.unsafe_ptr()
+    var indptr = List[Int](unsafe_uninit_length=N + 1)
+    var pp = indptr.unsafe_ptr()
+    pp[unsafe_offset=0] = 0
+    for r in range(N):
+        var m = cp[unsafe_offset=r + 1] - cp[unsafe_offset=r]
+        if m < 1 or m > 2:
+            return None
+        pp[unsafe_offset=r + 1] = pp[unsafe_offset=r] + 1 + (fps - 1) * m
+    var nnz = pp[unsafe_offset=N]
+    var indices = List[Int](unsafe_uninit_length=nnz)
+    var data = List[Float64](unsafe_uninit_length=nnz)
+    var ixp = indices.unsafe_ptr()
+    var dp = data.unsafe_ptr()
+    var fp = faces.unsafe_ptr()
+    var vp = values.unsafe_ptr()
+
+    def rows(chunk: Int, lo: Int, hi: Int) {fps, cp, cx, pp, ixp, dp, fp, vp}:
+        for r in range(lo, hi):
+            var j = cp[unsafe_offset=r]
+            var base = pp[unsafe_offset=r]
+            var A = cx[unsafe_offset=j] * fps
+            var a1 = 0
+            for b in range(fps):
+                a1 += b * Int(fp[unsafe_offset=A + b] == r)
+            var V1 = (A + a1) * fps
+            if cp[unsafe_offset=r + 1] - j == 1:
+                for b in range(fps):
+                    ixp[unsafe_offset=base + b] = fp[unsafe_offset=A + b]
+                    dp[unsafe_offset=base + b] = vp[unsafe_offset=V1 + b]
+                continue
+            var B = cx[unsafe_offset=j + 1] * fps
+            var a2 = 0
+            for b in range(fps):
+                a2 += b * Int(fp[unsafe_offset=B + b] == r)
+            var V2 = (B + a2) * fps
+            # a column's place: its place in its own simplex, plus the
+            # smaller columns of the other, counting the shared face once;
+            # the second simplex first, so that the first overwrites the
+            # shared face's entry
+            for b in range(fps):
+                var x = fp[unsafe_offset=B + b]
+                var at = base + b - Int(r < x)
+                for q in range(fps):
+                    at += Int(fp[unsafe_offset=A + q] < x)
+                ixp[unsafe_offset=at] = x
+                dp[unsafe_offset=at] = vp[unsafe_offset=V2 + b]
+            var shared = vp[unsafe_offset=V1 + a1] + vp[unsafe_offset=V2 + a2]
+            for b in range(fps):
+                var x = fp[unsafe_offset=A + b]
+                var at = base + b - Int(r < x)
+                for q in range(fps):
+                    at += Int(fp[unsafe_offset=B + q] < x)
+                ixp[unsafe_offset=at] = x
+                dp[unsafe_offset=at] = (
+                    shared if b == a1 else vp[unsafe_offset=V1 + b]
+                )
+
+    parallel_ranges(N, 4096, rows)
+    var M = CSRMatrix(N, N)
+    M.indptr = indptr^
+    M.indices = indices^
+    M.data = data^
+    return M^
+
+
+struct _Incidence(Movable):
+    """The top simplices containing each face, as `_incidence` finds them."""
+
+    var start: List[Int]
+    """Face `r`'s entries are `entries[start[r]:start[r + 1]]`."""
+    var entries: List[Int32]
+    """Entry `s * fps + a` for face `faces[s * fps + a]`, in increasing
+    order within each face."""
+
+    def __init__(out self, var start: List[Int], var entries: List[Int32]):
+        self.start = start^
+        self.entries = entries^
+
+
+def _incidence(N: Int, fps: Int, faces: List[Int]) -> _Incidence:
+    """The top simplices containing each of the `N` faces, by a counting
+    sort of `faces`, stable so that each face's entries are in increasing
+    order. On several cores: each chunk of entries counts its faces by
+    block of faces, places its entries into their blocks after those of
+    the chunks before it, and each block is then sorted by face."""
+    var total = len(faces)
+    var fp = faces.unsafe_ptr()
+    var start = List[Int](length=N + 1, fill=0)
+    var sp = start.unsafe_ptr()
+    var entries = List[Int32](unsafe_uninit_length=total)
+    var ep = entries.unsafe_ptr()
+    comptime SERIAL_BELOW = 1 << 17
+    var T = num_chunks(total, SERIAL_BELOW)
+    if T <= 1:
+        for e in range(total):
+            var r = fp[unsafe_offset=e]
+            sp[unsafe_offset=r + 1] = sp[unsafe_offset=r + 1] + 1
+        for r in range(N):
+            sp[unsafe_offset=r + 1] = (
+                sp[unsafe_offset=r + 1] + sp[unsafe_offset=r]
+            )
+        var next = start.copy()
+        var np = next.unsafe_ptr()
+        for e in range(total):
+            var r = fp[unsafe_offset=e]
+            var at = np[unsafe_offset=r]
+            ep[unsafe_offset=at] = Int32(e)
+            np[unsafe_offset=r] = at + 1
+        return _Incidence(start^, entries^)
+    # blocks of 2^shift faces, about one per chunk
+    var shift = 0
+    while (N >> shift) >= T:
+        shift += 1
+    var B = (N >> shift) + 1
+    var offsets = List[Int](length=T * B, fill=0)
+    var op = offsets.unsafe_ptr()
+
+    def count(chunk: Int, lo: Int, hi: Int) {fp, op, B, shift}:
+        var h = chunk_scratch[Int](B, 0)
+        var hp = h.unsafe_ptr()
+        for e in range(lo, hi):
+            var b = fp[unsafe_offset=e] >> shift
+            hp[unsafe_offset=b] = hp[unsafe_offset=b] + 1
+        for b in range(B):
+            op[unsafe_offset=chunk * B + b] = hp[unsafe_offset=b]
+
+    parallel_ranges(total, SERIAL_BELOW, count)
+    # block b's entries start at bstart[b], chunk by chunk
+    var bstart = List[Int](length=B + 1, fill=0)
+    var at = 0
+    for b in range(B):
+        bstart[b] = at
+        for c in range(T):
+            var n = op[unsafe_offset=c * B + b]
+            op[unsafe_offset=c * B + b] = at
+            at += n
+    bstart[B] = at
+    var by_block = List[Int32](unsafe_uninit_length=total)
+    var bp = by_block.unsafe_ptr()
+
+    def place(chunk: Int, lo: Int, hi: Int) {fp, op, bp, B, shift}:
+        var nx = chunk_scratch[Int](B, 0)
+        var np = nx.unsafe_ptr()
+        for b in range(B):
+            np[unsafe_offset=b] = op[unsafe_offset=chunk * B + b]
+        for e in range(lo, hi):
+            var b = fp[unsafe_offset=e] >> shift
+            var a = np[unsafe_offset=b]
+            bp[unsafe_offset=a] = Int32(e)
+            np[unsafe_offset=b] = a + 1
+
+    parallel_ranges(total, SERIAL_BELOW, place)
+    var bsp = bstart.unsafe_ptr()
+
+    def sort_blocks(
+        chunk: Int, lo: Int, hi: Int
+    ) {N, fp, sp, ep, bp, bsp, shift}:
+        var nx = chunk_scratch[Int](1 << shift, 0)
+        var np = nx.unsafe_ptr()
+        for b in range(lo, hi):
+            var r0 = b << shift
+            var r1 = min(N, (b + 1) << shift)
+            var e0 = bsp[unsafe_offset=b]
+            var e1 = bsp[unsafe_offset=b + 1]
+            for r in range(r1 - r0):
+                np[unsafe_offset=r] = 0
+            for q in range(e0, e1):
+                var r = fp[unsafe_offset=Int(bp[unsafe_offset=q])] - r0
+                np[unsafe_offset=r] = np[unsafe_offset=r] + 1
+            # each face's start; then the next free place of each
+            var at = e0
+            for r in range(r1 - r0):
+                var n = np[unsafe_offset=r]
+                sp[unsafe_offset=r0 + r] = at
+                np[unsafe_offset=r] = at
+                at += n
+            for q in range(e0, e1):
+                var e = bp[unsafe_offset=q]
+                var r = fp[unsafe_offset=Int(e)] - r0
+                var a = np[unsafe_offset=r]
+                ep[unsafe_offset=a] = e
+                np[unsafe_offset=r] = a + 1
+
+    parallel_ranges(B, 2, sort_blocks)
+    sp[unsafe_offset=N] = total
+    return _Incidence(start^, entries^)
+
+
 def _assemble(
     N: Int, fps: Int, faces: List[Int], values: List[Float64]
 ) raises -> CSRMatrix:
@@ -896,38 +1119,27 @@ def _assemble(
     The same matrix, bit for bit, as `CSRMatrix.from_coo` of the triplets
     listed simplex-major (`massmatrix_rowcols`' order): each entry sums its
     terms in increasing `s`, starting from the first. Rows are assembled
-    in parallel, each from the top simplices containing its face.
+    in parallel, each from the top simplices containing its face. Faces
+    of codimension 1 take `_assemble_codim1` instead.
     """
-    var num_top = len(faces) // fps if fps > 0 else 0
+    if len(faces) > Int(Int32.MAX) or N > Int(Int32.MAX):
+        raise Error("whitney_innerproduct: too many faces for 32-bit indices")
     var fp = faces.unsafe_ptr()
     var vp = values.unsafe_ptr()
     # the top simplices containing each face, in increasing order: entry
     # s * fps + a for face faces[s * fps + a]
-    var start = List[Int](length=N + 1, fill=0)
-    var sp = start.unsafe_ptr()
-    for e in range(num_top * fps):
-        var r = fp[unsafe_offset=e]
-        sp[unsafe_offset=r + 1] = sp[unsafe_offset=r + 1] + 1
-    for r in range(N):
-        sp[unsafe_offset=r + 1] = sp[unsafe_offset=r + 1] + sp[unsafe_offset=r]
-    var incidence = List[Int](unsafe_uninit_length=num_top * fps)
-    var ip = incidence.unsafe_ptr()
-    var next = start.copy()
-    var np = next.unsafe_ptr()
-    for e in range(num_top * fps):
-        var r = fp[unsafe_offset=e]
-        var at = np[unsafe_offset=r]
-        ip[unsafe_offset=at] = e
-        np[unsafe_offset=r] = at + 1
+    var inc = _incidence(N, fps, faces)
+    var sp = inc.start.unsafe_ptr()
+    var ip = inc.entries.unsafe_ptr()
     # Two passes over the rows, in parallel: the first counts each row's
     # distinct columns, the second sums its entries and writes them, sorted
     # by column, straight into the result; the terms of each entry are
-    # added in increasing s, as from_coo's stable sort orders them. Rows
-    # of 16 terms or fewer on average keep their columns sorted by
-    # insertion; longer rows (k = 0, and edges in 3D) find a column's slot
-    # through a per-chunk array `slot[c]` (-1 when the column is not in the
-    # row) and sort once at the end, where insertion would be quadratic.
-    var short_rows = num_top * fps * fps <= 16 * N
+    # added in increasing s, as from_coo's stable sort orders them. A
+    # column is found in the row through a per-chunk array `slot[c]`. The
+    # count marks it with the row, without a branch (about half the terms
+    # bring a new column, and the branch mispredicted). The fill keeps the
+    # column's place in the row (-1 when absent) and branches: without the
+    # branch each term's place waited on the last store, and it ran slower.
     var max_terms = 0
     for r in range(N):
         max_terms = max(
@@ -937,56 +1149,21 @@ def _assemble(
     var cnp = counts.unsafe_ptr()
     comptime SERIAL_BELOW = 4096
 
-    def count_rows(
-        chunk: Int, lo: Int, hi: Int
-    ) {N, fps, fp, sp, ip, cnp, max_terms}:
+    def count_rows(chunk: Int, lo: Int, hi: Int) {N, fps, fp, sp, ip, cnp}:
         var slot = chunk_scratch[Int32](N, -1)
-        var cols = chunk_scratch[Int](max_terms, 0)
         var slp = slot.unsafe_ptr()
-        var cp = cols.unsafe_ptr()
         for r in range(lo, hi):
             var n = 0
+            var mark = Int32(r)
             for j in range(sp[unsafe_offset=r], sp[unsafe_offset=r + 1]):
-                var s = ip[unsafe_offset=j] // fps
+                var s = Int(ip[unsafe_offset=j]) // fps
                 for b in range(fps):
                     var c = fp[unsafe_offset=s * fps + b]
-                    if slp[unsafe_offset=c] < 0:
-                        slp[unsafe_offset=c] = Int32(n)
-                        cp[unsafe_offset=n] = c
-                        n += 1
-            cnp[unsafe_offset=r] = n
-            for t in range(n):
-                slp[unsafe_offset=cp[unsafe_offset=t]] = -1
-
-    def count_rows_short(
-        chunk: Int, lo: Int, hi: Int
-    ) {fps, fp, sp, ip, cnp, max_terms}:
-        var cols = chunk_scratch[Int](max_terms, 0)
-        var cp = cols.unsafe_ptr()
-        for r in range(lo, hi):
-            # the row's distinct columns, kept sorted (rows are short)
-            var n = 0
-            for j in range(sp[unsafe_offset=r], sp[unsafe_offset=r + 1]):
-                var s = ip[unsafe_offset=j] // fps
-                for b in range(fps):
-                    var c = fp[unsafe_offset=s * fps + b]
-                    var at = n
-                    while at > 0 and cp[unsafe_offset=at - 1] > c:
-                        at -= 1
-                    if at > 0 and cp[unsafe_offset=at - 1] == c:
-                        continue
-                    var m = n
-                    while m > at:
-                        cp[unsafe_offset=m] = cp[unsafe_offset=m - 1]
-                        m -= 1
-                    cp[unsafe_offset=at] = c
-                    n += 1
+                    n += Int(slp[unsafe_offset=c] != mark)
+                    slp[unsafe_offset=c] = mark
             cnp[unsafe_offset=r] = n
 
-    if short_rows:
-        parallel_ranges(N, SERIAL_BELOW, count_rows_short)
-    else:
-        parallel_ranges(N, SERIAL_BELOW, count_rows)
+    parallel_ranges(N, SERIAL_BELOW, count_rows)
     var indptr = List[Int](unsafe_uninit_length=N + 1)
     indptr[0] = 0
     var pp = indptr.unsafe_ptr()
@@ -1010,7 +1187,7 @@ def _assemble(
         for r in range(lo, hi):
             var n = 0
             for j in range(sp[unsafe_offset=r], sp[unsafe_offset=r + 1]):
-                var e = ip[unsafe_offset=j]
+                var e = Int(ip[unsafe_offset=j])
                 var s = e // fps
                 for b in range(fps):
                     var c = fp[unsafe_offset=s * fps + b]
@@ -1040,47 +1217,8 @@ def _assemble(
                 ixp[unsafe_offset=dst + at] = c
                 dp[unsafe_offset=dst + at] = v
 
-    def fill_rows_short(
-        chunk: Int, lo: Int, hi: Int
-    ) {fps, fp, vp, sp, ip, pp, ixp, dp}:
-        for r in range(lo, hi):
-            # insert into the row's place in the result, sorted by column
-            var base = pp[unsafe_offset=r]
-            var n = 0
-            for j in range(sp[unsafe_offset=r], sp[unsafe_offset=r + 1]):
-                var e = ip[unsafe_offset=j]
-                var s = e // fps
-                for b in range(fps):
-                    var c = fp[unsafe_offset=s * fps + b]
-                    var v = vp[unsafe_offset=e * fps + b]
-                    var at = n
-                    while at > 0 and ixp[unsafe_offset=base + at - 1] > c:
-                        at -= 1
-                    if at > 0 and ixp[unsafe_offset=base + at - 1] == c:
-                        dp[unsafe_offset=base + at - 1] = (
-                            dp[unsafe_offset=base + at - 1] + v
-                        )
-                        continue
-                    var m = n
-                    while m > at:
-                        ixp[unsafe_offset=base + m] = ixp[
-                            unsafe_offset=base + m - 1
-                        ]
-                        dp[unsafe_offset=base + m] = dp[
-                            unsafe_offset=base + m - 1
-                        ]
-                        m -= 1
-                    ixp[unsafe_offset=base + at] = c
-                    dp[unsafe_offset=base + at] = v
-                    n += 1
-
-    if short_rows:
-        parallel_ranges(N, SERIAL_BELOW, fill_rows_short)
-    else:
-        parallel_ranges(N, SERIAL_BELOW, fill_rows)
-    _ = start^
-    _ = incidence^
-    _ = next^
+    parallel_ranges(N, SERIAL_BELOW, fill_rows)
+    _ = inc^
     _ = counts^
     # canonical by construction (sorted, no duplicates)
     var A = CSRMatrix(N, N)

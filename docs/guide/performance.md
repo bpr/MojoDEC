@@ -688,3 +688,83 @@ remainders, on 1 thread and on all cores.
 element loop is now 16: about 6 gathering the faces, 3 storing the
 110 MB of local matrices, and the rest arithmetic. Assembly takes the
 other 120 or so: counting each row's columns, and filling the rows.
+
+## Whitney assembly
+
+With the [element loop](#whitney-elements-four-at-a-time) down to
+16 ms, assembly was most of `whitney_innerproduct`. On `tet_40` with
+one thread, k = 1 spent 7.5 ms finding the top simplices containing each
+edge (the incidence), 38 counting each row's columns, and 78 filling the
+rows. k = 2 spent 27 counting and 33 filling. Three changes, all with
+the same bits:
+
+- **Faces of codimension 1 are merged, not counted.** In a
+  pseudomanifold, a face of dimension n − 1 lies in one or two top
+  simplices, and two top simplices share at most one such face. So its
+  row has 1 + (fps − 1)·m entries for m top simplices: the faces of
+  those simplices, merged, with the shared face counted once. Each
+  simplex's faces are already in increasing order, so a column's place
+  is its place in its own simplex plus the number of smaller faces of
+  the other. The shared face's entry is v₁ + v₂, in increasing order of
+  the simplex, as before. The top simplices containing each face are the
+  rows of the top level's `boundary`, so this needs no incidence, no
+  counting pass, and no search. It covers k = 2 for tetrahedra and
+  k = 1 for triangles.
+- **Counting marks columns with the row.** The counting pass looks up
+  each term's column in an array of slots. About half the terms bring a
+  new column, so the branch on that mispredicted. Now each slot holds the
+  last row that saw its column: a term is new if its slot holds another
+  row, and the slot is set to this row either way, with no branch and no
+  pass to clear the slots. k = 1: 38 → 26 ms.
+- **The incidence is built on all cores**, with 32-bit entries. It was a
+  serial counting sort, 8.4 ms of k = 1's 41 on all cores. Now each
+  chunk of terms counts its faces by blocks of faces, places its terms
+  into their blocks after those of the chunks before it, and each block
+  is sorted by face. Each step keeps the order, so each face's top
+  simplices stay in increasing order. All cores: 8.4 → 6.0 ms.
+
+The path that kept short rows sorted by insertion is gone: only faces
+of codimension 1 had rows that short.
+
+The whole call, best of 5 alternating rounds, against the committed
+build (`bb4571c`), in ms:
+
+| Mesh | k | 1 thread | all cores |
+|---|---|---:|---:|
+| `tet_40` | 0 | 50 → 46 | 19 → 18 |
+| | 1 | 138 → 126 | 46 → 43 |
+| | 2 | 80 → 52 | 31 → 16 |
+| `tet_40_shuffled` | 0 | 152 → 137 | 33 → 30 |
+| | 1 | 349 → 313 | 83 → 72 |
+| | 2 | 163 → 107 | 41 → 24 |
+| `tri_400` | 0 | 28 → 26 | 12 → 11 |
+| | 1 | 36 → 22 | 15 → 7.7 |
+| `tri_400_shuffled` | 0 | 105 → 91 | 27 → 22 |
+| | 1 | 90 → 65 | 30 → 14 |
+
+The top degree (k = n), whose matrix is diagonal, is unchanged. Every
+k's matrix was checked against the committed build by its bits, on the
+same meshes as for the element loop and the shuffled triangles too, on
+1 thread and on all cores.
+
+**Tried and not kept**, all on `tet_40`, k = 1, one thread:
+
+- **Faces per simplex known at compile time** in the general path: the
+  counting went 26 → 30 ms and the filling 77 → 86. The codimension-1
+  merge does use it: with the faces' order, it went 45 → 38 ms.
+- **A fill without branches**, its column's place packed into the slot
+  with the row's mark: 77 → 88 ms. Each term's place came from a load
+  that waited on the previous term's store.
+- **Sorting each row's terms** by column and term (eight keys at a time,
+  by SIMD ranks) and summing each column in one scan: 77 → 95 ms. It is
+  simply more instructions per term.
+- **Counting with ranks**, recording each term's place in its sorted row
+  so that the fill needs no search: 116 → 148 ms for both passes.
+
+**What is left.** On `tet_40`, k = 1, one thread, the fill takes about
+75 ms: about 45 finding each term's column in the row (half of those
+branches still mispredict), 11 reading the local matrices, and 17
+sorting each row. Page faults are not what limits it: touching the
+result's pages first did not make the fill faster. On all cores it takes
+about 18 ms and moves about 250 MB, which is close to this machine's
+memory bandwidth.

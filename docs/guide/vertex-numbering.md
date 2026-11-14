@@ -133,19 +133,19 @@ walk, and Whitney were measured again after later work (best of 5):
 | dual walk, all cores | 18 | 37 | 15 |
 | topology, 1 thread | 74 | 122 | 77 |
 | topology, all cores | 40 | 59 | 39 |
-| Whitney k = 0, 1 thread | 49 | 152 | 61 |
-| Whitney k = 1, 1 thread | 137 | 347 | 154 |
+| Whitney k = 0, 1 thread | 46 | 137 | 55 |
+| Whitney k = 1, 1 thread | 126 | 313 | 134 |
 
 | `tri_400` | grid order | shuffled | reordered |
 |---|---:|---:|---:|
 | build, 1 thread | 68 | 113 | 71 |
 | build, all cores | 36 | 63 | 38 |
-| Whitney k = 0, 1 thread | 29 | 106 | 31 |
+| Whitney k = 0, 1 thread | 26 | 91 | 28 |
 
 Reordering brings a shuffled mesh back to the speed of the grid's own
 numbering, and the 3D dual walk on all cores below it (15 against 18 ms,
 from the fewer revisits). It takes 30–40 ms, against 100 ms saved in a
-one-thread build of `tet_40_shuffled` and 75–193 ms in each Whitney
+one-thread build of `tet_40_shuffled` and 63–179 ms in each Whitney
 matrix.
 [Performance](performance.md#shuffled-vertex-numbers) has the full
 comparison.
