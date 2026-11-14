@@ -1,4 +1,5 @@
 from std.math import sqrt
+from std.memory import bitcast
 from std.testing import (
     TestSuite,
     assert_equal,
@@ -11,7 +12,7 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.simplex import Simplex
-from mojodec.core.simplicial_complex import SimplicialComplex
+from mojodec.core.simplicial_complex import SimplicialComplex, _div6
 from mojodec.core.utils import real_array, fget, fset, rows_of, cols_of
 
 
@@ -177,6 +178,36 @@ def test_hodge_star_regular() raises:
         for i in range(sc[dim].num_simplices):
             assert_almost_equal(
                 sc[dim].star[i, i], dual[dim] / primal[dim], atol=1e-14, rtol=0
+            )
+
+
+def test_div6_is_division() raises:
+    # _div6 (the dual walk's division of its smallest pieces by 3!) rounds
+    # as x / 6 does, for magnitudes in [2^-1000, 2^1000]: random
+    # significands at every exponent there, and multiples of 3, whose
+    # quotients are exact or lie close to midpoints
+    comptime V = SIMD[DType.float64, 4]
+    var state: UInt64 = 88172645463325252
+    for i in range(250_000):
+        var x = V(0)
+        for l in range(4):
+            state ^= state << 13
+            state ^= state >> 7
+            state ^= state << 17
+            if i % 2 == 0:
+                var e = UInt64(23 + Int((state >> 52) % 2000))
+                var sign = (state & 1) << 63
+                x[l] = bitcast[DType.float64](
+                    sign | (e << 52) | (state & 0xFFFFFFFFFFFFF)
+                )
+            else:
+                var m = Int((state >> 12) % (1 << 50))
+                x[l] = Float64(3 * m + 3) * (0.5 if l % 2 == 0 else -0.25)
+        var got = _div6(x)
+        var want = x / V(6.0)
+        for l in range(4):
+            assert_equal(
+                bitcast[DType.uint64](got[l]), bitcast[DType.uint64](want[l])
             )
 
 

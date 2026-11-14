@@ -117,11 +117,13 @@ all cores.
     [performance](guide/performance.md#sorting-elements-out-of-order)).
     Its buckets still sort by insertion, which mispredicts on rows in
     random order.
-- **Dual walk** (62 / 18, from 117 / 34; see
-  [performance](guide/performance.md#the-dual-walks-gather-and-scatter)).
-  On one thread, the square roots and divisions take about 26 ms and
-  can't become multiplications without changing the bits. Gathering
-  the faces takes about 20 ms, 13 of it the circumcenters.
+- **Dual walk** (55 / 17, from 117 / 34; see
+  [performance](guide/performance.md#the-dual-walks-divider)). On one
+  thread, the square roots and the divisions normalizing edges take
+  about 20 ms and can't become multiplications without changing the
+  bits; the divisions by 3! already have. On all cores the divider
+  doesn't limit the walk. Gathering the faces takes about 20 ms, 13 of
+  it the circumcenters.
 - **`tri_400_shuffled`, Whitney k = 0:** 114 ms against 107 before the
   two-pass assembly, because with random numbering a row's triangles
   are scattered and are read twice. `reorder_vertices` avoids it; fix it

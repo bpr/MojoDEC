@@ -163,7 +163,12 @@ plan). Key design points that span several files:
   each lane vector is one or two vector loads and a shuffle (`_lanes`,
   `_face_slot`); the scatter sums each face's pieces in a register, in
   chain order. Its two sets of tables are separate allocations: in one,
-  the walk took 1.3x as long;
+  the walk took 1.3x as long. The next simplex is gathered in three
+  parts (`_gather_part`) between `_walk_soa`'s levels, where the
+  processor would otherwise idle on the square roots and divisions, and
+  the divisions by 3! are `_div6` (a multiplication and two fused
+  multiply-adds, correctly rounded for magnitudes in [2^-1000, 2^1000];
+  others, zeros included, are divided);
   `dual_edge_piece_values` runs the
   same walk to keep the edge pieces per top simplex, which `flat` and
   `dual_edge_pieces` use. In loops, look faces up with

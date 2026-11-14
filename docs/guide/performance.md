@@ -906,3 +906,72 @@ and summing 8 chunks' counters for all 160,801 vertices. The buckets of
 `tet_40_shuffled` (5.2 ms on one thread) are sorted by insertion, whose
 branches mispredict on keys in random order; ranking pairs, with ties
 broken by position, would avoid that.
+
+## The dual walk's divider
+
+After the [gather and scatter](#the-dual-walks-gather-and-scatter)
+changes, the 10 square roots and 18 divisions of each tetrahedron's
+walk took about 26 of `tet_40`'s 62 ms on one thread. Taking each kind
+out (wrong results, timing only), in ms:
+
+| Taken out | `tet_40`, 1 thread | `tet_40`, all cores |
+|---|---:|---:|
+| nothing | 61.2 | 17.7 |
+| the 6 divisions by 3! | 56.8 | 17.6 |
+| and the 12 divisions normalizing edges | 49.5 | 16.9 |
+| and the 10 square roots | 35.1 | 17.0 |
+
+Each saved about what the divider spends on it, so the divider's work
+did not overlap anything: within a tetrahedron, each level's square
+roots and divisions wait on the level before, and the processor had
+nothing else to do while they ran. On all cores none of it matters, as
+the two threads on each core already fill each other's gaps. Two
+changes, with the same bits:
+
+- **The next simplex is gathered between the levels.** It was gathered
+  before the walk, in one piece. Now it is in three: the faces'
+  indices, their circumcenters, and the barycentric coordinates that
+  sign the chains, each placed after a level of the walk, where its
+  loads run while the divider works. For tetrahedra the indices come
+  first, before level 0; for triangles, after it, which measured better
+  for each.
+- **The divisions by 3! multiply.** With z = RN(1/6), q = RN(x z) is
+  within one ulp of x / 6, so the remainder r = x − 6q is exact, and
+  RN(q + r z) (a fused multiply-add) is x / 6 correctly rounded: q + r z
+  is within 2⁻⁵⁴ ulp of x / 6, and x / 6 is at least 1/6 ulp from any
+  midpoint. That needs x and the quotient normal and finite, so a
+  tetrahedron any of whose pieces is outside [2⁻¹⁰⁰⁰, 2¹⁰⁰⁰], zero
+  included, divides them again. Checking each vector's range before
+  using it cost as much as it saved (61.6 → 63.3 ms); one check per
+  tetrahedron saves 2–3 ms. The divisions normalizing edges are by a
+  variable, where the same trick has no proof and checking each quotient
+  would cost more than the division.
+
+The walk timed alone, best of 7 alternating rounds against the
+committed build (`03a5722`), in ms:
+
+| Mesh | 1 thread | all cores |
+|---|---:|---:|
+| `tet_40` | 60.9 → 54.8 | 18.1 → 17.2 |
+| `tet_40_shuffled` | 106.0 → 106.7 | 38.1 → 36.2 |
+| `tet_40_reordered` | 65.7 → 63.2 | 15.0 → 14.2 |
+| `tri_400` | 13.9 → 10.2 | 4.4 → 4.7 |
+| `tri_400_shuffled` | 24.3 → 24.8 | 10.2 → 9.7 |
+| `tri_400_reordered` | 14.7 → 11.5 | 5.6 → 4.4 |
+
+The shuffled meshes don't change: their gathers miss the cache, and
+those loads take longer than the divider. The changes on all cores are
+within the noise. In the benchmark (5 alternating rounds), `build` on
+one thread went 180.1 → 174.7 ms on `tet_40` and 68.0 → 64.4 on
+`tri_400`, and didn't change on all cores. Every level's dual volumes were checked against the
+committed build by their bits, plain and jittered, on 14 meshes, a
+triangulated surface in 3D, and a small grid, on 1 thread and on all
+cores. A test checks `_div6` against division on a million values.
+
+**Tried and not kept:** gathering each part one level later for
+tetrahedra (`tet_40` 56.6 against 55.1 ms), or one level earlier for
+triangles (`tri_400` 13.5 against 10.3).
+
+**What is left.** On `tet_40` with one thread, the square roots and the
+divisions normalizing edges still take about 20 ms of the walk's 55.
+Neither can become a multiplication with the same bits.

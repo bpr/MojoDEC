@@ -1707,8 +1707,9 @@ struct _DualWalk(Copyable, Movable):
     def _run_fixed[n: Int, E: Int](self, lo: Int, hi: Int):
         """`run` for a complex of dimension `n` in `E` dimensions known at
         compile time, by `_gather_fixed` and `_walk_soa`. The faces of the
-        next top simplex are gathered, into a second set of tables, before
-        the current one is walked: the gather's loads overlap the walk,
+        next top simplex are gathered into a second set of tables while
+        the current one is walked (by `_walk_soa`, between its levels):
+        the gather's loads overlap the walk's square roots and divisions,
         and the walk's vector loads don't wait on stores still in
         flight."""
         comptime w = n + 1
@@ -1740,13 +1741,11 @@ struct _DualWalk(Copyable, Movable):
             self._gather_fixed[n, E](t, cur)
         while t < self.num_top:
             var t2 = self._next_touching[w](t + 1, lo, hi)
-            if t2 < self.num_top:
-                self._gather_fixed[n, E](t2, nxt)
             # the dual of a top simplex is its circumcenter: unit volume
             var first = Int(top[unsafe_offset=t * w])
             if first >= lo and first < hi:
                 dp[unsafe_offset=t] = dp[unsafe_offset=t] + 1
-            self._walk_soa[n, E](cur, t, lo, hi)
+            self._walk_soa[n, E](cur, t, lo, hi, nxt, t2)
             var done = cur.copy()
             cur = nxt.copy()
             nxt = done^
@@ -1778,8 +1777,24 @@ struct _DualWalk(Copyable, Movable):
     def _gather_fixed[n: Int, E: Int](self, t: Int, tab: _FixedTables):
         """`_gather` for a complex of dimension `n` in `E` dimensions known
         at compile time: the masks of each dimension are unrolled."""
+        comptime for part in range(3):
+            self._gather_part[n, E, part](t, tab)
+
+    @always_inline
+    def _gather_part[
+        n: Int, E: Int, part: Int
+    ](self, t: Int, tab: _FixedTables):
+        """Part `part` of `_gather_fixed`: 0 the faces' indices, 1 their
+        circumcenters, 2 the barycentric coordinates signing the chains.
+        Parts 1 and 2 read part 0's indices."""
         comptime w = n + 1
         comptime size = 1 << w
+        comptime if part == 1:
+            self._gather_centers[n, E](tab)
+            return
+        comptime if part == 2:
+            self._gather_bary[n, E](tab)
+            return
         var top = self.simplices[n]
         tab.gidx[unsafe_offset=size - 1] = t
         comptime for j in range(w):
@@ -1802,6 +1817,12 @@ struct _DualWalk(Copyable, Movable):
                             tab.gidx[unsafe_offset=face] = ix[
                                 unsafe_offset=base + p
                             ]
+
+    @always_inline
+    def _gather_centers[n: Int, E: Int](self, tab: _FixedTables):
+        """`_gather_part` 1."""
+        comptime w = n + 1
+        comptime size = 1 << w
         # circumcenters by coordinate, each face at its slot
         comptime S = _face_slots(n)
         comptime for M in range(1, size):
@@ -1811,6 +1832,12 @@ struct _DualWalk(Copyable, Movable):
             var c = self.center[L]
             comptime for k in range(E):
                 tab.cen[unsafe_offset=k * S + slot] = c[unsafe_offset=g * E + k]
+
+    @always_inline
+    def _gather_bary[n: Int, E: Int](self, tab: _FixedTables):
+        """`_gather_part` 2."""
+        comptime w = n + 1
+        comptime size = 1 << w
         # the barycentric coordinate signing each chain, in chain order
         # (levels whose parents are triangles or larger; padding lanes
         # repeat the last chain)
@@ -1875,7 +1902,15 @@ struct _DualWalk(Copyable, Movable):
     @always_inline
     def _walk_soa[
         n: Int, E: Int
-    ](self, tab: _FixedTables, t: Int, lo: Int, hi: Int):
+    ](
+        self,
+        tab: _FixedTables,
+        t: Int,
+        lo: Int,
+        hi: Int,
+        nxt: _FixedTables,
+        t2: Int,
+    ):
         """`_walk` from top simplex `t`, breadth first and four chains at a
         time, for a complex of dimension `n` in `E` dimensions known at
         compile time.
@@ -1894,6 +1929,13 @@ struct _DualWalk(Copyable, Movable):
         `_FixedTables` and `_lanes`). The pieces are then added to the
         dual volumes face by face, each face's in `_walk`'s order, so
         every sum is `_walk`'s, bit for bit.
+
+        The square roots and divisions wait on each other level by level,
+        and with nothing else to do the processor idles while they run. So
+        the next top simplex `t2` is gathered into `nxt` in three parts
+        (`_gather_part`) placed between the levels, and the last level's
+        divisions by 3! take `_div6`, which multiplies, unless a piece is
+        out of its range.
         """
         comptime w = n + 1
         comptime full = (1 << w) - 1
@@ -1910,6 +1952,15 @@ struct _DualWalk(Copyable, Movable):
         var rootv = SIMD[DType.float64, 4](0)
         comptime for k in range(E):
             rootv[k] = tab.cen[unsafe_offset=k * S + ROOT]
+        # whether every piece of level 2 is in _div6's range
+        var fast = SIMD[DType.bool, 4](fill=True)
+        # where the next top simplex's gather goes, in three parts: part p
+        # after level p - early (part 0 first when early = 1), the rest
+        # after the last level; measured best for each n
+        comptime early = 0 if n == 2 else 1
+        comptime if early == 1:
+            if t2 < self.num_top:
+                self._gather_part[n, E, 0](t2, nxt)
         comptime for m in range(n):
             comptime cnt = _chains(n, m)
             comptime pdim = n - m
@@ -1986,12 +2037,32 @@ struct _DualWalk(Copyable, Movable):
                 st.unsafe_store(VOL0 + m * L + 4 * g, vol)
                 st.unsafe_store(SGN0 + m * L + 4 * g, sgn)
                 var piece = sgn * vol
-                comptime if m >= 1:
-                    # (m + 1)!, a constant: the division by 2 becomes an
-                    # exact multiplication by 1/2
-                    comptime fact = Float64(_chains(m, m))
-                    piece = piece / V4(fact)
+                comptime if m == 1:
+                    # 2!: the division becomes an exact multiplication by
+                    # 1/2
+                    piece = piece / V4(2.0)
+                comptime if m == 2:
+                    # 3!: by multiplications, as the divider limits the
+                    # walk; exact unless some piece is out of _div6's
+                    # range, when they are divided again below
+                    fast &= vol.ge(V4(_DIV6_MIN)) & vol.le(V4(_DIV6_MAX))
+                    piece = _div6(piece)
+                comptime assert m < 3, "(m + 1)! for m < 3 only"
                 st.unsafe_store(PC0 + m * L + 4 * g, piece)
+            # gather the next top simplex between the levels
+            if t2 < self.num_top:
+                comptime for part in range(3):
+                    comptime if part == m + early or (
+                        m == n - 1 and part > m + early
+                    ):
+                        self._gather_part[n, E, part](t2, nxt)
+        comptime if n >= 3:
+            if not fast.reduce_and():
+                comptime for g in range((_chains(n, 2) + 3) // 4):
+                    comptime at = 2 * L + 4 * g
+                    var sgn = st.unsafe_load[width=4](SGN0 + at)
+                    var vol = st.unsafe_load[width=4](VOL0 + at)
+                    st.unsafe_store(PC0 + at, sgn * vol / V4(6.0))
         # add the pieces to the faces the block owns. A face's pieces are
         # summed in a register, in _walk's order (chain order), and stored
         # once, so every sum is _walk's, bit for bit, without a round trip
@@ -2177,6 +2248,33 @@ def _popcount(M: Int) -> Int:
     for j in range(64):
         c += (M >> j) & 1
     return c
+
+
+comptime _DIV6_MIN = bitcast[DType.float64](UInt64(23 << 52))
+"""2^-1000: `_div6` is exact for magnitudes from here to `_DIV6_MAX`."""
+comptime _DIV6_MAX = bitcast[DType.float64](UInt64(2023 << 52))
+"""2^1000."""
+
+
+@always_inline
+def _div6(x: SIMD[DType.float64, 4]) -> SIMD[DType.float64, 4]:
+    """`x / 6`, correctly rounded when every `|x|` lies in `[_DIV6_MIN,
+    _DIV6_MAX]`, by a multiplication and fused multiply-adds instead of
+    the divider.
+
+    With `z = RN(1/6) = (1/6)(1 - 2^-54)`, `q = RN(x z)` is within one ulp
+    of `x / 6`, so `r = x - 6 q` is exact, and `q + r z` (one rounding)
+    is within `2^-54` ulp of `x / 6`. Scaled so that the quotient's ulp
+    is 1, `x` is an even integer `N`, and a midpoint is `(2j + 1) / 2`, at
+    distance `|N - 3(2j + 1)| / 6 >= 1/6` from `N / 6`: so `q + r z`
+    rounds as `x / 6` does. Zeros (whose sign the sum would lose),
+    subnormals, infinities, and NaNs are outside the range.
+    """
+    comptime V = SIMD[DType.float64, 4]
+    comptime z = bitcast[DType.float64](UInt64(0x3FC5555555555555))
+    var q = x * z
+    var r = (-q).fma(V(6.0), x)
+    return r.fma(V(z), q)
 
 
 def _chains(n: Int, m: Int) -> Int:
