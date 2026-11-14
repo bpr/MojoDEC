@@ -848,3 +848,61 @@ ones, on 1 thread and on all cores.
 16 ms. About 6 ms of that is reading the keys, writing them back, and
 marking the runs, which a pass over the buckets does without sorting
 them.
+
+## Sorting elements out of order
+
+When a mesh's elements are not in lexicographic order, as in the
+shuffled meshes and in most mesh files, `require_distinct_simplices`
+sorts their rows with `lexsort_rows`, and the order becomes the top
+level's `_order` (see [Topology](#topology)). That was a serial counting
+sort by first vertex, then each bucket sorted by insertion in parallel,
+comparing rows by reading them from the array. On `tet_40_shuffled`
+with one thread, in ms: the count 1.0, the scatter 1.6, and the buckets
+16.7, as each comparison read two rows at random. Three changes, with
+the same order:
+
+- **The count and the scatter run in parallel**, as topology's do: each
+  chunk of rows counts only the buckets between its smallest and
+  largest first vertex, and a bucket takes each chunk's rows in turn,
+  so the order is the serial one. They take one chunk per physical
+  core: with a shuffled numbering every chunk's band is every vertex,
+  and 16 chunks' counters cost more than they saved on `tri_400`.
+- **Each row's other entries are packed into one integer key** when
+  they fit in 63 bits, and the scatter writes the key next to the row's
+  index. The buckets then sort (key, index) pairs that lie side by side,
+  and equal keys are equal rows. The scatter takes 2.8 ms instead of
+  1.6, and the buckets 5.2 instead of 16.7.
+- **The range of the entries** is found by the SIMD scan the element
+  copy already uses, in parallel, and the permutation is not filled
+  with the identity first, since the scatter writes all of it.
+
+`lexsort_rows` on the elements, with their rows sorted, best of 7, in
+ms:
+
+| Mesh | 1 thread | all cores |
+|---|---:|---:|
+| `tet_40_shuffled` | 21.4 → 10.4 | 8.5 → 4.4 |
+| `tri_400_shuffled` | 9.6 → 7.5 | 4.8 → 4.5 |
+
+Topology, best of 5 alternating rounds against the committed build
+(`2bcde4b`), in ms:
+
+| Mesh | 1 thread | all cores |
+|---|---:|---:|
+| `tet_40_shuffled` | 109.6 → 98.5 | 58.7 → 55.2 |
+| `tri_400_shuffled` | 52.1 → 48.3 | 35.4 → 34.6 |
+
+The meshes in grid order don't sort their elements, and didn't change
+beyond the noise. In the benchmark (5 alternating rounds), `build` on
+`tet_40_shuffled` read 271.5 → 272.1 ms on one thread and 124.6 →
+114.9 on all cores: on a shuffled mesh the geometry varies by more than
+the 10 ms saved. Every level's simplices, parities, `d`, boundary, and
+`_order` were checked against the committed build by their bits, on 14
+meshes, on 1 thread and on all cores.
+
+**What is left.** On `tri_400_shuffled` on all cores, the count and the
+sums of the counters take about 2 ms of the 4.5, most of it clearing
+and summing 8 chunks' counters for all 160,801 vertices. The buckets of
+`tet_40_shuffled` (5.2 ms on one thread) are sorted by insertion, whose
+branches mispredict on keys in random order; ranking pairs, with ties
+broken by position, would avoid that.

@@ -418,9 +418,10 @@ for buckets of 9 to 96 keys. The rank sort compares keys as doubles
 (key + 2^52 is a positive normal double's bit pattern, so keys must stay
 below 2^62), since AVX2 compares 64-bit integers on one port only. `require_distinct_simplices` skips its
 sort when the rows are already in strictly increasing order; otherwise
-`lexsort_rows` (a counting sort by the first column, then each run by
-insertion in parallel, by merging past 32 rows) also reports the first
-repeated row, and its order becomes the top level's `_order`. `tests/test_parallel.mojo` uses meshes past
+`lexsort_rows` (a counting sort by the first column, in parallel like
+topology's, which also packs each row's other entries into one key
+when they fit in 63 bits; then each run by insertion on those keys, in
+parallel, by merging past 32 rows) also reports the first repeated row, and its order becomes the top level's `_order`. `tests/test_parallel.mojo` uses meshes past
 every threshold, and compares each parallel path with the serial one
 exactly; the other tests' meshes run serially.
 

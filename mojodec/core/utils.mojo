@@ -408,27 +408,28 @@ def _lexsort_rows(a: IntArray, mut duplicate: Int) -> List[Int]:
     none, or -2 if it was not looked for (the merge sort's case)."""
     duplicate = -1
     var n = rows_of(a)
-    var perm = List[Int](capacity=n)
-    for i in range(n):
-        perm.append(i)
     if n < 2 or a.size == 0:
+        var perm = List[Int](capacity=n)
+        for i in range(n):
+            perm.append(i)
         return perm^
-    var ap = a.unsafe_ptr()
-    var lo = Int(ap[unsafe_offset=0])
-    var hi = lo
-    for i in range(1, a.size):
-        var x = Int(ap[unsafe_offset=i])
-        lo = min(lo, x)
-        hi = max(hi, x)
+    var lo = 0
+    var hi = 0
+    _scan_bounds[False](a, _no_copy(a), lo, hi)
     # hi - lo can overflow when lo < 0; lo + span cannot
     var span = 4 * n + 1024
     var narrow = hi - lo <= span if lo >= 0 else hi <= lo + span
     if narrow:
+        # the scatter writes every entry
+        var perm = List[Int](unsafe_uninit_length=n)
         duplicate = _bucket_sort_rows(a, perm, lo, hi - lo + 1)
-    else:
-        var scratch = List[Int](length=n, fill=0)
-        _merge_sort_rows(a, perm, scratch, 0, n)
-        duplicate = -2
+        return perm^
+    var perm = List[Int](capacity=n)
+    for i in range(n):
+        perm.append(i)
+    var scratch = List[Int](length=n, fill=0)
+    _merge_sort_rows(a, perm, scratch, 0, n)
+    duplicate = -2
     return perm^
 
 
@@ -629,7 +630,8 @@ def _copy_with_bounds(a: IntArray, mut lo: Int, mut hi: Int) raises -> IntArray:
         hi = max_entry(a)
         return a.copy()
     var out = IntArray(a.shape)
-    _scan_bounds[True](a, out, lo, hi)
+    var dst = out.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    _scan_bounds[True](a, dst, lo, hi)
     return out^
 
 
@@ -640,18 +642,32 @@ def _bounds(a: IntArray, mut lo: Int, mut hi: Int) raises:
         lo = min_entry(a)
         hi = max_entry(a)
         return
-    var unused = IntArray(Shape(0))
-    _scan_bounds[False](a, unused, lo, hi)
+    _scan_bounds[False](a, _no_copy(a), lo, hi)
+
+
+def _no_copy(
+    a: IntArray,
+) -> Pointer[Scalar[DType.int], MutUntrackedOrigin]:
+    """A pointer for `_scan_bounds[False]`'s `dst`, which it never writes."""
+    return (
+        a.unsafe_ptr()
+        .unsafe_mut_cast[True]()
+        .unsafe_origin_cast[MutUntrackedOrigin]()
+    )
 
 
 def _scan_bounds[
     copy: Bool
-](a: IntArray, mut out: IntArray, mut lo: Int, mut hi: Int):
-    """The range of the contiguous array `a`, also copied into `out` when
+](
+    a: IntArray,
+    dst: Pointer[Scalar[DType.int], MutUntrackedOrigin],
+    mut lo: Int,
+    mut hi: Int,
+):
+    """The range of the contiguous array `a`, also copied to `dst` when
     `copy` is set."""
     var n = a.size
     var src = a.unsafe_ptr()
-    var dst = out.unsafe_ptr()
     comptime SERIAL_BELOW = 1 << 18
     var chunks = num_chunks(n, SERIAL_BELOW)
     var los = List[Int](length=chunks, fill=Int.MAX)
@@ -1059,31 +1075,136 @@ def _bucket_sort_rows(
     bucket of equal first entries by the other columns (insertion sort, in
     parallel, up to `_BUCKET_INSERTION_TO` rows; merge sort beyond).
 
+    The counting sort runs in parallel by chunks of rows, each counting
+    only the band of buckets between its rows' smallest and largest first
+    entries; a bucket takes the rows of each chunk in turn, so the order
+    is the serial one. When the other columns fit in 63 bits, the scatter
+    also writes each row's other entries packed into one integer next to
+    it, and the buckets sort by those keys instead of reading the rows
+    again (`_row_tail_greater`).
+
     Returns the first position of the sorted order whose row equals the
     one before (equal rows share a bucket), or -1."""
     var n = rows_of(a)
     var c = cols_of(a)
     var ap = a.unsafe_ptr()
+    # the count and the scatter are limited by memory, not arithmetic
+    comptime ROWS_SERIAL_BELOW = 16384
+    var C = num_chunks(n, ROWS_SERIAL_BELOW, memory_bound=True)
+    var band_lo = List[Int](length=C, fill=0)
+    var band_hi = List[Int](length=C, fill=span)
+    var blp = band_lo.unsafe_ptr()
+    var bhp = band_hi.unsafe_ptr()
+
+    def bands(chunk: Int, r0: Int, r1: Int) {ap, blp, bhp, c, lo}:
+        var x = Int(ap[unsafe_offset=r0 * c])
+        var y = x
+        for r in range(r0 + 1, r1):
+            var v = Int(ap[unsafe_offset=r * c])
+            x = min(x, v)
+            y = max(y, v)
+        blp[unsafe_offset=chunk] = x - lo
+        bhp[unsafe_offset=chunk] = y - lo + 1
+
+    if C > 1:
+        parallel_ranges(n, ROWS_SERIAL_BELOW, bands, memory_bound=True)
+    # rows per (chunk, bucket in its band); chunk k's counter of bucket v
+    # is at band_base[k] + v
+    var band_base = List[Int](length=C, fill=0)
+    var total_band = 0
+    for k in range(C):
+        band_base[k] = total_band - band_lo[k]
+        total_band += band_hi[k] - band_lo[k]
+    var counts = List[Int](unsafe_uninit_length=total_band)
+    var cp = counts.unsafe_ptr()
+    var bbp = band_base.unsafe_ptr()
+
+    def count(chunk: Int, r0: Int, r1: Int) {ap, cp, blp, bhp, bbp, c, lo}:
+        var base = bbp[unsafe_offset=chunk]
+        for v in range(blp[unsafe_offset=chunk], bhp[unsafe_offset=chunk]):
+            cp[unsafe_offset=base + v] = 0
+        for r in range(r0, r1):
+            cp[unsafe_offset=base + Int(ap[unsafe_offset=r * c]) - lo] += 1
+
+    parallel_ranges(n, ROWS_SERIAL_BELOW, count, memory_bound=True)
+    # bucket v holds positions start[v]:start[v + 1]; chunk k writes its
+    # rows of it from start[v] + counts[band_base[k] + v] on
     var start = List[Int](length=span + 1, fill=0)
     var stp = start.unsafe_ptr()
-    for i in range(n):
-        stp[unsafe_offset=Int(ap[unsafe_offset=i * c]) - lo + 1] += 1
+
+    def totals(chunk: Int, v0: Int, v1: Int) {cp, stp, blp, bhp, bbp, C}:
+        for v in range(v0, v1):
+            var t = 0
+            for k in range(C):
+                if blp[unsafe_offset=k] <= v < bhp[unsafe_offset=k]:
+                    var at = bbp[unsafe_offset=k] + v
+                    var x = cp[unsafe_offset=at]
+                    cp[unsafe_offset=at] = t
+                    t += x
+            stp[unsafe_offset=v + 1] = t
+
+    parallel_ranges(span, 65536, totals)
     for v in range(span):
         stp[unsafe_offset=v + 1] += stp[unsafe_offset=v]
-    var at = start.copy()
-    var atp = at.unsafe_ptr()
+    var bits = 0
+    while (1 << bits) < span:
+        bits += 1
+    var packed = (c - 1) * bits <= 63
+    var keys = List[Int](unsafe_uninit_length=n if packed else 0)
+    var kp = keys.unsafe_ptr()
     var pp = perm.unsafe_ptr()
-    for i in range(n):
-        var k = Int(ap[unsafe_offset=i * c]) - lo
-        pp[unsafe_offset=atp[unsafe_offset=k]] = i
-        atp[unsafe_offset=k] += 1
-    _ = at^
+
+    def scatter(
+        chunk: Int, r0: Int, r1: Int
+    ) {ap, cp, stp, pp, kp, bbp, c, lo, bits, packed}:
+        var base = bbp[unsafe_offset=chunk]
+        for r in range(r0, r1):
+            var v = Int(ap[unsafe_offset=r * c]) - lo
+            var at = stp[unsafe_offset=v] + cp[unsafe_offset=base + v]
+            cp[unsafe_offset=base + v] += 1
+            pp[unsafe_offset=at] = r
+            if packed:
+                var key = 0
+                for j in range(1, c):
+                    key = (key << bits) | (
+                        Int(ap[unsafe_offset=r * c + j]) - lo
+                    )
+                kp[unsafe_offset=at] = key
+
+    parallel_ranges(n, ROWS_SERIAL_BELOW, scatter, memory_bound=True)
+    _ = counts^
+    _ = band_lo^
+    _ = band_hi^
+    _ = band_base^
     comptime SERIAL_BELOW = 16384
     var chunks = num_chunks(span, SERIAL_BELOW)
     var large = List[Bool](length=chunks, fill=False)
     var dups = List[Int](length=chunks, fill=-1)
     var lp = large.unsafe_ptr()
     var dp = dups.unsafe_ptr()
+
+    def by_keys(chunk: Int, v0: Int, v1: Int) {pp, kp, stp, lp, dp}:
+        for v in range(v0, v1):
+            var b0 = stp[unsafe_offset=v]
+            var b1 = stp[unsafe_offset=v + 1]
+            if b1 - b0 > _BUCKET_INSERTION_TO:
+                lp[unsafe_offset=chunk] = True
+                continue
+            for t in range(b0 + 1, b1):
+                var key = kp[unsafe_offset=t]
+                var row = pp[unsafe_offset=t]
+                var u = t - 1
+                while u >= b0 and kp[unsafe_offset=u] > key:
+                    kp[unsafe_offset=u + 1] = kp[unsafe_offset=u]
+                    pp[unsafe_offset=u + 1] = pp[unsafe_offset=u]
+                    u -= 1
+                kp[unsafe_offset=u + 1] = key
+                pp[unsafe_offset=u + 1] = row
+            if dp[unsafe_offset=chunk] < 0:
+                for t in range(b0 + 1, b1):
+                    if kp[unsafe_offset=t] == kp[unsafe_offset=t - 1]:
+                        dp[unsafe_offset=chunk] = t
+                        break
 
     def buckets(chunk: Int, v0: Int, v1: Int) {ap, pp, stp, lp, dp, c}:
         for v in range(v0, v1):
@@ -1109,7 +1230,11 @@ def _bucket_sort_rows(
                         dp[unsafe_offset=chunk] = t
                         break
 
-    parallel_ranges(span, SERIAL_BELOW, buckets)
+    if packed:
+        parallel_ranges(span, SERIAL_BELOW, by_keys)
+    else:
+        parallel_ranges(span, SERIAL_BELOW, buckets)
+    _ = keys^
     var duplicate = -1
     for k in range(chunks):
         if duplicate < 0:

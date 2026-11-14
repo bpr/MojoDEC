@@ -111,8 +111,12 @@ all cores.
     edges as 32-bit floats saved another 1.5 ms but was not kept.
   - **All cores:** the passes are limited by memory bandwidth. They
     write 229 MB of topology.
-  - **Elements out of order:** the counting sort by first vertex in
-    `lexsort_rows` is serial.
+  - **Elements out of order:** `lexsort_rows` takes 10.4 ms on
+    `tet_40_shuffled` on one thread, from 21.4, and 4.4 on all cores,
+    from 8.5 (see
+    [performance](guide/performance.md#sorting-elements-out-of-order)).
+    Its buckets still sort by insertion, which mispredicts on rows in
+    random order.
 - **Dual walk** (62 / 18, from 117 / 34; see
   [performance](guide/performance.md#the-dual-walks-gather-and-scatter)).
   On one thread, the square roots and divisions take about 26 ms and

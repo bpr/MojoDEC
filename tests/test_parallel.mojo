@@ -294,17 +294,24 @@ def test_parallel_ranges_covers_once() raises:
 
 
 def test_large_lexsort_rows() raises:
-    # past the 16384 first entries where the runs are sorted in parallel:
-    # the merge sort's order, with a run of 100 equal first entries (sorted
-    # by merging) and one pair of equal rows
+    # past the 16384 rows where the counting sort runs in parallel and the
+    # 16384 first entries where the runs are sorted in parallel: the merge
+    # sort's order, with a run of 100 equal first entries (sorted by
+    # merging) and one pair of equal rows in different chunks; 3 columns
+    # sort the runs by packed keys, 9 (8 x 16 bits) by comparing rows
+    _check_large_lexsort_rows(3)
+    _check_large_lexsort_rows(9)
+
+
+def _check_large_lexsort_rows(c: Int) raises:
     var n = 40_000
-    var a = int_array(n, 3)
+    var a = int_array(n, c)
     var state: UInt64 = 777
     for i in range(n):
-        for j in range(3):
+        for j in range(c):
             var x = Int((_lcg(state) + 1.0) * 30_000.0) % 60_000
             iset(a, i, j, 0 if j == 0 and i % 400 == 0 else x)
-    for j in range(3):
+    for j in range(c):
         iset(a, 30_000, j, iget(a, 1234, j))
     var expected = List[Int](length=n, fill=0)
     for i in range(n):
