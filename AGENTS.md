@@ -351,7 +351,14 @@ plan). Key design points that span several files:
   (`_Cursor.tokenized`; bulk `ints`/`floats`); any token the serial
   reader might read differently makes it None, and any error reruns the
   section serially, so results and messages are the serial reader's
-  (`test_parallel_parse_agrees` checks with the threshold at 0). VTK ASCII output raises on NaN
+  (`test_parallel_parse_agrees` checks with the threshold at 0).
+  `read_gmsh` drops format 2.2's repeated elements by `_unique_rows`:
+  rows into parts by their smallest vertex position, then a hash table
+  per part, threads balanced by rows (smallest entries skew low);
+  `_unique_rows_sorted` (by `lexsort_rows`) when rows do not pack into
+  63 bits. Grow lists per block with `_reserve_more` (doubling), never
+  `reserve(len + n)`, which grows to exactly that: 2.2 starts a block
+  whenever the physical group changes, possibly per element. VTK ASCII output raises on NaN
   and infinity, which VTK's text reader cannot parse.
   The Gmsh fixtures in `tests/meshes/gmsh/` are generated from the `.geo`
   files there: `pixi exec --spec gmsh gmsh -2 square.geo -format msh41

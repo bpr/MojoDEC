@@ -36,12 +36,14 @@ or the triangles are missing. Passing the expected `dim` turns that into an
 error instead of a mesh of line segments.
 """
 
+from std.memory import unsafe_memcpy
 from std.sys import stderr
 
 import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.mesh import SimplicialMesh
+from mojodec.core.parallel import num_chunks, parallel_ranges
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.subset import Subset
@@ -49,8 +51,8 @@ from mojodec.core.typed import PRIMAL, TypedComplex, TypedSubset
 from mojodec.core.utils import (
     IntArray,
     RealArray,
+    _lexsort_rows,
     cols_of,
-    compare_rows,
     int_array,
     lexsort_rows,
     real_array,
@@ -69,6 +71,10 @@ comptime _PARALLEL_BYTES = 1 << 18
 comptime _DENSE = 4
 """Node tags are looked up in a table when they span less than this many
 times their number."""
+comptime _PART_BITS = 9
+"""`_unique_rows` splits the rows into parts by their smallest vertex
+position, `2^_PART_BITS` positions per part, so that each part's rows fit
+in the L2 cache."""
 comptime _WARN_MIN_ELEMENTS = 50_000
 """`read_gmsh` checks the numbering of meshes with this many elements or
 more; smaller ones build in a few ms whatever their numbering."""
@@ -529,7 +535,7 @@ def read_gmsh(
     var ats = List[Int]()
     for ref b in raw.blocks:
         if b.dim == top:
-            ats.reserve(len(ats) + len(b.nodes))
+            _reserve_more(ats, len(b.nodes))
             for t in b.nodes:
                 var at = nodes.find(t)
                 if at < 0:
@@ -539,7 +545,7 @@ def read_gmsh(
                 ats.append(at)
     # without the repeats that format 2.2 writes for elements in several
     # physical groups (equal positions are equal tags)
-    var rows = _unique_rows(ats, w)
+    var rows = _unique_rows(ats, w, len(nodes.tags))
     # number the nodes of the top elements in tag order
     for r in rows:
         for j in range(w):
@@ -588,7 +594,7 @@ def read_gmsh(
             var cells = List[Int]()
             for ref b in raw.blocks:
                 if b.dim == d and p in b.physical:
-                    cells.reserve(len(cells) + len(b.nodes))
+                    _reserve_more(cells, len(b.nodes))
                     for t in b.nodes:
                         var at = nodes.find(t)
                         var v = nodes.vertex.unsafe_get(at) if at >= 0 else -1
@@ -636,30 +642,225 @@ def _numbering_warning(
     )
 
 
-def _unique_rows(nodes: List[Int], w: Int) raises -> List[Int]:
-    """Indices of the rows of `nodes` (width `w`) to keep: the first of
-    each set of rows with the same vertices, in file order."""
+def _unique_rows(nodes: List[Int], w: Int, span: Int) raises -> List[Int]:
+    """Indices of the rows of `nodes` (width `w`, entries in `[0, span)`)
+    to keep: the first of each set of rows with the same vertices, in file
+    order.
+
+    Equal rows have the same smallest entry and the same others. Each row
+    is written once, as its other entries sorted and packed into one
+    integer, into the part of its smallest entry (`_PART_BITS`); then each
+    part, small enough for the L2 cache, is searched for equal rows with a
+    hash table, in parallel over the parts. Sorting the rows instead
+    (`_unique_rows_sorted`) took 3-4 times as long: Gmsh scatters vertex
+    numbers, so each thread of its counting sort touches every bucket. Only
+    format 2.2 repeats elements (those in several physical groups)."""
+    var n = len(nodes) // w
+    var bits = 0
+    while (1 << bits) < span:
+        bits += 1
+    if w > 4 or (w - 1) * bits > 63:
+        return _unique_rows_sorted(nodes, w)
+    comptime B = _PART_BITS
+    comptime W = 1 << B
+    var P = ((span - 1) >> B) + 1 if span > 0 else 1
+    comptime SERIAL_BELOW = 50_000
+    var C = num_chunks(n, SERIAL_BELOW)
+    # rows per (chunk, part), then where each chunk writes its rows of a
+    # part: parts in order, a part's rows in file order
+    var counts = List[Int](length=C * P, fill=0)
+    var np = nodes.unsafe_ptr()
+    var cp = counts.unsafe_ptr()
+
+    def count(chunk: Int, lo: Int, hi: Int) {np, cp, w, P}:
+        var base = chunk * P
+        for r in range(lo, hi):
+            var v = np[unsafe_offset=r * w]
+            for j in range(1, w):
+                v = min(v, np[unsafe_offset=r * w + j])
+            cp[unsafe_offset=base + (v >> B)] += 1
+
+    parallel_ranges(n, SERIAL_BELOW, count)
+    var part = List[Int](length=P + 1, fill=0)
+    var total = 0
+    for p in range(P):
+        part[p] = total
+        for k in range(C):
+            var x = counts[k * P + p]
+            counts[k * P + p] = total
+            total += x
+    part[P] = total
+    # per row: its other entries packed, and its index and smallest entry
+    # within the part
+    var tails = List[Int](unsafe_uninit_length=n)
+    var ids = List[Int](unsafe_uninit_length=n)
+    var tp = tails.unsafe_ptr()
+    var ip = ids.unsafe_ptr()
+
+    def scatter(chunk: Int, lo: Int, hi: Int) {np, cp, tp, ip, w, bits, P}:
+        var base = chunk * P
+        for r in range(lo, hi):
+            # a sorting network on four entries (the missing ones last)
+            var x0 = np[unsafe_offset=r * w]
+            var x1 = np[unsafe_offset=r * w + 1] if w > 1 else Int.MAX
+            var x2 = np[unsafe_offset=r * w + 2] if w > 2 else Int.MAX
+            var x3 = np[unsafe_offset=r * w + 3] if w > 3 else Int.MAX
+            _order(x0, x1)
+            _order(x2, x3)
+            _order(x0, x2)
+            _order(x1, x3)
+            _order(x1, x2)
+            var tail = 0
+            if w > 1:
+                tail = x1
+            if w > 2:
+                tail = (tail << bits) | x2
+            if w > 3:
+                tail = (tail << bits) | x3
+            var at = cp[unsafe_offset=base + (x0 >> B)]
+            cp[unsafe_offset=base + (x0 >> B)] = at + 1
+            tp[unsafe_offset=at] = tail
+            ip[unsafe_offset=at] = (r << B) | (x0 & (W - 1))
+
+    parallel_ranges(n, SERIAL_BELOW, scatter)
+    _ = counts^
+    # threads take runs of parts with about equal numbers of rows: the
+    # smallest of a row's scattered entries is usually small, so the first
+    # parts hold several times the average
+    var bound = List[Int](length=C + 1, fill=P)
+    var p = 0
+    for k in range(C):
+        while part[p] < k * n // C:
+            p += 1
+        bound[k] = p
+    # in each part, a hash table of the distinct rows so far, chained; a
+    # row equal to one on its chain is dropped
+    var keep = List[Bool](length=n, fill=True)
+    var dropped = List[Int](length=C, fill=0)
+    var pp = part.unsafe_ptr()
+    var bp = bound.unsafe_ptr()
+    var ep = keep.unsafe_ptr()
+    var dp = dropped.unsafe_ptr()
+
+    def search(chunk: Int, k0: Int, k1: Int) {tp, ip, pp, bp, ep, dp}:
+        var head = List[Int32]()
+        var next = List[Int32]()
+        var drops = 0
+        for p in range(bp[unsafe_offset=k0], bp[unsafe_offset=k1]):
+            var b0 = pp[unsafe_offset=p]
+            var b1 = pp[unsafe_offset=p + 1]
+            var m = b1 - b0
+            if m > len(next):
+                next.resize(m, 0)
+            # at least twice as many slots as rows
+            var shift = 60
+            while (1 << (64 - shift)) < 2 * m:
+                shift -= 1
+            var slots = 1 << (64 - shift)
+            if slots > len(head):
+                head.resize(slots, 0)
+            for i in range(slots):
+                head.unsafe_set(i, -1)
+            for e in range(b0, b1):
+                var id = ip[unsafe_offset=e]
+                var tail = tp[unsafe_offset=e]
+                var h = (
+                    UInt64(tail) * 0x9E3779B97F4A7C15 + UInt64(id & (W - 1))
+                ) * 0xBF58476D1CE4E5B9
+                var slot = Int(h >> UInt64(shift))
+                var f = Int(head.unsafe_get(slot))
+                var same = False
+                while f >= 0:
+                    if (
+                        tp[unsafe_offset=b0 + f] == tail
+                        and (ip[unsafe_offset=b0 + f] ^ id) & (W - 1) == 0
+                    ):
+                        same = True
+                        break
+                    f = Int(next.unsafe_get(f))
+                if same:
+                    ep[unsafe_offset=id >> B] = False
+                    drops += 1
+                else:
+                    next.unsafe_set(e - b0, head.unsafe_get(slot))
+                    head.unsafe_set(slot, Int32(e - b0))
+        dp[unsafe_offset=chunk] = drops
+
+    parallel_ranges(C, 1, search)
+    var drops = 0
+    for k in range(C):
+        drops += dropped[k]
+    var out = List[Int](capacity=n - drops)
+    for r in range(n):
+        if drops == 0 or keep.unsafe_get(r):
+            out.append(r)
+    return out^
+
+
+@always_inline
+def _order(mut x: Int, mut y: Int):
+    """Order `x <= y`, by min and max."""
+    var lo = min(x, y)
+    y = max(x, y)
+    x = lo
+
+
+def _unique_rows_sorted(nodes: List[Int], w: Int) raises -> List[Int]:
+    """`_unique_rows` by sorting: the rows, each sorted, are sorted
+    lexicographically, so that equal ones are neighbors; when the sort
+    found none, every row is kept without looking at the order."""
     var n = len(nodes) // w
     var keys = int_array(n, w)
-    for i in range(len(nodes)):
-        keys.unsafe_set(i, Scalar[DType.int](nodes[i]))
+    var np = nodes.unsafe_ptr().unsafe_bitcast[Scalar[DType.int]]()
+    var kp = keys.unsafe_ptr()
+    comptime SERIAL_BELOW = 50_000
+
+    def copy(chunk: Int, lo: Int, hi: Int) {np, kp, w}:
+        unsafe_memcpy(
+            dest=kp.unsafe_offset(lo * w),
+            src=np.unsafe_offset(lo * w),
+            count=(hi - lo) * w,
+        )
+
+    parallel_ranges(n, SERIAL_BELOW, copy, memory_bound=True)
     sort_each_row(keys)
-    var perm = lexsort_rows(keys)
-    var keep = List[Bool](length=n, fill=True)
-    var i = 0
-    while i < n:
-        var j = i + 1
-        var first = perm[i]
-        while j < n and compare_rows(keys, perm[i], keys, perm[j]) == 0:
-            first = min(first, perm[j])
-            j += 1
-        for r in range(i, j):
-            if perm[r] != first:
-                keep[perm[r]] = False
-        i = j
+    var duplicate = 0
+    var order = _lexsort_rows(keys, duplicate)
     var out = List[Int](capacity=n)
+    if duplicate == -1:
+        for r in range(n):
+            out.append(r)
+        return out^
+    # each run of equal rows in sorted order keeps its first, which is its
+    # first in file order (the sort is stable); a chunk takes the runs that
+    # start in it
+    var keep = List[Bool](length=n, fill=True)
+    var op = order.unsafe_ptr()
+    var ep = keep.unsafe_ptr()
+
+    @always_inline
+    def same(s: Int, t: Int) {kp, op, w} -> Bool:
+        var a = op[unsafe_offset=s] * w
+        var b = op[unsafe_offset=t] * w
+        for j in range(w):
+            if kp[unsafe_offset=a + j] != kp[unsafe_offset=b + j]:
+                return False
+        return True
+
+    def runs(chunk: Int, lo: Int, hi: Int) {op, ep, n, same}:
+        var i = lo
+        while i > 0 and i < hi and same(i - 1, i):
+            i += 1
+        while i < hi:
+            var j = i + 1
+            while j < n and same(i, j):
+                ep[unsafe_offset=op[unsafe_offset=j]] = False
+                j += 1
+            i = j
+
+    parallel_ranges(n, SERIAL_BELOW, runs)
     for r in range(n):
-        if keep[r]:
+        if keep.unsafe_get(r):
             out.append(r)
     return out^
 
@@ -935,7 +1136,7 @@ def _read_nodes_v4(mut cur: _Cursor, mut raw: _Raw) raises:
                 cur.r.require_items(n, 24)
                 var xyz = nm.zeros[DType.float64](Shape(3 * n))
                 cur.r.binary_into(xyz, 0, 3 * n)
-                raw.coords.reserve(len(raw.coords) + 3 * n)
+                _reserve_more(raw.coords, 3 * n)
                 for i in range(3 * n):
                     raw.coords.append(xyz.unsafe_get(i))
                 continue
@@ -1098,15 +1299,23 @@ def _elements_v2_from_tokens(mut cur: _Cursor, mut raw: _Raw, n: Int) raises:
             count += 1
         var b = _block_v2(raw, type, phys)
         ref nodes = raw.blocks[b].nodes
-        var size = len(nodes) + count * nn
-        if size > nodes.capacity():
-            # doubling, so that alternating runs are not quadratic
-            nodes.reserve(max(size, 2 * nodes.capacity()))
+        _reserve_more(nodes, count * nn)
         for r in range(count):
             var at = first + r * w + 3 + tags
             for j in range(nn):
                 nodes.append(Int(Int64(vp[unsafe_offset=at + j])))
     cur.tokens.next = t
+
+
+def _reserve_more[T: Copyable](mut list: List[T], extra: Int):
+    """Make room for `extra` more items, at least doubling the capacity
+    when it grows. `reserve(len + extra)` grows to exactly that, so calling
+    it per block copied the list per block: quadratic when format 2.2
+    alternates physical groups (an element in two is written twice in a
+    row, so each element starts a block), 335 s for a 438k-element file."""
+    var size = len(list) + extra
+    if size > list.capacity():
+        list.reserve(max(size, 2 * list.capacity()))
 
 
 def _block_v2(mut raw: _Raw, type: Int, phys: Int) raises -> Int:

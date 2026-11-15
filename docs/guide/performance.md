@@ -1129,8 +1129,70 @@ do 42 versions of the square and both boxes rewritten with CRLF, tabs,
 `-0`, exponents, 17 significant digits, and malformed numbers (giving
 the committed build's error messages).
 
-**What is left.** In the 480k-element square, ASCII, on all cores: the
-duplicate check 15–20 ms (a lexicographic sort of the rows, needed only
-for format 2.2's repeats), parsing 19, the numbering warning's measure
-about 9, and numbering the vertices 9. Sparse tags still take about 170
+### Finding repeated elements
+
+Format 2.2 writes an element once per physical group it belongs to, and
+`read_gmsh` keeps the first. Finding repeats took 15–20 ms of the
+square's 53 on all cores, though none of the 36 files has any: the
+rows, each sorted, were sorted lexicographically by `lexsort_rows` (8
+ms) and then scanned serially for equal neighbors (5–9 ms, reading the
+rows in sorted order, scattered in memory).
+
+- **Parts by smallest vertex.** Equal rows have the same smallest entry
+  (a position among the sorted node tags) and the same others. Each row
+  is written once, as its other entries sorted and packed into one
+  integer, into the part of its smallest entry, 512 positions per part;
+  each part (a few thousand rows, in L2) is then searched with a hash
+  table, chained, in parallel over the parts. Rows that do not pack
+  into 63 bits (tetrahedra with more than 2^21 nodes) are still sorted;
+  the scan for equal neighbors then runs only when the sort found some,
+  and in parallel.
+- **Why the sort was slow.** Gmsh scatters vertex numbers, so every
+  thread of `lexsort_rows`'s counting sort spans nearly all 240k
+  buckets: counting took 2 ms and scattering 3.5 on all cores, hardly
+  better than one thread.
+- **Balance.** The smallest of a row's scattered entries is usually
+  small (for four uniform entries the density is 4(1 - x)^3), so the
+  first parts hold several times the average. Split by parts, one
+  thread got about a quarter of a tetrahedral mesh's rows, and its
+  chains (keyed by the smallest entry) grew long: 6.5 ms. The threads
+  now take runs of parts with equal numbers of rows, and the table is
+  keyed by a hash of the whole row: the box's check went from 8.7 ms to
+  3.1.
+
+The check takes 2.7 ms on the square (7 on one thread) and 3.1 on the
+4.1 box, from 15.7 and 18.8. `read_gmsh`, as above (against `5986f60`,
+the last of three rounds), in ms:
+
+| File | 1 thread | all cores |
+|---|---:|---:|
+| square, ASCII 4.1 | 96 → 81 | 53 → 42 |
+| square, binary 4.1 | 50.5 → 37.5 | 44 → 29 |
+| plate, ASCII 4.1 | 47 → 40 | 28 → 18.5 |
+| box, ASCII 4.1 | 81 → 59 | 48 → 29 |
+| box, binary 4.1 | 53 → 28.5 | 45 → 27 |
+| box, ASCII 2.2 | 98 → 75 | 55.5 → 39.5 |
+| inclusions, ASCII 4.1 | 62 → 47 | 38 → 25.5 |
+| box, ASCII 2.2, sparse tags | 262 → 240 | 219 → 197 |
+
+**Alternating groups were quadratic.** Format 2.2 starts a block of
+elements whenever the type or physical group changes, so a file whose
+elements alternate between groups (an element in two groups written
+twice in a row) has a block per element. `read_gmsh` reserved room per
+block with `reserve(len + n)`, which grows a list to exactly that size
+and so copied it per block: 335 s for the 2.2 box with half its
+elements repeated in alternation. Lists now grow by doubling
+(`_reserve_more`): 155 ms.
+
+Results were checked as in the previous section on 82 files: those 78
+and four versions of the 2.2 box whose elements repeat in other groups
+(in alternation, at the end, all of them, one in 1000), with their
+nodes rotated. A test compares the search with a dictionary of sorted
+rows on random rows with about a third repeated: rows of 1 to 4
+entries, spans up to 2^22 (past the packing), fans with one shared vertex, and
+120,000 rows (in parallel).
+
+**What is left.** In the 480k-element square, ASCII, on all cores:
+parsing 19 ms, the numbering warning's measure about 9, numbering the
+vertices 9, and the duplicate check 3. Sparse tags still take about 170
 ms of bisection.

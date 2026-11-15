@@ -20,7 +20,13 @@ from mojodec import (
 from mojodec.core.utils import cols_of, fget, iget, row_list, rows_of
 from std.memory import bitcast
 
-from mojodec.routines.io.gmsh import _Raw, _numbering_warning, _parse
+from mojodec.routines.io.gmsh import (
+    _Raw,
+    _numbering_warning,
+    _parse,
+    _unique_rows,
+    _unique_rows_sorted,
+)
 
 # Fixtures: tests/meshes/gmsh/*.geo, meshed by Gmsh 4.15 in each format.
 comptime DIR = "tests/meshes/gmsh/"
@@ -337,6 +343,89 @@ def test_large_node_tags() raises:
     assert_equal(len(m.node_tags), 3)
     assert_equal(m.node_tags[0], 100000000000000)
     assert_equal(fget(m.vertices, 2, 1), 1.0)
+
+
+def _random_rows(
+    n: Int, w: Int, span: Int, fan: Bool, mut seed: UInt64
+) -> List[Int]:
+    """`n` rows of `w` entries in `[0, span)`, about a third of them an
+    earlier row with its entries rotated; with `fan`, every row's first
+    entry is 0."""
+    var rows = List[Int]()
+
+    @always_inline
+    def next(mut seed: UInt64, below: Int) -> Int:
+        seed = seed * 6364136223846793005 + 1442695040888963407
+        return Int((seed >> 33) % UInt64(below))
+
+    for r in range(n):
+        if r > 0 and next(seed, 3) == 0:
+            var s = next(seed, r)
+            var k = next(seed, w)
+            for j in range(w):
+                rows.append(rows[s * w + (j + k) % w])
+        else:
+            for j in range(w):
+                rows.append(0 if fan and j == 0 else next(seed, span))
+    return rows^
+
+
+def _unique_reference(rows: List[Int], w: Int) -> List[Int]:
+    """The first of each set of rows with the same entries, by a
+    dictionary of the sorted rows."""
+    var seen = Dict[String, Bool]()
+    var out = List[Int]()
+    for r in range(len(rows) // w):
+        var row = List[Int]()
+        for j in range(w):
+            row.append(rows[r * w + j])
+        sort(row)
+        var key = String()
+        for x in row:
+            key += String(x, ",")
+        if key not in seen:
+            seen[key] = True
+            out.append(r)
+    return out^
+
+
+def test_unique_rows() raises:
+    # rows equal up to order are found by parts of the smallest entry
+    # (spans above 512 have several), in parallel above 50,000 rows;
+    # fans put every row in one part, and four entries of 22 bits do not
+    # pack into 63 (so are sorted)
+    var seed: UInt64 = 1
+    var spans: List[Int] = [1, 7, 600, 100_000, 1 << 22]
+    for w in range(1, 5):
+        for span in spans:
+            for n in [0, 1, 50, 2000, 120_000]:
+                for fan in [False, True]:
+                    if n == 120_000 and (w < 3 or span < 600):
+                        continue
+                    var rows = _random_rows(n, w, span, fan, seed)
+                    var want = _unique_reference(rows, w)
+                    var what = String(w, " ", span, " ", n, " ", fan)
+                    assert_true(n < 50 or len(want) < n * 9 // 10, what)
+                    assert_true(_unique_rows(rows, w, span) == want, what)
+                    assert_true(_unique_rows_sorted(rows, w) == want, what)
+
+
+def test_repeated_elements() raises:
+    # format 2.2 writes an element once per physical group: the first is
+    # kept, and each group has its own copy
+    _write(
+        "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Nodes\n4\n1 0 0 0\n"
+        "2 1 0 0\n3 0 1 0\n4 1 1 0\n$EndNodes\n$Elements\n4\n"
+        "1 2 2 7 1 1 2 3\n2 2 2 7 1 2 4 3\n3 2 2 8 1 3 1 2\n"
+        "4 1 2 9 1 1 2\n$EndElements\n"
+    )
+    var m = read_gmsh(TMP)
+    assert_equal(rows_of(m.elements), 2)
+    assert_true(row_list(m.elements, 0) == [0, 1, 2])
+    assert_true(row_list(m.elements, 1) == [1, 3, 2])
+    assert_equal(len(m.groups), 3)
+    assert_equal(rows_of(m.groups[1].cells), 2)
+    assert_true(row_list(m.groups[2].cells, 0) == [2, 0, 1])
 
 
 def _digest(raw: _Raw) -> List[Int]:
