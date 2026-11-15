@@ -335,7 +335,7 @@ plan). Key design points that span several files:
   `require_items(count, size)` rather than `require(count * size)`, which
   can overflow. Never index a table by a number read from a file unless
   the table is bounded by the file's size (Gmsh node tags index a table
-  only when they span less than 4 times their number, and are bisected
+  only when they span less than 4 times their number, and are hashed
   otherwise), and bound sizes the file cannot vouch for (`read_sparse`'s
   `max_dim`). `ByteReader` reads the file with its size given (8x faster
   than reading to the end) and parses numbers in one pass, decimals by

@@ -36,6 +36,7 @@ or the triangles are missing. Passing the expected `dim` turns that into an
 error instead of a mesh of line segments.
 """
 
+from std.bit import pop_count
 from std.memory import unsafe_memcpy
 from std.sys import stderr
 
@@ -528,55 +529,162 @@ def read_gmsh(
             )
         )
     var w = top + 1
-    # each node of the top elements, as its position among the sorted
-    # tags (a repeated tag: its first); tags can be large and sparse, so
-    # they are looked up, not used as indices
     var nodes = _TagIndex(raw.node_tags)
-    var ats = List[Int]()
-    for ref b in raw.blocks:
-        if b.dim == top:
-            _reserve_more(ats, len(b.nodes))
-            for t in b.nodes:
-                var at = nodes.find(t)
-                if at < 0:
-                    raise Error(
-                        String("read_gmsh: element uses unknown node ", t)
-                    )
-                ats.append(at)
+    var span = nodes.span
+    # the top blocks, and where each starts among their nodes
+    var tops = List[Int]()
+    var starts = List[Int]()
+    var N = 0
+    for k in range(len(raw.blocks)):
+        if raw.blocks[k].dim == top:
+            tops.append(k)
+            starts.append(N)
+            N += len(raw.blocks[k].nodes)
+    starts.append(N)
+    # each node of the top elements as its position; per chunk, a bitmap
+    # of the positions it uses and its first unknown tag
+    comptime SERIAL_BELOW = 50_000
+    var C = num_chunks(N, SERIAL_BELOW)
+    var words = (span + 63) // 64
+    var stride = words + 16  # no two chunks write one cache line
+    var marks = List[UInt64](length=C * stride, fill=0)
+    var bad = List[Int](length=C, fill=-1)
+    var ats = List[Int](unsafe_uninit_length=N)
+    var bp = raw.blocks.unsafe_ptr()
+    var kp = tops.unsafe_ptr()
+    var sp = starts.unsafe_ptr()
+    var ap = ats.unsafe_ptr()
+    var mp = marks.unsafe_ptr()
+    var xp = bad.unsafe_ptr()
+    var ip = Pointer(to=nodes)
+    var T = len(tops)
+
+    def lookup(
+        chunk: Int, lo: Int, hi: Int
+    ) {bp, kp, sp, ap, mp, xp, ip, T, stride}:
+        # the top block holding entry lo: the last one starting at or
+        # before it
+        var a = 0
+        var b = T
+        while b - a > 1:
+            var mid = (a + b) // 2
+            if sp[unsafe_offset=mid] <= lo:
+                a = mid
+            else:
+                b = mid
+        var base = chunk * stride
+        var i = lo
+        while i < hi:
+            var off = sp[unsafe_offset=a]
+            var end = min(hi, sp[unsafe_offset=a + 1])
+            var tp = bp[unsafe_offset=kp[unsafe_offset=a]].nodes.unsafe_ptr()
+            for g in range(i, end):
+                var p = ip[].find(tp[unsafe_offset=g - off])
+                if p < 0:
+                    xp[unsafe_offset=chunk] = g
+                    return
+                ap[unsafe_offset=g] = p
+                mp[unsafe_offset=base + (p >> 6)] |= UInt64(1) << UInt64(p & 63)
+            i = end
+            a += 1
+
+    parallel_ranges(N, SERIAL_BELOW, lookup)
+    for k in range(C):
+        var g = bad[k]
+        if g >= 0:
+            var a = 0
+            while starts[a + 1] <= g:
+                a += 1
+            var t = raw.blocks[tops[a]].nodes[g - starts[a]]
+            raise Error(String("read_gmsh: element uses unknown node ", t))
+    _ = tops^
+    _ = starts^
     # without the repeats that format 2.2 writes for elements in several
     # physical groups (equal positions are equal tags)
-    var rows = _unique_rows(ats, w, len(nodes.tags))
-    # number the nodes of the top elements in tag order
-    for r in rows:
-        for j in range(w):
-            nodes.vertex.unsafe_set(ats.unsafe_get(r * w + j), 0)
-    var node_tags = List[Int]()
-    var slots = List[Int]()
-    for at in range(len(nodes.tags)):
-        if nodes.vertex.unsafe_get(at) == 0:
-            nodes.vertex.unsafe_set(at, len(node_tags))
-            node_tags.append(nodes.tags.unsafe_get(at))
-            slots.append(nodes.slot.unsafe_get(at))
-    var elements = int_array(len(rows), w)
-    for i in range(len(rows)):
-        var r = rows.unsafe_get(i)
-        for j in range(w):
-            var at = ats.unsafe_get(r * w + j)
-            elements.unsafe_set(
-                i * w + j, Scalar[DType.int](nodes.vertex.unsafe_get(at))
-            )
+    var rows = _unique_rows(ats, w, span)
+    # the positions used (the repeats use the same ones), and how many
+    # come before each word of the bitmap
+    var used = List[UInt64](length=words, fill=0)
+    var rank = List[Int](length=words, fill=0)
+    var nv = 0
+    for wd in range(words):
+        var bits = UInt64(0)
+        for k in range(C):
+            bits |= marks.unsafe_get(k * stride + wd)
+        used.unsafe_set(wd, bits)
+        rank.unsafe_set(wd, nv)
+        nv += Int(pop_count(bits))
+    _ = marks^
+    # number them in tag order
+    var vertex = List[Int](unsafe_uninit_length=span)
+    var node_tags = List[Int](unsafe_uninit_length=nv)
+    var slots = List[Int](unsafe_uninit_length=nv)
+    var up = used.unsafe_ptr()
+    var rp = rank.unsafe_ptr()
+    var vp = vertex.unsafe_ptr()
+    var np = node_tags.unsafe_ptr()
+    var lp = slots.unsafe_ptr()
+
+    def number(chunk: Int, lo: Int, hi: Int) {up, rp, vp, np, lp, ip, span}:
+        for wd in range(lo, hi):
+            var v = rp[unsafe_offset=wd]
+            var bits = up[unsafe_offset=wd]
+            for p in range(64 * wd, min(64 * wd + 64, span)):
+                if (bits >> UInt64(p & 63)) & 1:
+                    vp[unsafe_offset=p] = v
+                    np[unsafe_offset=v] = ip[].tag(p)
+                    lp[unsafe_offset=v] = ip[].first.unsafe_get(p)
+                    v += 1
+                else:
+                    vp[unsafe_offset=p] = -1
+
+    parallel_ranges(words, SERIAL_BELOW // 64, number)
+    _ = used^
+    _ = rank^
+    var ne = len(rows)
+    var elements = int_array(ne, w)
+    var ep = elements.unsafe_ptr()
+    var op = rows.unsafe_ptr()
+
+    def fill(chunk: Int, lo: Int, hi: Int) {ep, op, ap, vp, w}:
+        for i in range(lo, hi):
+            var r = op[unsafe_offset=i]
+            for j in range(w):
+                ep[unsafe_offset=i * w + j] = Scalar[DType.int](
+                    vp[unsafe_offset=ap[unsafe_offset=r * w + j]]
+                )
+
+    parallel_ranges(ne, SERIAL_BELOW, fill)
+    _ = rows^
+    _ = ats^
     # coordinates, from the first node with each tag
+    var cp = raw.coords.unsafe_ptr()
+    var lifted = List[Bool](length=num_chunks(nv, SERIAL_BELOW), fill=False)
+    var fp = lifted.unsafe_ptr()
+
+    def any_z(chunk: Int, lo: Int, hi: Int) {cp, lp, fp}:
+        for i in range(lo, hi):
+            if cp[unsafe_offset=3 * lp[unsafe_offset=i] + 2] != 0:
+                fp[unsafe_offset=chunk] = True
+                return
+
+    parallel_ranges(nv, SERIAL_BELOW, any_z)
     var flat = True
-    for at in slots:
-        if raw.coords.unsafe_get(3 * at + 2) != 0:
+    for z in lifted:
+        if z:
             flat = False
-            break
     var e = 2 if drop_z and top <= 2 and flat else 3
-    var vertices = real_array(len(node_tags), e)
-    for i in range(len(node_tags)):
-        var at = 3 * slots.unsafe_get(i)
-        for c in range(e):
-            vertices.unsafe_set(i * e + c, raw.coords.unsafe_get(at + c))
+    var vertices = real_array(nv, e)
+    var cv = vertices.unsafe_ptr()
+
+    def copy(chunk: Int, lo: Int, hi: Int) {cp, lp, cv, e}:
+        for i in range(lo, hi):
+            var at = 3 * lp[unsafe_offset=i]
+            for c in range(e):
+                cv[unsafe_offset=i * e + c] = cp[unsafe_offset=at + c]
+
+    parallel_ranges(nv, SERIAL_BELOW, copy)
+    _ = slots^
     # physical groups, ordered by dimension and tag
     var groups = List[GmshGroup]()
     for d in range(top + 1):
@@ -597,7 +705,7 @@ def read_gmsh(
                     _reserve_more(cells, len(b.nodes))
                     for t in b.nodes:
                         var at = nodes.find(t)
-                        var v = nodes.vertex.unsafe_get(at) if at >= 0 else -1
+                        var v = vertex.unsafe_get(at) if at >= 0 else -1
                         if v < 0:
                             raise Error(
                                 String(
@@ -616,7 +724,7 @@ def read_gmsh(
                 array.unsafe_set(i, Scalar[DType.int](cells.unsafe_get(i)))
             groups.append(GmshGroup(raw.name_of(d, p), d, p, array^))
     if warn:
-        var message = _numbering_warning(path, elements, len(node_tags))
+        var message = _numbering_warning(path, elements, nv)
         if message:
             print(message, file=stderr)
     return GmshMesh(vertices^, elements^, node_tags^, groups^)
@@ -898,62 +1006,107 @@ struct _Name(Copyable, Movable):
 
 
 struct _TagIndex(Movable):
-    """The node tags of a file in increasing order, looked up in a table
-    when they are dense (Gmsh numbers nodes 1 to n) and by bisection
-    otherwise."""
+    """Each node tag of a file as a position in `[0, span)`, increasing with
+    the tag. Dense tags (Gmsh numbers nodes 1 to n) are their own
+    positions, less the smallest; others are numbered in sorted order and
+    looked up in a hash table (bisection took 120 ns a lookup, 160 ms for
+    a 438k-tetrahedron file)."""
 
-    var tags: List[Int]
-    """The tags, sorted (stably, so a repeated tag finds its first node)."""
-    var slot: List[Int]
-    """The position of each tag's node in the file."""
-    var vertex: List[Int]
-    """Per tag: its vertex number, 0 while marked used, or -1."""
+    var dense: Bool
+    """Whether the tags span less than `_DENSE` times their number, so
+    that a table of the span is bounded by the file's size."""
     var lo: Int
     """The smallest tag."""
-    var table: List[Int]
-    """`table[t - lo]`: the first position of tag `t`, or -1; empty when
-    the tags span more than `_DENSE` times their number, so its size is
-    bounded by the file's."""
+    var span: Int
+    """The number of positions."""
+    var first: List[Int]
+    """Per position: the index in the file of the first node with its
+    tag, or -1 (a gap in dense tags)."""
+    var tags: List[Int]
+    """Sparse tags: the tag at each position (the distinct tags, sorted);
+    empty when dense."""
+    var hash: List[Int]
+    """Sparse tags: open addressing with linear probing, a (tag,
+    position) pair per slot, tag -1 when empty; at least twice as many
+    slots as tags."""
+    var shift: Int
+    """Sparse tags: a tag's first slot is the top `64 - shift` bits of
+    its product with the golden ratio constant."""
 
     def __init__(out self, file_tags: List[Int]) raises:
         var n = len(file_tags)
-        var column = int_array(n, 1)
+        self.lo = Int.MAX if n > 0 else 0
+        var hi = -1
         for i in range(n):
             var t = file_tags.unsafe_get(i)
             if t < 0:
                 raise Error(String("read_gmsh: negative node tag ", t))
-            column.unsafe_set(i, Scalar[DType.int](t))
-        self.slot = lexsort_rows(column)
+            self.lo = min(self.lo, t)
+            hi = max(hi, t)
+        self.dense = hi - self.lo < _DENSE * n
+        self.tags = List[Int]()
+        self.hash = List[Int]()
+        self.shift = 63
+        if self.dense:
+            self.span = hi - self.lo + 1
+            self.first = List[Int](length=self.span, fill=-1)
+            for i in range(n - 1, -1, -1):
+                self.first.unsafe_set(file_tags.unsafe_get(i) - self.lo, i)
+            return
+        # sparse: the distinct tags in order (a stable sort, so each
+        # tag's first node comes first)
+        var column = int_array(n, 1)
+        for i in range(n):
+            column.unsafe_set(i, Scalar[DType.int](file_tags.unsafe_get(i)))
+        var order = lexsort_rows(column)
+        self.first = List[Int](capacity=n)
         self.tags = List[Int](capacity=n)
-        for i in self.slot:
-            self.tags.append(file_tags.unsafe_get(i))
-        self.vertex = List[Int](length=n, fill=-1)
-        self.lo = self.tags[0] if n > 0 else 0
-        self.table = List[Int]()
-        if n > 0 and self.tags[n - 1] - self.lo < _DENSE * n:
-            self.table = List[Int](
-                length=self.tags[n - 1] - self.lo + 1, fill=-1
-            )
-            for at in range(n - 1, -1, -1):
-                self.table.unsafe_set(self.tags.unsafe_get(at) - self.lo, at)
+        for i in order:
+            var t = file_tags.unsafe_get(i)
+            if not self.tags or self.tags[len(self.tags) - 1] != t:
+                self.tags.append(t)
+                self.first.append(i)
+        self.span = len(self.tags)
+        while (1 << (64 - self.shift)) < 2 * self.span:
+            self.shift -= 1
+        var mask = (1 << (64 - self.shift)) - 1
+        self.hash = List[Int](length=2 * (mask + 1), fill=-1)
+        for p in range(self.span):
+            var t = self.tags.unsafe_get(p)
+            var h = self._slot(t)
+            while self.hash.unsafe_get(2 * h) >= 0:
+                h = (h + 1) & mask
+            self.hash.unsafe_set(2 * h, t)
+            self.hash.unsafe_set(2 * h + 1, p)
 
+    @always_inline
+    def _slot(self, t: Int) -> Int:
+        return Int((UInt64(t) * 0x9E3779B97F4A7C15) >> UInt64(self.shift))
+
+    @always_inline
     def find(self, t: Int) -> Int:
-        """The first position of tag `t`, or -1."""
-        if self.table:
-            if t < self.lo or t - self.lo >= len(self.table):
+        """The position of tag `t`, or -1 when no node has it."""
+        if t < 0:
+            return -1
+        if self.dense:
+            var p = t - self.lo
+            if UInt(p) < UInt(self.span) and self.first.unsafe_get(p) >= 0:
+                return p
+            return -1
+        var mask = (1 << (64 - self.shift)) - 1
+        var h = self._slot(t)
+        while True:
+            var k = self.hash.unsafe_get(2 * h)
+            if k == t:
+                return self.hash.unsafe_get(2 * h + 1)
+            if k < 0:
                 return -1
-            return self.table.unsafe_get(t - self.lo)
-        var lo = 0
-        var hi = len(self.tags)
-        while lo < hi:
-            var mid = (lo + hi) // 2
-            if self.tags.unsafe_get(mid) < t:
-                lo = mid + 1
-            else:
-                hi = mid
-        if lo < len(self.tags) and self.tags.unsafe_get(lo) == t:
-            return lo
-        return -1
+            h = (h + 1) & mask
+
+    @always_inline
+    def tag(self, p: Int) -> Int:
+        """The tag at position `p`."""
+        return self.lo + p if self.dense else self.tags.unsafe_get(p)
 
 
 struct _Raw(Movable):

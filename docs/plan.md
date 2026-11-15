@@ -131,13 +131,12 @@ all cores.
 - **`reorder_vertices`** (20 / 13 ms on `tet_40`, from 24 / 22; see
   [performance](guide/performance.md#reordering-in-parallel)): the
   radix sort of the Morton codes is serial, 2–4 ms.
-- **`read_gmsh`** (39 ms for a 480k-triangle ASCII file on all cores
-  with its numbering warning, 84 on one thread, 30.5 binary; see
-  [performance](guide/performance.md#measuring-the-numbering)):
-  parsing takes 19 ms, numbering 9. Tags that span more than 4 times their number are still
-  bisected, about 170 ms on a 438k-tetrahedron file. A 2.2 file whose
-  elements alternate physical groups has a block per element: 155 ms
-  for the 2.2 box with half its elements repeated, against 39.
+- **`read_gmsh`** (28 ms for a 480k-triangle ASCII file on all cores
+  with its numbering warning, 78 on one thread, 18.5 binary; see
+  [performance](guide/performance.md#numbering-the-vertices-in-parallel)):
+  parsing takes 15–18 ms, the duplicate check 3. A 2.2 file whose
+  elements alternate physical groups has a block per element: 135 ms
+  for the 2.2 box with half its elements repeated, against 33.
 - **`lexsort_rows` on scattered numbering:** each thread of its counting
   sort spans nearly every bucket (2 ms counting and 3.5 scattering for
   480k rows on all cores, hardly better than one thread). Partitioning

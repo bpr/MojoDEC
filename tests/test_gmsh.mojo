@@ -428,6 +428,94 @@ def test_repeated_elements() raises:
     assert_true(row_list(m.groups[2].cells, 0) == [2, 0, 1])
 
 
+def _grid_text(tag: List[Int], m: Int, bad: List[Int], missing: Int) -> String:
+    """Format 2.2: an `m`-by-`m` grid of nodes, node `k` at `(k % m, k //
+    m)` tagged `tag[k]`, listed in a shuffled order between a node with
+    node 1's tag at (99, 99) and one with node 2's at (-1, -1); two
+    triangles per square except in the last column, whose right nodes no
+    triangle uses. Triangle `r` in `bad` names `missing + r` for its
+    second node."""
+    var n = m - 1
+    var count = m * m
+    var order = List[Int]()
+    for k in range(count):
+        order.append(k)
+    var seed: UInt64 = 11
+    for k in range(count - 1, 0, -1):
+        seed = seed * 6364136223846793005 + 1442695040888963407
+        var j = Int((seed >> 33) % UInt64(k + 1))
+        var x = order[k]
+        order[k] = order[j]
+        order[j] = x
+    var t = String("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Nodes\n")
+    t += String(count + 2, "\n", tag[1], " 99 99 0\n")
+    for k in order:
+        t += String(tag[k], " ", k % m, " ", k // m, " 0\n")
+    t += String(tag[2], " -1 -1 0\n$EndNodes\n$Elements\n")
+    t += String(2 * (n - 1) * n, "\n")
+    var r = 0
+    for j in range(n):
+        for i in range(n - 1):
+            var a = j * m + i
+            var tri: List[List[Int]] = [
+                [a, a + 1, a + m + 1],
+                [a, a + m + 1, a + m],
+            ]
+            for ref c in tri:
+                var second = missing + r if r in bad else tag[c[1]]
+                t += String(r + 1, " 2 2 0 1 ", tag[c[0]], " ", second)
+                t += String(" ", tag[c[2]], "\n")
+                r += 1
+    return t + "$EndElements\n"
+
+
+def test_numbering_parallel() raises:
+    # over 50,000 element nodes are looked up in parallel chunks, each
+    # marking the nodes it uses: the vertices must still be numbered in
+    # tag order, a repeated tag must give its first node, and an unknown
+    # tag must be the first in the file, whatever the chunks
+    var m = 131
+    for sparse in [False, True]:
+        # dense tags with gaps, or tags a million apart
+        var tag = List[Int]()
+        for k in range(m * m):
+            tag.append(k * 1_000_003 + 7 if sparse else 3 * k // 2 + 5)
+        _write(_grid_text(tag, m, [], 0))
+        var g = read_gmsh(TMP, drop_z=True)
+        var n = m - 1
+        assert_equal(rows_of(g.elements), 2 * (n - 1) * n)
+        assert_true(rows_of(g.elements) * 3 > 100_000)
+        # node k is used when it is not in the last column, and numbered
+        # by its tag (which increases with k)
+        assert_equal(len(g.node_tags), m * n)
+        for k in range(m * m):
+            if k % m < n:
+                var v = (k // m) * n + k % m
+                assert_equal(g.node_tags[v], tag[k])
+                var x = fget(g.vertices, v, 0)
+                var y = fget(g.vertices, v, 1)
+                if k == 1:
+                    assert_true(x == 99 and y == 99)
+                else:
+                    assert_true(x == Float64(k % m) and y == Float64(k // m))
+        var r = 0
+        for j in range(n):
+            for i in range(n - 1):
+                var v = j * n + i
+                assert_true(row_list(g.elements, r) == [v, v + 1, v + n + 1])
+                assert_true(
+                    row_list(g.elements, r + 1) == [v, v + n + 1, v + n]
+                )
+                r += 2
+        # unknown tags in a late chunk and an early one
+        var missing = 10_000_000_000 if sparse else 1_000_000
+        _write(_grid_text(tag, m, [30_000, 10_000], missing))
+        with assert_raises(
+            contains=String("element uses unknown node ", missing + 10_000)
+        ):
+            _ = read_gmsh(TMP)
+
+
 def _digest(raw: _Raw) -> List[Int]:
     """Everything `_parse` read, as integers (coordinates by their bits)."""
     var out = List[Int]()

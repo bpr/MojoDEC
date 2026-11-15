@@ -1033,7 +1033,8 @@ per vertex). Three changes, with the same results:
   more; at about 17 dependent reads into a table larger than L2, a
   search took over 100 ns. Gmsh numbers nodes 1 to n, so when the tags
   span less than 4 times their number they now index a table, whose
-  size is then bounded by the file's; other tags are still bisected.
+  size is then bounded by the file's; other tags are still bisected
+  (later hashed; see [below](#numbering-the-vertices-in-parallel)).
   Each entry is looked up once, and the duplicate check runs on the
   positions found (small dense numbers, which `lexsort_rows`
   bucket-sorts) instead of the tags. The lookups and numbering went
@@ -1226,7 +1227,63 @@ three alternating rounds, in ms:
 | inclusions, ASCII 4.1 | 53 → 48 | 30.5 → 25 |
 | box, ASCII 2.2, sparse tags | 248 → 240 | 206 → 201 |
 
+### Numbering the vertices in parallel
+
+After parsing, apart from the duplicate check, `read_gmsh` spent 17 ms
+on the square and 16 on the box, on any number of threads: a stable sort of
+the node tags (2.2 ms), then serial loops looking up each element entry
+(3.4), marking the nodes used (3.3), filling the elements (3.9), and
+copying coordinates (0.9). Tags that span more than 4 times their number
+were bisected, 120 ns a lookup: 160 ms for the box with sparse tags.
+
+- **Dense tags are their own positions.** A node's position is its tag
+  less the smallest, so the table needs no sort: it is filled with each
+  tag's first node, walking the file backward (0.37 ms on the square).
+  Positions still increase with the tag, so vertices are numbered as
+  before.
+- **Sparse tags are hashed.** The distinct tags are sorted as before and
+  put in an open-addressing table, at least twice as many slots as
+  tags, keyed by the top bits of the tag times the golden-ratio
+  constant: 3 ns a lookup, as elements name nearby tags.
+- **Lookups in parallel.** Each chunk of element entries finds its top
+  block by bisection over where the blocks start, looks up its entries,
+  and sets the positions it uses in a bitmap of its own (no two chunks
+  write the same memory). Repeated elements use the same positions, so
+  the duplicate check can come after. A chunk records its first unknown
+  tag, and the first chunk with one gives the error, as the serial loop
+  did.
+- **Numbering, elements and coordinates in parallel.** The union of the
+  bitmaps, with a count of the positions before each word, gives each
+  position its vertex number; chunks of words then number their
+  positions, and chunks of elements and of vertices fill their rows.
+
+Those steps now take 2.5–6.5 ms on the square and 6 on the box (noisy).
+The output is identical to `6cfc871`'s on the 82 files of the previous
+sections, on all cores and on one thread, errors included. A test reads
+a 33,800-triangle grid with dense tags with gaps, then sparse tags,
+nodes in shuffled order, a column of unused nodes, a repeated tag
+listed first and one listed last, and unknown tags in an early and a
+late chunk; it fails if the last chunk's error is reported, if a
+repeated tag takes its last node (dense or sparse), or if one chunk's
+bitmap is dropped.
+
+`read_gmsh` with `warn=True`, against `6cfc871`, median of three
+alternating rounds, in ms:
+
+| File | 1 thread | all cores |
+|---|---:|---:|
+| square, ASCII 4.1 | 84 → 78 | 38.5 → 28 |
+| square, binary 4.1 | 39.5 → 31.5 | 29.5 → 18.5 |
+| plate, ASCII 4.1 | 41.5 → 40.5 | 21.5 → 15 |
+| box, ASCII 4.1 | 61 → 60 | 32 → 21.5 |
+| box, binary 4.1 | 30 → 30 | 27.5 → 17 |
+| box, ASCII 2.2 | 77.5 → 77.5 | 40.5 → 33 |
+| inclusions, ASCII 4.1 | 48 → 47.5 | 25 → 18.5 |
+| box, ASCII 2.2, sparse tags | 243 → 94.5 | 200.5 → 33.5 |
+| box, ASCII 2.2, alternating groups | 209 → 206 | 148 → 135.5 |
+
+On one thread, dense tags gain little: the lookups already used a table.
+
 **What is left.** In the 480k-element square, ASCII, on all cores:
-parsing 19 ms, numbering the vertices 9, the duplicate check 3, and the
-numbering measure 0.5. Sparse tags still take about 170 ms of
-bisection.
+parsing 15–18 ms, the duplicate check 3, the rest 3–6. On one thread,
+parsing dominates.
