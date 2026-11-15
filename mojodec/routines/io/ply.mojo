@@ -276,7 +276,9 @@ struct _Header(Movable):
         while start < len(data) and data[start] != Byte(ord("\n")):
             start += 1
         self.data_start = start + 1
-        var text = String(unsafe_from_utf8=Span(data)[:end])
+        # file bytes need not be UTF-8: invalid sequences become U+FFFD,
+        # which no keyword matches
+        var text = String(from_utf8_lossy=Span(data)[:end])
         var format = String()
         self.elements = List[_Element]()
         for line in text.splitlines():

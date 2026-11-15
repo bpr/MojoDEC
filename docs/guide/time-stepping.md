@@ -336,6 +336,37 @@ With a constant source, `step(u, f, steps)` approaches the steady state
 $K u = f$. Here `f` is a load vector, such as `whitney_load` or a mass
 times nodal values; the typed version types it as the dual kind.
 
+**Starting guesses.** Both implicit schemes solve with one matrix $S$ at
+every step, so each CG solve starts from Fischer's guess: the point
+closest to the new solution, in the $S$ norm, in the span of the last 16
+solutions. The span is kept as an $S$-orthonormal basis $y_1, \dots, y_l$,
+and the guess for $S x = b$ is
+
+$$
+x_0 = \sum_i (y_i^T b)\, y_i .
+$$
+
+This is the $S$-orthogonal projection of the unknown $x$, so its error is
+never larger than the error of starting from zero, whatever $b$. After
+each solve, the part of the new solution outside the span joins the basis
+(one extra product with $S$), and the basis restarts after 16. Solutions
+of a smooth evolution lie close to a low-dimensional space, which the
+basis captures. Measured over 100 steps on Kuhn grids of 16 and 32 cells
+per side:
+
+| | from zero | with the guess |
+|---|---|---|
+| Crank–Nicolson, heat with a source | 2691, 4572 iterations | 1136, 1586 |
+| midpoint, Maxwell, $\Delta t = 0.01$ | 1594, 1402 | 1042, 1164 |
+| midpoint, Maxwell, $\Delta t = 0.05$ | 2503, 4780 | 2394, 4731 |
+
+Large steps of a wave equation gain little: each step turns the solution
+by a large angle in many modes at once. The guess changes a step's result
+only within `rtol`. A step therefore depends slightly on the steps before
+it, and two steppers given the same state but different histories agree
+to `rtol`, not to the bit. The basis costs 32 vectors of the system's
+size.
+
 **Boundary conditions.** Fix values the way the leapfrog does: drop the
 fixed cells from $q$ (or $u$) and from the rows of $K$ and the mass, as
 with `select(free, free)`. Nonzero Dirichlet data enters as a source.
@@ -370,6 +401,13 @@ with `select(free, free)`. Nonzero Dirichlet data enters as a source.
   - monotone decay of both energies;
   - the steady state with the consistent and a lumped mass;
   - the typed versions and the errors.
+
+`tests/test_properties_robust.mojo`:
+- `test_implicit_steppers_match_dense_steps`: both schemes against dense
+  steps over up to 30 steps, at small and large $\Delta t$, with the
+  midpoint energy conserved;
+- `test_fischer_guess_is_never_worse_than_zero`: the guess's error in the
+  $S$ norm against the zero start, for any sequence of right-hand sides.
 
 ## Reference
 

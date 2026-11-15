@@ -23,7 +23,9 @@ from mojodec.routines.io.arrayio import (
     write_array,
     write_sparse,
 )
+from mojodec.routines.io.gmsh import read_gmsh
 from mojodec.routines.io.meshio import read_mesh, write_mesh
+from mojodec.routines.io.ply import read_ply
 from mojodec.routines.io.scan import ByteReader, parse_numbers
 from mojodec.routines.io.text import loadtxt
 
@@ -493,6 +495,54 @@ def test_sparse_dims_are_bounded() raises:
     assert_equal(A.nrows, 2)
     with assert_raises(contains="raise max_dim"):
         _ = read_sparse(TMP, max_dim=2)
+
+
+def _write_with_bytes(
+    path: String, before: String, bad: List[Byte], after: String
+) raises:
+    """A text file with `bad` (not UTF-8) between two strings."""
+    var data = List[Byte]()
+    for b in before.as_bytes():
+        data.append(b)
+    data.extend(bad.copy())
+    for b in after.as_bytes():
+        data.append(b)
+    with open(path, "w") as f:
+        f.write_bytes(Span(data))
+
+
+def test_readers_refuse_invalid_utf8() raises:
+    # bytes that are not UTF-8 where text or numbers belong raise reader
+    # errors (they used to trip string assertions, found by
+    # test_properties_robust's corrupted files)
+    var bad: List[Byte] = [0xFF, 0xC3, 0x80, 0xFE]
+    var path = "/tmp/mojodec_invalid_utf8.dat"
+    _write_with_bytes(path, "1\n", bad, "=3\n")
+    with assert_raises():
+        _ = read_array(path)
+    _write_with_bytes(path, "2\nformat=ascii\n", bad, "\n")
+    with assert_raises():
+        _ = read_array(path)
+    var gmsh = "/tmp/mojodec_invalid_utf8.msh"
+    _write_with_bytes(
+        gmsh, "$MeshFormat\n4.1 0 8\n$EndMeshFormat\n$Nodes\n1 ", bad, " 1 1\n"
+    )
+    with assert_raises():
+        _ = read_gmsh(gmsh)
+    _write_with_bytes(
+        gmsh,
+        '$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$PhysicalNames\n1\n2 1 "',
+        bad,
+        '"\n$EndPhysicalNames\n',
+    )
+    with assert_raises(contains="not valid UTF-8"):
+        _ = read_gmsh(gmsh)
+    var ply = "/tmp/mojodec_invalid_utf8.ply"
+    _write_with_bytes(
+        ply, "ply\nformat ascii 1.0\nelement ", bad, " 3\nend_header\n"
+    )
+    with assert_raises():
+        _ = read_ply(ply)
 
 
 def main() raises:

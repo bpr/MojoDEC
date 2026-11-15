@@ -1548,11 +1548,9 @@ struct _Cursor(Movable):
         a token for the serial reader to judge."""
         if len(self.r.data) - self.r.pos < parallel_bytes:
             return -1
-        var rest = StringSlice(unsafe_from_utf8=Span(self.r.data)[self.r.pos :])
-        var at = rest.find("$")
-        if at < 0:
+        var end = _find_byte(self.r.data, self.r.pos, Byte(ord("$")))
+        if end < 0:
             return -1
-        var end = self.r.pos + at
         var t = parse_numbers(self.r, self.r.pos, end, parallel_bytes)
         if not t:
             return -1
@@ -1633,7 +1631,10 @@ struct _Cursor(Movable):
         if self.r.pos >= len(data):
             raise self.err("unterminated quoted name")
         self.r.pos += 1
-        return String(unsafe_from_utf8=Span(data)[start : self.r.pos - 1])
+        try:
+            return String(from_utf8=Span(data)[start : self.r.pos - 1])
+        except:
+            raise self.err("a quoted name is not valid UTF-8")
 
     def ints(
         mut self, mut out: List[Int], rows: Int, skip: Int, keep: Int
@@ -1683,3 +1684,23 @@ struct _Cursor(Movable):
                 return self.tokens.float_()
             return self.r.float_()
         return self.r.binary[DType.float64]()
+
+
+def _find_byte(data: List[Byte], start: Int, byte: Byte) -> Int:
+    """The first offset `>= start` of `byte` in `data`, or -1; compares
+    bytes, so the data need not be UTF-8."""
+    comptime W = 32
+    var p = data.unsafe_ptr()
+    var n = len(data)
+    var i = start
+    var target = SIMD[DType.uint8, W](byte)
+    while i + W <= n:
+        var hit = p.unsafe_offset(i).unsafe_load[width=W]().eq(target)
+        if hit.reduce_or():
+            break
+        i += W
+    while i < n:
+        if p[unsafe_offset=i] == byte:
+            return i
+        i += 1
+    return -1

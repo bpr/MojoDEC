@@ -1,6 +1,8 @@
 # Property-based tests of MojoDEC's robustness: readers given damaged files,
 # raw CSR input, the kd-tree and the dense eigensolver against brute force
-# or their defining laws, and round trips of every array dtype. They use
+# or their defining laws, the Krylov solvers' options (starting guesses,
+# null spaces, Ritz values) and the implicit time steppers against dense
+# solves, and round trips of every array dtype. They use
 # proptest (see tests/test_properties.mojo for the setup). To run just this
 # file:
 #
@@ -18,6 +20,7 @@ from numojo.prelude import *
 from proptest import (
     ConjectureData,
     Settings,
+    assume,
     booleans,
     composite,
     fail,
@@ -52,7 +55,16 @@ from mojodec.routines.io.arrayio import (
 from mojodec.routines.io.gmsh import read_gmsh
 from mojodec.routines.io.ply import PlyFormat, read_ply, write_ply
 from mojodec.routines.io.text import loadtxt
-from mojodec.routines.linalg import eigh_generalized
+from mojodec.routines.linalg import (
+    NullSpace,
+    StopReason,
+    cg,
+    eigenvalue_range,
+    eigh_generalized,
+    jacobi,
+    minres,
+)
+from mojodec.routines.time import CrankNicolson, ImplicitMidpoint, _Guess
 from mojodec.core.diagonal import DiagonalOperator
 
 
@@ -433,6 +445,362 @@ def test_generalized_eigh_dense_and_diagonal_agree() raises:
         lists(integers(-3, 3), min_size=1, max_size=36),
         lists(integers(1, 5), min_size=1, max_size=8),
         integers(0, 8),
+        prop,
+        quick(),
+    )
+
+
+# ===----------------------------------------------------------------------=== #
+# Krylov solvers and implicit time steppers against dense solves
+# ===----------------------------------------------------------------------=== #
+
+
+def _graph(n: Int, ints: List[Int], shift: Bool) raises -> RealArray:
+    """A weighted graph Laplacian on n vertices from small integers: a path
+    (so connected) plus extra edges, weights 1..4; with `shift`, plus a
+    diagonal of 1..3, which makes it positive definite. Dense, n x n."""
+    var A = real_array(n, n)
+    var m = len(ints)
+
+    def add(mut A: RealArray, i: Int, j: Int, w: Float64) raises:
+        fset(A, i, i, fget(A, i, i) + w)
+        fset(A, j, j, fget(A, j, j) + w)
+        fset(A, i, j, fget(A, i, j) - w)
+        fset(A, j, i, fget(A, j, i) - w)
+
+    for i in range(n - 1):
+        add(A, i, i + 1, Float64(1 + abs(ints[i % m]) % 4))
+    for k in range(m // 3):
+        var i = abs(ints[3 * k]) % n
+        var j = abs(ints[3 * k + 1]) % n
+        if i != j:
+            add(A, i, j, Float64(1 + abs(ints[3 * k + 2]) % 4))
+    if shift:
+        for i in range(n):
+            fset(
+                A, i, i, fget(A, i, i) + Float64(1 + abs(ints[(i + 1) % m]) % 3)
+            )
+    return A^
+
+
+def _csr(A: RealArray) raises -> CSRMatrix:
+    var n = A.shape[0]
+    var r = List[Int]()
+    var c = List[Int]()
+    var v = List[Float64]()
+    for i in range(n):
+        for j in range(A.shape[1]):
+            var x = fget(A, i, j)
+            if x != 0:
+                r.append(i)
+                c.append(j)
+                v.append(x)
+    return CSRMatrix.from_coo(n, A.shape[1], r, c, v)
+
+
+def _vector(n: Int, ints: List[Int], offset: Int) raises -> RealArray:
+    var x = real_vector(n)
+    for i in range(n):
+        x.unsafe_set(i, Float64(ints[(i + offset) % len(ints)]))
+    return x^
+
+
+def _max_abs(x: RealArray) -> Float64:
+    var m: Float64 = 0
+    for i in range(x.size):
+        m = max(m, abs(x.unsafe_get(i)))
+    return m
+
+
+def _close(got: RealArray, want: RealArray, tol: Float64, what: String) raises:
+    var scale = 1 + _max_abs(want)
+    for i in range(want.size):
+        var e = abs(got.unsafe_get(i) - want.unsafe_get(i))
+        if not (e <= tol * scale):
+            fail(String(what, ": entry ", i, " off by ", e))
+
+
+def test_krylov_starting_guesses_reach_the_solution() raises:
+    """For SPD A (n <= 10, cond <= ~100), cg and minres from any guess, with
+    or without Jacobi, reach the dense solution; the dense solution as the
+    guess takes no step."""
+
+    def prop(ints: List[Int], n: Int, pre: Bool) raises:
+        var D = _graph(n, ints, True)
+        var A = _csr(D)
+        var b = _vector(n, ints, 1)
+        var x0 = _vector(n, ints, 2)
+        var exact = dense.solve(D, b)
+        var J = jacobi(A)
+        var c = cg(A, b, M=J, rtol=1e-12, x0=x0.copy()) if pre else cg(
+            A, b, rtol=1e-12, x0=x0.copy()
+        )
+        if not c.converged():
+            fail(String("cg stopped: ", c.stop))
+        _close(c.x, exact, 1e-8, "cg")
+        var m = minres(A, b, M=J, rtol=1e-12, x0=x0.copy()) if pre else minres(
+            A, b, rtol=1e-12, x0=x0.copy()
+        )
+        if not m.converged():
+            fail(String("minres stopped: ", m.stop))
+        _close(m.x, exact, 1e-8, "minres")
+        if cg(A, b, rtol=1e-12, x0=exact.copy()).iterations != 0:
+            fail("cg stepped from the exact solution")
+        if minres(A, b, M=J, rtol=1e-12, x0=exact.copy()).iterations != 0:
+            fail("minres stepped from the exact solution")
+
+    given(
+        lists(integers(-5, 5), min_size=1, max_size=40),
+        integers(1, 10),
+        booleans(),
+        prop,
+        quick(),
+    )
+
+
+def test_krylov_null_space_gives_the_least_norm_solution() raises:
+    """For a connected graph Laplacian A and any b and guess, cg and minres
+    with the constants as null space give the least-squares solution of
+    least norm, which solves (A + 1 1^T / n) x = P b."""
+
+    def prop(ints: List[Int], n: Int, pre: Bool) raises:
+        var D = _graph(n, ints, False)
+        var A = _csr(D)
+        var b = _vector(n, ints, 1)
+        var x0 = _vector(n, ints, 3)
+        var ns = NullSpace.constants(n)
+        var Pb = b.copy()
+        ns.remove_from(Pb)
+        var R = D.copy()
+        for i in range(n):
+            for j in range(n):
+                fset(R, i, j, fget(R, i, j) + 1.0 / Float64(n))
+        var exact = dense.solve(R, Pb)
+        var J = jacobi(A) if n > 1 else DiagonalOperator([1.0])
+        var c = cg(
+            A, b, M=J, rtol=1e-12, x0=x0.copy(), nullspace=ns
+        ) if pre else cg(A, b, rtol=1e-12, x0=x0.copy(), nullspace=ns)
+        if not c.converged():
+            fail(String("cg stopped: ", c.stop))
+        _close(c.x, exact, 1e-8, "cg")
+        var m = minres(
+            A, b, M=J, rtol=1e-12, x0=x0.copy(), nullspace=ns
+        ) if pre else minres(A, b, rtol=1e-12, x0=x0.copy(), nullspace=ns)
+        if not m.converged():
+            fail(String("minres stopped: ", m.stop))
+        _close(m.x, exact, 1e-8, "minres")
+
+    given(
+        lists(integers(-5, 5), min_size=1, max_size=40),
+        integers(1, 10),
+        booleans(),
+        prop,
+        quick(),
+    )
+
+
+def test_ritz_values_lie_in_the_spectrum() raises:
+    """The Ritz values of cg and minres, and eigenvalue_range's ends, lie in
+    the spectrum of M A (M = I or Jacobi), from the dense eigensolver."""
+
+    def prop(ints: List[Int], n: Int, pre: Bool) raises:
+        var D = _graph(n, ints, True)
+        var A = _csr(D)
+        var b = _vector(n, ints, 1)
+        assume(_max_abs(b) > 0)
+        var diag = List[Float64]()
+        for i in range(n):
+            diag.append(fget(D, i, i) if pre else 1.0)
+        var w = eigh_generalized(D, DiagonalOperator(diag^)).values.copy()
+        var lo = w.unsafe_get(0)
+        var hi = w.unsafe_get(n - 1)
+        var tol = 1e-9 * hi
+        var J = jacobi(A)
+        var c = cg(A, b, M=J, rtol=1e-12, ritz=True) if pre else cg(
+            A, b, rtol=1e-12, ritz=True
+        )
+        var m = minres(A, b, M=J, rtol=1e-12, ritz=True) if pre else minres(
+            A, b, rtol=1e-12, ritz=True
+        )
+        for ref t in [
+            c.ritz_values.value().copy(),
+            m.ritz_values.value().copy(),
+        ]:
+            for i in range(t.size):
+                var x = t.unsafe_get(i)
+                if not (x >= lo - tol and x <= hi + tol):
+                    fail(
+                        String(
+                            "Ritz value ", x, " outside [", lo, ", ", hi, "]"
+                        )
+                    )
+        var r = eigenvalue_range(A, M=J) if pre else eigenvalue_range(A)
+        if not (r.lowest >= lo - tol and r.highest <= hi + tol):
+            fail(
+                String(
+                    "range [",
+                    r.lowest,
+                    ", ",
+                    r.highest,
+                    "] leaves the spectrum",
+                )
+            )
+        if not (r.lowest <= r.highest):
+            fail("range is reversed")
+
+    given(
+        lists(integers(-5, 5), min_size=1, max_size=40),
+        integers(1, 10),
+        booleans(),
+        prop,
+        quick(),
+    )
+
+
+def test_fischer_guess_is_never_worse_than_zero() raises:
+    """For SPD S and any sequence of right-hand sides, the time steppers'
+    guess is at least as close to each solution as zero in the S norm, and
+    exact for a right-hand side it has seen."""
+
+    def prop(ints: List[Int], n: Int, count: Int) raises:
+        var D = _graph(n, ints, True)
+        var S = _csr(D)
+        var guess = _Guess()
+        for k in range(count):
+            var b = _vector(n, ints, 5 * k + 1)
+            var x = dense.solve(D, b)
+            var g = guess.for_rhs(b)
+            if g:
+                var e = x.copy()
+                axpy_into(-1.0, g.value(), e)
+                var err = _dot(e, S @ e)
+                var zero = _dot(x, S @ x)
+                if not (err <= zero * (1 + 1e-10) + 1e-20):
+                    fail(String("guess error ", err, " > ", zero, " at ", k))
+            guess.keep(S, x)
+            var again = guess.for_rhs(b)
+            if again:
+                _close(again.value(), x, 1e-9, "a seen right-hand side")
+            elif _max_abs(x) != 0:  # only x = 0 adds nothing to an empty basis
+                fail("no guess after a nonzero solution")
+
+    given(
+        lists(integers(-5, 5), min_size=1, max_size=40),
+        integers(1, 10),
+        integers(1, 40),
+        prop,
+        quick(),
+    )
+
+
+def _dot(x: RealArray, y: RealArray) -> Float64:
+    var s: Float64 = 0
+    for i in range(x.size):
+        s += x.unsafe_get(i) * y.unsafe_get(i)
+    return s
+
+
+def axpy_into(a: Float64, x: RealArray, mut y: RealArray):
+    for i in range(x.size):
+        y.unsafe_set(i, y.unsafe_get(i) + a * x.unsafe_get(i))
+
+
+def test_implicit_steppers_match_dense_steps() raises:
+    """Crank-Nicolson and the implicit midpoint rule, whose CG starts from
+    the previous steps' guess, follow the dense step to rounding over many
+    steps, at small and large dt."""
+
+    def prop(ints: List[Int], n: Int, steps: Int, big: Bool) raises:
+        var dt = 0.7 if big else 0.03
+        # Crank-Nicolson: M SPD, K a PSD Laplacian, a source
+        var Md = _graph(n, ints, True)
+        var rotated: List[Int] = [ints[len(ints) - 1]]
+        rotated.extend(ints.copy())
+        var Kd = _graph(n, rotated, False)
+        var cn = CrankNicolson(_csr(Md), _csr(Kd), dt)
+        var u = _vector(n, ints, 2)
+        var f = _vector(n, ints, 4)
+        var ref_u = u.copy()
+        var L = real_array(n, n)
+        var Rm = real_array(n, n)
+        for i in range(n):
+            for j in range(n):
+                fset(L, i, j, fget(Md, i, j) + 0.5 * dt * fget(Kd, i, j))
+                fset(Rm, i, j, fget(Md, i, j) - 0.5 * dt * fget(Kd, i, j))
+        for _ in range(steps):
+            cn.step(u, f)
+            var rhs = real_vector(n)
+            for i in range(n):
+                var s = dt * f.unsafe_get(i)
+                for j in range(n):
+                    s += fget(Rm, i, j) * ref_u.unsafe_get(j)
+                rhs.unsafe_set(i, s)
+            ref_u = dense.solve(L, rhs)
+        _close(u, ref_u, 1e-8, "Crank-Nicolson")
+        # implicit midpoint: q of size n, p of size n2, coupling K (n x n2)
+        var n2 = 1 + abs(ints[0]) % 6
+        var Kc = real_array(n, n2)
+        for i in range(n):
+            for j in range(n2):
+                fset(Kc, i, j, Float64(ints[(3 * i + 5 * j) % len(ints)]))
+        var mp = List[Float64]()
+        for j in range(n2):
+            mp.append(Float64(1 + abs(ints[(j + 2) % len(ints)]) % 3))
+        var im = ImplicitMidpoint(
+            _csr(Md), DiagonalOperator(mp.copy()), _csr(Kc), dt
+        )
+        var q = _vector(n, ints, 1)
+        var p = _vector(n2, ints, 3)
+        var E0 = im.energy(q, p)
+        # dense: [Mq 0; 0 Mp] z' = [0 K; -K^T 0] z, midpoint rule
+        var N = n + n2
+        var Lz = real_array(N, N)
+        var Rz = real_array(N, N)
+        for i in range(N):
+            for j in range(N):
+                var m: Float64 = 0
+                if i < n and j < n:
+                    m = fget(Md, i, j)
+                elif i >= n and j >= n and i == j:
+                    m = mp[i - n]
+                var a: Float64 = 0
+                if i < n and j >= n:
+                    a = fget(Kc, i, j - n)
+                elif i >= n and j < n:
+                    a = -fget(Kc, j, i - n)
+                fset(Lz, i, j, m - 0.5 * dt * a)
+                fset(Rz, i, j, m + 0.5 * dt * a)
+        var z = real_vector(N)
+        for i in range(n):
+            z.unsafe_set(i, q.unsafe_get(i))
+        for j in range(n2):
+            z.unsafe_set(n + j, p.unsafe_get(j))
+        for _ in range(steps):
+            im.step(q, p)
+            var rhs = real_vector(N)
+            for i in range(N):
+                var s: Float64 = 0
+                for j in range(N):
+                    s += fget(Rz, i, j) * z.unsafe_get(j)
+                rhs.unsafe_set(i, s)
+            z = dense.solve(Lz, rhs)
+        var zq = real_vector(n)
+        var zp = real_vector(n2)
+        for i in range(n):
+            zq.unsafe_set(i, z.unsafe_get(i))
+        for j in range(n2):
+            zp.unsafe_set(j, z.unsafe_get(n + j))
+        _close(q, zq, 1e-8, "midpoint q")
+        _close(p, zp, 1e-8, "midpoint p")
+        var E = im.energy(q, p)
+        if not (abs(E - E0) <= 1e-9 * (1 + E0)):
+            fail(String("energy drifted from ", E0, " to ", E))
+
+    given(
+        lists(integers(-5, 5), min_size=1, max_size=40),
+        integers(1, 8),
+        integers(1, 30),
+        booleans(),
         prop,
         quick(),
     )

@@ -47,6 +47,7 @@ print(lf.energy(e, b))                     # the same after every step
 from std.math import isfinite, sqrt
 
 from mojodec.core.diagonal import DiagonalOperator
+from mojodec.core.operator import LinearOperator
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.typed import DiagonalOp, MatrixOp, TypedCochain
@@ -363,6 +364,67 @@ def _require_positive(
 # ===----------------------------------------------------------------------=== #
 
 
+comptime _GUESS_HISTORY = 16
+"""Solutions `_Guess` keeps before it restarts."""
+
+
+struct _Guess(Movable):
+    """Starting guesses for a sequence of solves `S x_n = b_n` with one
+    symmetric positive definite `S`: Fischer's projection onto earlier
+    solutions (Comput. Methods Appl. Mech. Engrg. 163, 1998, method 2).
+
+    It keeps an `S`-orthonormal basis `y_1..y_l` of the last solutions
+    and guesses `x0 = sum_i (y_i^T b) y_i`, the point of their span
+    closest to `x_n` in the `S` norm: never worse than zero, whatever
+    `b`. After each solve, the new solution's part outside the span is
+    `S`-orthonormalized into the basis (one product with `S`), which
+    restarts from the latest solution after `_GUESS_HISTORY` of them.
+    """
+
+    var _y: List[RealArray]
+    var _Sy: List[RealArray]
+
+    def __init__(out self):
+        self._y = List[RealArray]()
+        self._Sy = List[RealArray]()
+
+    def for_rhs(self, b: RealArray) raises -> Optional[RealArray]:
+        """The guess for `S x = b`; `None` (zero) before the first solve."""
+        if len(self._y) == 0:
+            return None
+        var x = real_vector(b.size)
+        for ref y in self._y:
+            axpy(dot(y, b), y, x)
+        return x^
+
+    def keep[Op: LinearOperator](mut self, S: Op, x: RealArray) raises:
+        """Add the solution `x` to the basis."""
+        if len(self._y) == _GUESS_HISTORY:
+            self._y.clear()
+            self._Sy.clear()
+        var w = x.copy()
+        var Sw = real_vector(x.size)
+        S.apply_into(w, Sw)
+        var xSx = dot(w, Sw)
+        # S-orthogonalize against the basis, twice for stability
+        for _ in range(2):
+            for i in range(len(self._y)):
+                var c = dot(self._Sy[i], w)
+                axpy(-c, self._y[i], w)
+                axpy(-c, self._Sy[i], Sw)
+        var nn = dot(w, Sw)
+        # a remainder below 1e-8 of x (in the S norm) is mostly rounding;
+        # normalized, it would be noise of size 1 in the basis
+        if not (nn > 1e-16 * xSx) or not isfinite(nn):
+            return  # nothing new (or a breakdown): keep the basis
+        var s = 1 / sqrt(nn)
+        for i in range(w.size):
+            w.unsafe_set(i, s * w.unsafe_get(i))
+            Sw.unsafe_set(i, s * Sw.unsafe_get(i))
+        self._y.append(w^)
+        self._Sy.append(Sw^)
+
+
 struct ImplicitMidpoint(Movable):
     """The implicit midpoint rule for `Mq q' = K p`, `Mp p' = -K^T q`.
 
@@ -385,7 +447,9 @@ struct ImplicitMidpoint(Movable):
     `whitney_innerproduct(sc, 1)` and the flux on the triangles with the
     star `1 / area`, which is positive on every mesh: unlike the leapfrog,
     no well-centered mesh is needed. The solve is Jacobi-preconditioned CG
-    for the change of `qm` from `q0`.
+    for the change of `qm` from `q0`, started from the previous step's
+    change projected on the last solutions (Fischer's guess, `_Guess`), so a step's result
+    depends on the one before it, within `rtol`.
     """
 
     var dt: Float64
@@ -402,6 +466,7 @@ struct ImplicitMidpoint(Movable):
     var _S: CSRMatrix
     """`Mq + dt^2/4 K Mp^-1 K^T`."""
     var _P: DiagonalOperator
+    var _guess: _Guess
 
     def __init__(
         out self,
@@ -457,6 +522,7 @@ struct ImplicitMidpoint(Movable):
         self._B = Mp.inverse() @ K.transpose()
         self._S = Mq + (K @ self._B) * (dt * dt / 4)
         self._P = jacobi(self._S)
+        self._guess = _Guess()
         self._mq = Mq.copy()
         self._mp = Mp.copy()
         self._K = K.copy()
@@ -515,7 +581,13 @@ struct ImplicitMidpoint(Movable):
             var rhs = self._K @ w
             for i in range(rhs.size):
                 rhs.unsafe_set(i, h * rhs.unsafe_get(i))
-            var res = cg(self._S, rhs, M=self._P, rtol=self.rtol)
+            var res = cg(
+                self._S,
+                rhs,
+                M=self._P,
+                rtol=self.rtol,
+                x0=self._guess.for_rhs(rhs),
+            )
             if not res.converged():
                 raise Error(
                     String(
@@ -527,6 +599,7 @@ struct ImplicitMidpoint(Movable):
                 )
             self.last_iterations = res.iterations
             var dq = res^.take_x()
+            self._guess.keep(self._S, dq)
             # qm = q + dq, pm = p - h B qm; q1 = 2 qm - q, p1 = 2 pm - p
             axpy(1.0, dq, q)  # q = qm
             var bq = self._B @ q
@@ -561,7 +634,9 @@ struct CrankNicolson(Movable):
     `(1 - dt lambda / 2) / (1 + dt lambda / 2)` each step, which tends to
     -1 for `dt lambda >> 1`: stiff modes are damped slowly and flip sign
     every step instead of decaying (the scheme is A-stable, not L-stable).
-    The solve is Jacobi-preconditioned CG for `u1 - u0`.
+    The solve is Jacobi-preconditioned CG for `u1 - u0`, started from the
+    previous step's change projected on the last solutions (Fischer's guess, `_Guess`), so
+    a step's result depends on the one before it, within `rtol`.
     """
 
     var dt: Float64
@@ -575,6 +650,7 @@ struct CrankNicolson(Movable):
     var _A: CSRMatrix
     """`M + dt/2 K`."""
     var _P: DiagonalOperator
+    var _guess: _Guess
 
     def __init__(
         out self,
@@ -619,6 +695,7 @@ struct CrankNicolson(Movable):
         self.last_iterations = 0
         self._A = M + K * (0.5 * dt)
         self._P = jacobi(self._A)
+        self._guess = _Guess()
         self._M = M.copy()
         self._K = K.copy()
         _ = cg(self._A, real_vector(n), M=self._P, maxiter=0)
@@ -690,7 +767,13 @@ struct CrankNicolson(Movable):
                 if f:
                     s += f.value().unsafe_get(i)
                 rhs.unsafe_set(i, self.dt * s)
-            var res = cg(self._A, rhs, M=self._P, rtol=self.rtol)
+            var res = cg(
+                self._A,
+                rhs,
+                M=self._P,
+                rtol=self.rtol,
+                x0=self._guess.for_rhs(rhs),
+            )
             if not res.converged():
                 raise Error(
                     String(
@@ -701,7 +784,9 @@ struct CrankNicolson(Movable):
                     )
                 )
             self.last_iterations = res.iterations
-            axpy(1.0, res^.take_x(), u)
+            var du = res^.take_x()
+            self._guess.keep(self._A, du)
+            axpy(1.0, du, u)
 
     def energy(self, u: RealArray) raises -> Float64:
         """`1/2 u^T M u`, which never increases without a source.

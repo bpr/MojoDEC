@@ -329,8 +329,11 @@ plan). Key design points that span several files:
   infers its kinds from the operators and checks them with
   `comptime assert`. `ImplicitMidpoint` (any SPD `Mq`, diagonal `Mp`)
   and `CrankNicolson` assemble one SPD matrix and solve each step with
-  Jacobi-PCG for the increment (CG starts from zero, so the tolerance is
-  relative to the change, not the state).
+  Jacobi-PCG for the increment (the tolerance is relative to the change,
+  not the state), started from Fischer's guess (`_Guess`: an
+  `S`-orthonormal basis of the last 16 solutions, the projection of the
+  new one; never worse than zero in the `S` norm), so a step's bits
+  depend on the history, its value only within `rtol`.
 - **`mojodec.vis`** uses matplotlib via Python interop and is intentionally
   *not* re-exported from `mojodec`, so non-plotting programs never load
   Python. `pyplot(interactive=show_requested())` uses Agg unless `--show`
@@ -344,7 +347,12 @@ plan). Key design points that span several files:
   parsing, block copies of binary data); check a count read from a file
   against the bytes left before allocating for it, with
   `require_items(count, size)` rather than `require(count * size)`, which
-  can overflow. Never index a table by a number read from a file unless
+  can overflow. File bytes need not be UTF-8: never build a `String` or
+  `StringSlice` from them with `unsafe_from_utf8` (an assertion, or worse,
+  on invalid input); use `from_utf8_lossy` for text and messages and the
+  raising `from_utf8` where invalid bytes are an error (number fallbacks,
+  Gmsh names), and search for ASCII markers by byte (`_find_byte`).
+  Never index a table by a number read from a file unless
   the table is bounded by the file's size (Gmsh node tags index a table
   only when they span less than 4 times their number, and are hashed
   otherwise), and bound sizes the file cannot vouch for (`read_sparse`'s

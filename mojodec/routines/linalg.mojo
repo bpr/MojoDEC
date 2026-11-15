@@ -380,10 +380,15 @@ def _start[
     """Remove the kernel from the right-hand side `rhs` (a copy of `b`), and
     set the starting iterate `x` (zero on entry) and its residual `r` (a
     copy of `b` on entry). Without `x0` and `nullspace`, nothing changes.
+    A right-hand side in the kernel to rounding becomes exactly zero.
     """
     var n = A.num_rows()
     if nullspace:
+        var before = norm2(rhs)
         nullspace.value().remove_from(rhs)
+        if norm2(rhs) <= 1e-14 * before:  # b is in the kernel, to rounding
+            for i in range(n):
+                rhs.unsafe_set(i, 0)
     if not x0:
         if nullspace:
             r = rhs.copy()
@@ -506,7 +511,8 @@ def cg[
         atol: Absolute tolerance on the residual norm.
         maxiter: Iteration limit; `None` means `10 * n`.
         x0: The starting guess; `None` means zero. The tolerance stays
-            relative to `||b||`, so a good guess saves iterations.
+            relative to `||b||`, so a good guess saves iterations. If `b`
+            is zero (after removing `nullspace`), `x = 0` is returned.
         nullspace: The kernel of `A`. It is removed from `b` (the residual
             then measures the consistent part of the system), from `x0`,
             and from every preconditioned residual, so `x` is orthogonal to
@@ -541,10 +547,14 @@ def cg[
     var r = b.copy()
     _start(A, x0, nullspace, "cg", rhs, x, r)
     var bnorm = norm2(rhs)
-    var tol = max(rtol * bnorm, atol)
-    var rnorm = norm2(r) if x0 else bnorm
     var alphas = List[Float64]()
     var betas = List[Float64]()
+    if bnorm == 0:  # x = 0 solves it, whatever x0 (as SciPy's cg)
+        return _cg_result(
+            real_vector(n), StopReason.CONVERGED, 0, 0, ritz, alphas, betas
+        )
+    var tol = max(rtol * bnorm, atol)
+    var rnorm = norm2(r) if x0 else bnorm
     if rnorm <= tol:
         return _cg_result(
             x^, StopReason.CONVERGED, 0, rnorm, ritz, alphas, betas
@@ -726,7 +736,8 @@ def minres[
         atol: Absolute tolerance on the residual norm.
         maxiter: Iteration limit; `None` means `10 * n`.
         x0: The starting guess; `None` means zero. The tolerance stays
-            relative to `||b||_M`.
+            relative to `||b||_M`. If `b` is zero (after removing
+            `nullspace`), `x = 0` is returned.
         nullspace: The kernel of `A`. It is removed from `b`, from `x0`,
             and from every preconditioned Lanczos vector, so `x` is
             orthogonal to it.
@@ -761,6 +772,10 @@ def minres[
     _start(A, x0, nullspace, "minres", rhs, x, r0)
     var alfas = List[Float64]()
     var betas = List[Float64]()
+    if norm2(rhs) == 0:  # x = 0 solves it, whatever x0
+        return _minres_result(
+            real_vector(n), StopReason.CONVERGED, 0, 0, ritz, alfas, betas
+        )
     # Lanczos vectors: r1, r2 the last two unpreconditioned ones, y = M r2
     var r1 = r0.copy()
     var r2 = r0^
@@ -824,6 +839,11 @@ def minres[
             nullspace.value().remove_from(y)
         oldb = beta
         beta = dot(r2, y)
+        if nullspace and beta < 0 and sqrt(-beta) <= 1e-10 * (abs(alfa) + oldb):
+            # the projected preconditioner, P M P, is only semidefinite: at
+            # an invariant Krylov space beta^2 is zero up to rounding, tiny
+            # next to the Lanczos coefficients so far
+            beta = 0
         if not beta >= 0:
             stop = StopReason.BREAKDOWN
             break

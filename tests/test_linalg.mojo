@@ -638,6 +638,46 @@ def test_nullspace() raises:
             assert_almost_equal(
                 x.unsafe_get(i), f.unsafe_get(i) - mean, atol=1e-8, rtol=0
             )
+    # a right-hand side in the kernel: x = 0, whatever the guess
+    var flat = nm.ones[f64](Shape(n)) * 3.0
+    for which in range(2):
+        var z = cg(A, flat, x0=guess.copy(), nullspace=ns) if which == 0 else (
+            minres(A, flat, M=jacobi(A), x0=guess.copy(), nullspace=ns)
+        )
+        assert_true(z.converged())
+        assert_equal(z.iterations, 0)
+        assert_equal(norm2(z.x), 0.0)
+    # preconditioned MINRES from a guess, where the last Lanczos vector is
+    # rounding and its M-norm squared came out negative (-5e-30): an
+    # invariant Krylov space, not a breakdown (found by
+    # test_properties_robust)
+    var r = List[Int]()
+    var c = List[Int]()
+    var v = List[Float64]()
+    var weights: List[Float64] = [1, 1, 3, 3, 3, 2]
+    for i in range(6):
+        var w = weights[i]
+        for e in [(i, i, w), (i + 1, i + 1, w), (i, i + 1, -w), (i + 1, i, -w)]:
+            r.append(e[0])
+            c.append(e[1])
+            v.append(e[2])
+    var W = CSRMatrix.from_coo(7, 7, r, c, v)
+    var wb = real_vector(7)
+    var wx = real_vector(7)
+    var bs: List[Float64] = [0, -2, -2, 2, -1, 3, 4]
+    var xs: List[Float64] = [-2, 2, -1, 3, 4, 0, 0]
+    for i in range(7):
+        wb.unsafe_set(i, bs[i])
+        wx.unsafe_set(i, xs[i])
+    var wr = minres(
+        W,
+        wb,
+        M=jacobi(W),
+        rtol=1e-12,
+        x0=wx^,
+        nullspace=NullSpace.constants(7),
+    )
+    assert_true(wr.converged())
     # the basis is orthonormalized, whatever the input
     var w = List[RealArray]()
     var e = real_vector(n)

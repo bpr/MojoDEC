@@ -147,7 +147,8 @@ struct ByteReader(Movable):
             self.pos += 1
         if end > start and p[unsafe_offset=end - 1] == Byte(ord("\r")):
             end -= 1
-        return String(unsafe_from_utf8=Span(self.data)[start:end])
+        # file bytes need not be UTF-8: invalid sequences become U+FFFD
+        return String(from_utf8_lossy=Span(self.data)[start:end])
 
     def token(mut self) raises -> String:
         """The next whitespace-delimited token.
@@ -159,7 +160,7 @@ struct ByteReader(Movable):
             If only white space is left.
         """
         var r = self._token()
-        return String(unsafe_from_utf8=Span(self.data)[r[0] : r[1]])
+        return String(from_utf8_lossy=Span(self.data)[r[0] : r[1]])
 
     def float_(mut self) raises -> Float64:
         """The next token, as a float.
@@ -185,9 +186,8 @@ struct ByteReader(Movable):
                 return _token_float(t[1], t[2])
         var r = self._token()
         try:
-            return atof(
-                StringSlice(unsafe_from_utf8=Span(self.data)[r[0] : r[1]])
-            )
+            # raises on bytes that are not UTF-8, as on any non-number
+            return atof(StringSlice(from_utf8=Span(self.data)[r[0] : r[1]]))
         except:
             raise self.err(String("not a number: ", self._text(r[0], r[1])))
 
@@ -212,9 +212,7 @@ struct ByteReader(Movable):
         if v:
             return v.value()
         try:
-            return atol(
-                StringSlice(unsafe_from_utf8=Span(self.data)[r[0] : r[1]])
-            )
+            return atol(StringSlice(from_utf8=Span(self.data)[r[0] : r[1]]))
         except:
             raise self.err(String("not an integer: ", self._text(r[0], r[1])))
 
@@ -238,16 +236,14 @@ struct ByteReader(Movable):
             var v = self._digits(r[0], r[1])
             if v:
                 return Scalar[dtype](v.value())
-            var text = StringSlice(
-                unsafe_from_utf8=Span(self.data)[r[0] : r[1]]
-            )
             try:
+                var text = StringSlice(from_utf8=Span(self.data)[r[0] : r[1]])
                 if self._integral(r[0], r[1]):
                     # more digits than _digits takes
                     return Scalar[dtype](atol(text))
                 return Scalar[dtype](Int(atof(text)))
             except:
-                raise self.err(String("not a number: ", text))
+                raise self.err(String("not a number: ", self._text(r[0], r[1])))
         else:
             return Scalar[dtype](self.float_())
 
@@ -304,7 +300,7 @@ struct ByteReader(Movable):
         return (start, self.pos)
 
     def _text(self, start: Int, end: Int) -> String:
-        return String(unsafe_from_utf8=Span(self.data)[start:end])
+        return String(from_utf8_lossy=Span(self.data)[start:end])
 
     # ===------------------------------------------------------------------=== #
     # Binary
@@ -825,7 +821,7 @@ def _atof_token(
     try:
         var x = atof(
             StringSlice(
-                unsafe_from_utf8=Span(
+                from_utf8=Span(
                     unsafe_ptr=p.unsafe_offset(start), length=end - start
                 )
             )

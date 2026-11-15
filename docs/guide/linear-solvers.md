@@ -357,7 +357,10 @@ var res = cg(A, b, M=jacobi(A), rtol=1e-10, x0=previous.copy())
 The stopping test stays relative to $\|b\|$, not to the starting residual,
 so a good guess only saves iterations; it never loosens the answer. A guess
 that already passes the test returns at once with 0 iterations and `x`
-equal to the guess.
+equal to the guess. A zero right-hand side (or one entirely in the
+`nullspace`, to rounding) returns `x = 0` whatever the guess, as SciPy's
+`cg` does: no relative tolerance can be met otherwise, and zero is the
+solution of least norm.
 
 What a guess saves depends on what its error contains. CG removes error
 components roughly in order of eigenvalue, smooth (small-eigenvalue)
