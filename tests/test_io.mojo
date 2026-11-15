@@ -2,6 +2,7 @@ from std.testing import (
     TestSuite,
     assert_equal,
     assert_almost_equal,
+    assert_false,
     assert_raises,
     assert_true,
 )
@@ -23,7 +24,7 @@ from mojodec.routines.io.arrayio import (
     write_sparse,
 )
 from mojodec.routines.io.meshio import read_mesh, write_mesh
-from mojodec.routines.io.scan import ByteReader
+from mojodec.routines.io.scan import ByteReader, parse_numbers
 from mojodec.routines.io.text import loadtxt
 
 
@@ -261,8 +262,8 @@ def _next(mut state: UInt64) -> Int:
 
 def test_scan_numbers_match_atof() raises:
     # tokens on both sides of the one-pass float path's limits (19
-    # significant digits, a significand of 2^53, powers 10^±22), parsed
-    # by ByteReader and by atof, bit for bit
+    # digits, a significand of 2^53, powers 10^±22), parsed by ByteReader
+    # and by atof, bit for bit
     var tokens: List[String] = [
         "9007199254740992",
         "9007199254740993",
@@ -277,6 +278,7 @@ def test_scan_numbers_match_atof() raises:
         "0.00000000000000000000000001",
         "000000000000000000000012.5",
         "-0.0",
+        "-0",
         "+.5e1",
         "1.",
         ".5",
@@ -286,6 +288,8 @@ def test_scan_numbers_match_atof() raises:
         "1e0005",
         "1e400",
         "4.9e-324",
+        "-0e-400",
+        "0.000e999",
     ]
     var state: UInt64 = 7
     for _ in range(20000):
@@ -309,7 +313,7 @@ def test_scan_numbers_match_atof() raises:
         assert_equal(
             bitcast[DType.uint64](x), bitcast[DType.uint64](y), String(t)
         )
-    # integers: signs, 18 digits (one pass), 19 digits (atol)
+    # integers: signs, 15 digits (one pass), 18 and 19 digits
     var ints: List[Int] = [0, -0, 7, -42, 999999999999999999, -(10**18) - 3]
     var itext = String("+5 ")
     for v in ints:
@@ -322,6 +326,93 @@ def test_scan_numbers_match_atof() raises:
         var rb = ByteReader(List[Byte](String(bad).as_bytes()), "test")
         with assert_raises(contains="not a"):
             _ = rb.float_() if bad != "12abc" else Float64(rb.int_())
+
+
+def _tokens_text(tokens: List[String], mut state: UInt64) -> List[Byte]:
+    """The tokens, separated by varied white space, then `$End`."""
+    var seps: List[String] = [" ", "\n", "\t", "\r\n", "  \n"]
+    var text = String()
+    for t in tokens:
+        text += t + seps[_next(state) % len(seps)]
+    text += "$End"
+    return List[Byte](text.as_bytes())
+
+
+def test_parse_numbers_match_reader() raises:
+    # the parallel parse gives ByteReader's values bit for bit, however
+    # the text is split into chunks (here every core's chunk is a few
+    # bytes for the short prefixes)
+    var tokens: List[String] = [
+        "-0",
+        "+0",
+        "-0.0",
+        "+5",
+        "-42",
+        "1.",
+        ".5",
+        "1e+5",
+        "1E5",
+        "1e400",
+        "-0e-400",
+        "0.9123456789012345",
+        "123456789012345",
+        "9007199254740992",
+        "-9007199254740992",
+        "1234567890123456789e-3",
+        "1e0005",
+    ]
+    var state: UInt64 = 11
+    for _ in range(5000):
+        var digits = 1 + _next(state) % 20
+        var t = String("-") if _next(state) % 2 == 1 else String()
+        var point = _next(state) % (digits + 2)
+        for k in range(digits):
+            if k == point:
+                t += "."
+            t += String(_next(state) % 10)
+        if _next(state) % 3 == 1 or (point >= digits and digits > 15):
+            # (integers past 2^53 are left to the reader: tested below)
+            t += String("e", _next(state) % 61 - 30)
+        tokens.append(t)
+    for count in [1, 2, 3, 5, 8, 13, 40, len(tokens)]:
+        var some = List[String](tokens[:count])
+        var data = _tokens_text(some, state)
+        var end = len(data) - 4
+        var o = parse_numbers(ByteReader(data.copy(), "test"), 0, end, 0)
+        assert_true(Bool(o), String(count))
+        var parsed = o.take()
+        assert_equal(len(parsed.values), count)
+        var r = ByteReader(data^, "test")
+        for t in some:
+            assert_equal(
+                bitcast[DType.uint64](parsed.float_()),
+                bitcast[DType.uint64](r.float_()),
+                t,
+            )
+    # integers, keeping the last 2 of each row of 3
+    var ints: List[String] = ["7", "-0", "+5", "-42", "999999999999999", "0"]
+    var data = _tokens_text(ints, state)
+    var o = parse_numbers(ByteReader(data.copy(), "test"), 0, len(data) - 4, 0)
+    var parsed = o.take()
+    var kept = List[Int]()
+    parsed.ints(kept, 2, 1, 2)
+    assert_true(kept == [-0, 5, 999999999999999, 0])
+    # tokens left to the reader, a token running into the end, and
+    # stretches below the threshold give None
+    # (subnormals too: the pool's threads flush them to zero)
+    for bad in [
+        "1 2 abc 3 ",
+        "1 4.9e-324 2 ",
+        "1 99999999999999999999 2 ",
+        "1 9007199254740993 2 ",
+        "1 2 0x10 ",
+        "1 2 3",
+    ]:
+        var b = List[Byte]((String(bad) + "$End").as_bytes())
+        var n = len(b) - 4
+        assert_false(Bool(parse_numbers(ByteReader(b^, "test"), 0, n, 0)), bad)
+    var b = List[Byte](String("1 2 3 $End").as_bytes())
+    assert_false(Bool(parse_numbers(ByteReader(b^, "test"), 0, 6, 7)))
 
 
 def test_mesh_roundtrip() raises:

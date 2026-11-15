@@ -340,7 +340,18 @@ plan). Key design points that span several files:
   `max_dim`). `ByteReader` reads the file with its size given (8x faster
   than reading to the end) and parses numbers in one pass, decimals by
   Clinger's exact fast path with `atof` for the rest; keep parsed values
-  equal to `atof`'s bit for bit (`tests/test_io.mojo` checks). VTK ASCII output raises on NaN
+  equal to `atof`'s bit for bit (`tests/test_io.mojo` checks). A loop per
+  digit beat SWAR (8 digits a word): each token's start waits on the
+  last one's length, and SWAR's chain is longer. Indexing a SIMD
+  constant at run time spills it to the stack on every use; `_pow10`
+  builds powers by selects instead. `read_gmsh` parses ASCII `$Nodes`
+  and `$Elements` sections of 256 KB or more with `parse_numbers`
+  (chunks per core: count tokens by SIMD masks, then parse into one
+  array), and the section readers take the numbers from it
+  (`_Cursor.tokenized`; bulk `ints`/`floats`); any token the serial
+  reader might read differently makes it None, and any error reruns the
+  section serially, so results and messages are the serial reader's
+  (`test_parallel_parse_agrees` checks with the threshold at 0). VTK ASCII output raises on NaN
   and infinity, which VTK's text reader cannot parse.
   The Gmsh fixtures in `tests/meshes/gmsh/` are generated from the `.geo`
   files there: `pixi exec --spec gmsh gmsh -2 square.geo -format msh41
@@ -361,7 +372,11 @@ at 4096 top simplices (element loop and row assembly), dual volumes at
 everything serially, for single-threaded benchmarks). Bodies must not
 raise: record failures per chunk and raise afterwards. Keep a hot serial loop out of a function that also
 holds the parallel branch (`CSRMatrix._matvec_parallel` is separate): in
-the same function the serial loop ran about 15% slower. Loops that sum
+the same function the serial loop ran about 15% slower. The pool's threads flush
+subnormals to zero, inputs and results (FTZ and DAZ; the calling thread
+does not), so a parallel loop matches the serial one only away from
+subnormals (`parse_numbers` leaves `atof` results under 1e-307 to the
+serial reader). Loops that sum
 into shared entries stay bit for bit serial by ownership: each chunk owns
 a block of outputs and adds only to those, in the serial order (dual
 volumes: faces by first vertex id, which can exceed the number of

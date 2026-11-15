@@ -57,11 +57,14 @@ from mojodec.core.utils import (
     rows_of,
     sort_each_row,
 )
-from mojodec.routines.io.scan import ByteReader
+from mojodec.routines.io.scan import ByteReader, NumberTokens, parse_numbers
 from mojodec.routines.mesh_generation import (
     _numbering_spread,
     reorder_vertices as _reorder_mesh,
 )
+
+comptime _PARALLEL_BYTES = 1 << 18
+"""ASCII sections of this many bytes or more are parsed in parallel."""
 
 comptime _DENSE = 4
 """Node tags are looked up in a table when they span less than this many
@@ -772,7 +775,10 @@ struct _Raw(Movable):
         return ""
 
 
-def _parse(path: String) raises -> _Raw:
+def _parse(path: String, parallel_bytes: Int = _PARALLEL_BYTES) raises -> _Raw:
+    """The file's sections; ASCII `$Nodes` and `$Elements` sections of
+    `parallel_bytes` or more are parsed ahead in parallel (tests lower it
+    to check that path on small files)."""
     var cur = _Cursor(ByteReader.open(path, "read_gmsh", " in " + path))
     var raw = _Raw()
     var version = 0
@@ -811,16 +817,16 @@ def _parse(path: String) raises -> _Raw:
             raise cur.err("$" + section + " before $MeshFormat")
         elif section == "Entities" and version == 4:
             _read_entities(cur, entity_tags, entity_phys)
-        elif section == "Nodes":
-            if version == 4:
-                _read_nodes_v4(cur, raw)
-            else:
-                _read_nodes_v2(cur, raw)
-        elif section == "Elements":
-            if version == 4:
-                _read_elements_v4(cur, raw, entity_tags, entity_phys)
-            else:
-                _read_elements_v2(cur, raw)
+        elif section == "Nodes" or section == "Elements":
+            _read_section(
+                cur,
+                raw,
+                section,
+                version,
+                entity_tags,
+                entity_phys,
+                parallel_bytes,
+            )
         else:
             cur.skip_section(section)
             continue
@@ -828,6 +834,61 @@ def _parse(path: String) raises -> _Raw:
     if version == 0:
         raise cur.err("no $MeshFormat section")
     return raw^
+
+
+def _read_section(
+    mut cur: _Cursor,
+    mut raw: _Raw,
+    section: String,
+    version: Int,
+    entity_tags: List[List[Int]],
+    entity_phys: List[List[List[Int]]],
+    parallel_bytes: Int,
+) raises:
+    """Read a `$Nodes` or `$Elements` section, a large ASCII one from
+    numbers parsed ahead, in parallel. Errors are the serial reader's."""
+    var start = cur.r.pos
+    var end = -1 if cur.binary else cur.tokenize(parallel_bytes)
+    if end < 0:
+        _read_section_body(cur, raw, section, version, entity_tags, entity_phys)
+        return
+    try:
+        _read_section_body(cur, raw, section, version, entity_tags, entity_phys)
+    except e:
+        # the serial reader raises too, naming the token
+        cur.untokenize()
+        cur.r.pos = start
+        _read_section_body(cur, raw, section, version, entity_tags, entity_phys)
+        raise e^
+    var used = cur.tokens.next
+    var left = not cur.tokens.done()
+    cur.untokenize()
+    if left:
+        # numbers the section does not use: the serial reader would stop
+        # before them, and the $End line check fails there
+        cur.r.pos = start
+        cur.r.skip_tokens(used)
+    else:
+        cur.r.pos = end
+
+
+def _read_section_body(
+    mut cur: _Cursor,
+    mut raw: _Raw,
+    section: String,
+    version: Int,
+    entity_tags: List[List[Int]],
+    entity_phys: List[List[List[Int]]],
+) raises:
+    if section == "Nodes":
+        if version == 4:
+            _read_nodes_v4(cur, raw)
+        else:
+            _read_nodes_v2(cur, raw)
+    elif version == 4:
+        _read_elements_v4(cur, raw, entity_tags, entity_phys)
+    else:
+        _read_elements_v2(cur, raw)
 
 
 def _read_entities(
@@ -879,8 +940,10 @@ def _read_nodes_v4(mut cur: _Cursor, mut raw: _Raw) raises:
                     raw.coords.append(xyz.unsafe_get(i))
                 continue
         else:
-            for _ in range(n):
-                raw.node_tags.append(cur.size_t())
+            cur.ints(raw.node_tags, n, 0, 1)
+            if parametric == 0:
+                cur.floats(raw.coords, 3 * n)
+                continue
         for _ in range(n):
             for _ in range(3):
                 raw.coords.append(cur.f64())
@@ -936,10 +999,8 @@ def _read_elements_v4(
                         Int(rows.unsafe_get(e * (nn + 1) + 1 + j))
                     )
         else:
-            for _ in range(n):
-                _ = cur.size_t()
-                for _ in range(nn):
-                    block.nodes.append(cur.size_t())
+            # each element is its tag and its nodes
+            cur.ints(block.nodes, n, 1, nn)
         raw.blocks.append(block^)
 
 
@@ -984,6 +1045,9 @@ def _read_elements_v2(mut cur: _Cursor, mut raw: _Raw) raises:
                         )
             done += count
         return
+    if cur.tokenized:
+        _elements_v2_from_tokens(cur, raw, n)
+        return
     for _ in range(n):
         _ = cur.int_()
         var type = cur.int_()
@@ -997,6 +1061,52 @@ def _read_elements_v2(mut cur: _Cursor, mut raw: _Raw) raises:
         var b = _block_v2(raw, type, phys)
         for _ in range(nn):
             raw.blocks[b].nodes.append(cur.int_())
+
+
+def _elements_v2_from_tokens(mut cur: _Cursor, mut raw: _Raw, n: Int) raises:
+    """`_read_elements_v2`'s ASCII loop over parsed numbers, a run of
+    elements of one type and physical tag at a time."""
+    if not cur.tokens.rest_are_ints():
+        raise cur.err("not an integer")
+    var vp = cur.tokens.values.unsafe_ptr()
+    var T = len(cur.tokens.values)
+    var t = cur.tokens.next
+    var e = 0
+    while e < n:
+        # each element is its number, type, tag count, tags, and nodes
+        if t + 3 > T:
+            raise cur.err("file ends early")
+        var type = Int(Int64(vp[unsafe_offset=t + 1]))
+        var num_tags = Int(Int64(vp[unsafe_offset=t + 2]))
+        var tags = max(num_tags, 0)
+        var nn = _nodes_per_element(type)
+        var w = 3 + tags + nn
+        if t + w > T:
+            raise cur.err("file ends early")
+        var phys = Int(Int64(vp[unsafe_offset=t + 3])) if tags > 0 else 0
+        var first = t
+        var count = 0
+        while e < n and t + w <= T:
+            if (
+                Int(Int64(vp[unsafe_offset=t + 1])) != type
+                or Int(Int64(vp[unsafe_offset=t + 2])) != num_tags
+                or (tags > 0 and Int(Int64(vp[unsafe_offset=t + 3])) != phys)
+            ):
+                break
+            t += w
+            e += 1
+            count += 1
+        var b = _block_v2(raw, type, phys)
+        ref nodes = raw.blocks[b].nodes
+        var size = len(nodes) + count * nn
+        if size > nodes.capacity():
+            # doubling, so that alternating runs are not quadratic
+            nodes.reserve(max(size, 2 * nodes.capacity()))
+        for r in range(count):
+            var at = first + r * w + 3 + tags
+            for j in range(nn):
+                nodes.append(Int(Int64(vp[unsafe_offset=at + j])))
+    cur.tokens.next = t
 
 
 def _block_v2(mut raw: _Raw, type: Int, phys: Int) raises -> Int:
@@ -1058,10 +1168,40 @@ struct _Cursor(Movable):
 
     var r: ByteReader
     var binary: Bool
+    var tokens: NumberTokens
+    """A section's numbers, parsed ahead in parallel (see `tokenize`)."""
+    var tokenized: Bool
+    """Whether numbers come from `tokens` rather than `r`."""
 
     def __init__(out self, var r: ByteReader):
         self.r = r^
         self.binary = False
+        self.tokens = NumberTokens()
+        self.tokenized = False
+
+    def tokenize(mut self, parallel_bytes: Int) -> Int:
+        """Parse the numbers up to the next `$` in parallel, for the next
+        reads to take; returns the offset of the `$`, or -1 (and reads go
+        on from the text) when the stretch is small, has no `$`, or holds
+        a token for the serial reader to judge."""
+        if len(self.r.data) - self.r.pos < parallel_bytes:
+            return -1
+        var rest = StringSlice(unsafe_from_utf8=Span(self.r.data)[self.r.pos :])
+        var at = rest.find("$")
+        if at < 0:
+            return -1
+        var end = self.r.pos + at
+        var t = parse_numbers(self.r, self.r.pos, end, parallel_bytes)
+        if not t:
+            return -1
+        self.tokens = t.take()
+        self.tokenized = True
+        return end
+
+    def untokenize(mut self):
+        """Go back to reading the text, freeing the parsed numbers."""
+        self.tokens = NumberTokens()
+        self.tokenized = False
 
     def err(self, message: String) -> Error:
         return self.r.err(message)
@@ -1133,21 +1273,51 @@ struct _Cursor(Movable):
         self.r.pos += 1
         return String(unsafe_from_utf8=Span(data)[start : self.r.pos - 1])
 
+    def ints(
+        mut self, mut out: List[Int], rows: Int, skip: Int, keep: Int
+    ) raises:
+        """Read `rows` rows of `skip + keep` ASCII integers, appending the
+        last `keep` of each row to `out`."""
+        if self.tokenized:
+            self.tokens.ints(out, rows, skip, keep)
+            return
+        for _ in range(rows):
+            for _ in range(skip):
+                _ = self.r.int_()
+            for _ in range(keep):
+                out.append(self.r.int_())
+
+    def floats(mut self, mut out: List[Float64], count: Int) raises:
+        """Read `count` ASCII numbers, appending them to `out`."""
+        if self.tokenized:
+            self.tokens.floats(out, count)
+            return
+        for _ in range(count):
+            out.append(self.r.float_())
+
+    @always_inline
     def int_(mut self) raises -> Int:
         """An ASCII integer, even in a binary file (counts, names)."""
+        if self.tokenized:
+            return self.tokens.int_()
         return self.r.int_()
 
+    @always_inline
     def i32(mut self) raises -> Int:
         if not self.binary:
-            return self.r.int_()
+            return self.int_()
         return Int(self.r.binary[DType.int32]())
 
+    @always_inline
     def size_t(mut self) raises -> Int:
         if not self.binary:
-            return self.r.int_()
+            return self.int_()
         return Int(self.r.binary[DType.uint64]())
 
+    @always_inline
     def f64(mut self) raises -> Float64:
         if not self.binary:
+            if self.tokenized:
+                return self.tokens.float_()
             return self.r.float_()
         return self.r.binary[DType.float64]()

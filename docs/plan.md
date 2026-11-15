@@ -131,12 +131,12 @@ all cores.
 - **`reorder_vertices`** (20 / 13 ms on `tet_40`, from 24 / 22; see
   [performance](guide/performance.md#reordering-in-parallel)): the
   radix sort of the Morton codes is serial, 2–4 ms.
-- **`read_gmsh`** (95 ms for a 480k-triangle ASCII file, 48 binary,
-  from 490 and 410; see
-  [performance](guide/performance.md#reading-gmsh-files)): parsing the
-  text takes about 55 ms and the duplicate check 15–20. Tags that span
-  more than 4 times their number are still bisected, about 170 ms on a
-  438k-tetrahedron file.
+- **`read_gmsh`** (53 ms for a 480k-triangle ASCII file on all cores,
+  98 on one thread, 43 binary; see
+  [performance](guide/performance.md#parsing-ascii-in-parallel)): the
+  duplicate check takes 15–20 ms, parsing 19, the numbering warning's
+  measure about 9, numbering 9. Tags that span more than 4 times their
+  number are still bisected, about 170 ms on a 438k-tetrahedron file.
 
 ## Memory
 

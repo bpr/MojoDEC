@@ -1072,7 +1072,65 @@ files: the test fixtures, the meshes above at several sizes, and
 versions of the 2.2 box and cube with their tags shuffled or made
 sparse (each tag t written as 1000 t + 7).
 
-**What is left.** In the 480k-element square, ASCII: parsing about 55
-ms, the duplicate check 15–20 ms (a lexicographic sort of the rows,
-needed only for format 2.2's repeats), and numbering the vertices 9 ms.
-Sparse tags still take about 170 ms of bisection.
+### Parsing ASCII in parallel
+
+Parsing was then the largest step: 57 ms of the square's 95, 43 of the
+4.1 box's 79, and 79 of the 2.2 box's 117. Each number was read by a
+call on the shared reader: about 14 ns per number in `$Elements` and 26
+in `$Nodes` (half of them decimals), on one thread.
+
+- **Large sections are parsed ahead.** An ASCII `$Nodes` or `$Elements`
+  section of 256 KB or more (up to the `$` that ends it) is cut into one
+  chunk per core at white space. Each chunk counts its tokens, 32 bytes
+  at a time by SIMD masks (1 ms for 13 MB, from 20 by a loop per byte),
+  and then parses them into one array of values and kinds (integer,
+  decimal, `-0`). The section readers take their numbers from the array,
+  in bulk where they can (a block of node tags, coordinates, element
+  rows; format 2.2's elements a run of one type and tag at a time).
+- **Results and errors stay the serial reader's.** A token the serial
+  reader might read differently (an integer past 2^53, text that is not
+  a decimal) leaves the section to it. So does a subnormal: the thread
+  pool's workers flush subnormals to zero, so `atof` there gives 0. Any
+  error reruns the section serially, which raises the same message as
+  before. A test parses the fixtures and malformed texts both ways with
+  the threshold at 0, in chunks of a few bytes.
+- **On one thread too.** Parsing ahead is faster than a call per number
+  even serially, so large sections always take it.
+- **What did not help.** Reading 8 digits at a time (SWAR) made decimals
+  slower: each token's start waits on the length of the one before, and
+  SWAR's chain of dependent operations is longer than a loop per digit.
+  Indexing a SIMD constant (the powers of ten) at run time stored it to
+  the stack on every use; the powers are now built from selects.
+
+Parsing then takes, in ms:
+
+| File | before (serial) | after, all cores (one thread) |
+|---|---:|---:|
+| square, ASCII 4.1 | 57 | 19 (55) |
+| box, ASCII 4.1 | 43 | 10.5 (37) |
+| box, ASCII 2.2 | 79 | 17 (53) |
+
+`read_gmsh`, best of 5 runs, in three rounds alternating with the
+committed build (`f602df1`; the last round shown), in ms:
+
+| File | 1 thread | all cores |
+|---|---:|---:|
+| square, ASCII 4.1 | 101 → 98 | 95 → 53 |
+| square, binary 4.1 | 54 → 53 | 44 → 43 |
+| plate, ASCII 4.1 | 51 → 48 | 49 → 28.5 |
+| box, ASCII 4.1 | 83 → 80 | 79 → 49 |
+| box, binary 4.1 | 51.5 → 51 | 42 → 44 |
+| box, ASCII 2.2 | 121 → 98 | 117 → 55 |
+| inclusions, ASCII 4.1 | 64 → 62 | 61 → 38 |
+| box, ASCII 2.2, sparse tags | 283 → 263 | 283 → 220 |
+
+The same 36 files read the same, on all cores and on one thread, and so
+do 42 versions of the square and both boxes rewritten with CRLF, tabs,
+`-0`, exponents, 17 significant digits, and malformed numbers (giving
+the committed build's error messages).
+
+**What is left.** In the 480k-element square, ASCII, on all cores: the
+duplicate check 15–20 ms (a lexicographic sort of the rows, needed only
+for format 2.2's repeats), parsing 19, the numbering warning's measure
+about 9, and numbering the vertices 9. Sparse tags still take about 170
+ms of bisection.

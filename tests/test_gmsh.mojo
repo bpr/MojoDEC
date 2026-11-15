@@ -18,7 +18,9 @@ from mojodec import (
     read_gmsh,
 )
 from mojodec.core.utils import cols_of, fget, iget, row_list, rows_of
-from mojodec.routines.io.gmsh import _numbering_warning
+from std.memory import bitcast
+
+from mojodec.routines.io.gmsh import _Raw, _numbering_warning, _parse
 
 # Fixtures: tests/meshes/gmsh/*.geo, meshed by Gmsh 4.15 in each format.
 comptime DIR = "tests/meshes/gmsh/"
@@ -335,6 +337,75 @@ def test_large_node_tags() raises:
     assert_equal(len(m.node_tags), 3)
     assert_equal(m.node_tags[0], 100000000000000)
     assert_equal(fget(m.vertices, 2, 1), 1.0)
+
+
+def _digest(raw: _Raw) -> List[Int]:
+    """Everything `_parse` read, as integers (coordinates by their bits)."""
+    var out = List[Int]()
+    out.append(len(raw.node_tags))
+    out.extend(raw.node_tags.copy())
+    for x in raw.coords:
+        out.append(Int(bitcast[DType.int64](x)))
+    for ref b in raw.blocks:
+        out.append(b.type)
+        out.append(len(b.physical))
+        out.extend(b.physical.copy())
+        out.append(len(b.nodes))
+        out.extend(b.nodes.copy())
+    return out^
+
+
+def _parse_both(path: String) raises -> List[String]:
+    """`_parse` serially and from numbers parsed ahead (with the
+    threshold at 0, in chunks of a few bytes): each one's digest, or its
+    error."""
+    var out = List[String]()
+    for parallel_bytes in [Int.MAX, 0]:
+        try:
+            out.append(String(_digest(_parse(path, parallel_bytes))))
+        except e:
+            out.append(String("error: ", e))
+    return out^
+
+
+def test_parallel_parse_agrees() raises:
+    # large ASCII sections are parsed ahead, in parallel; the result, and
+    # any error, must be the serial reader's
+    for name in [
+        "square_v41",
+        "square_v22",
+        "cube_v41",
+        "cube_v22",
+        "square_edges_only",
+        "square_v41_bin",
+        "cube_v22_bin",
+    ]:
+        var r = _parse_both(DIR + name + ".msh")
+        assert_equal(r[0], r[1], name)
+        assert_false(r[0].startswith("error"), name)
+    var tags: List[Int] = [2, 5, 7, 9]
+    var good = _two_triangles(tags, 2)
+    # signs, -0, exponents, tabs and CRLF, a tag past 2^53 (left to the
+    # serial reader); then malformed numbers: a fraction where an integer
+    # goes, text, a number missing, one too many, a section left open
+    var texts: List[String] = [
+        good,
+        good.replace(" 0 0 0\n", " -0 0.0e0 -0.\n").replace("\n5 ", "\n+5 "),
+        good.replace(" 1 1 0\n", " 1.0e+00\t1E0 0\r\n"),
+        good.replace("9 1 1 0", "9007199254740993 1 1 0"),
+        good.replace("2 2 0 5 9 7", "2 2 0 5.0 9 7"),
+        good.replace("2 2 0 5 9 7", "2 2 0 5 9 seven"),
+        good.replace("2 2 0 5 9 7", "2 2 0 5 9"),
+        good.replace("2 2 0 5 9 7", "2 2 0 5 9 7 7"),
+        good.replace("\n7 0 1 0", "\n7 0 1 0 1"),
+        good.replace("$EndElements\n", ""),
+    ]
+    for i in range(len(texts)):
+        assert_true(i == 0 or texts[i] != good, String("text ", i))
+        _write(texts[i])
+        var r = _parse_both(TMP)
+        assert_equal(r[0], r[1], String("text ", i))
+        assert_equal(r[0].startswith("error"), i >= 4, String("text ", i))
 
 
 def main() raises:
