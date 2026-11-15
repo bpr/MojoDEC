@@ -23,6 +23,7 @@ from mojodec.routines.io.arrayio import (
     write_sparse,
 )
 from mojodec.routines.io.meshio import read_mesh, write_mesh
+from mojodec.routines.io.scan import ByteReader
 from mojodec.routines.io.text import loadtxt
 
 
@@ -251,6 +252,76 @@ def test_text_floats_roundtrip_exactly() raises:
         var b = read_array(TMP)
         for i in range(len(values)):
             assert_equal(b.unsafe_get(i), values[i])
+
+
+def _next(mut state: UInt64) -> Int:
+    state = state * 6364136223846793005 + 1442695040888963407
+    return Int(state >> 33)
+
+
+def test_scan_numbers_match_atof() raises:
+    # tokens on both sides of the one-pass float path's limits (19
+    # significant digits, a significand of 2^53, powers 10^±22), parsed
+    # by ByteReader and by atof, bit for bit
+    var tokens: List[String] = [
+        "9007199254740992",
+        "9007199254740993",
+        "9007199254740993e-5",
+        "1e22",
+        "1e23",
+        "1e-22",
+        "1e-23",
+        "123456789012345678e-3",
+        "1234567890123456789",
+        "12345678901234567890",
+        "0.00000000000000000000000001",
+        "000000000000000000000012.5",
+        "-0.0",
+        "+.5e1",
+        "1.",
+        ".5",
+        "1e+5",
+        "0.3913043478260859",
+        "-9.999999994736442e-08",
+        "1e0005",
+        "1e400",
+        "4.9e-324",
+    ]
+    var state: UInt64 = 7
+    for _ in range(20000):
+        var digits = 1 + _next(state) % 20
+        var t = String("-") if _next(state) % 2 == 1 else String()
+        var point = _next(state) % (digits + 1)
+        for k in range(digits):
+            if k == point:
+                t += "."
+            t += String(_next(state) % 10)
+        if _next(state) % 2 == 1:
+            t += String("e", _next(state) % 61 - 30)
+        tokens.append(t)
+    var text = String()
+    for t in tokens:
+        text += t + "\n"
+    var r = ByteReader(List[Byte](text.as_bytes()), "test")
+    for t in tokens:
+        var x = r.float_()
+        var y = atof(t)
+        assert_equal(
+            bitcast[DType.uint64](x), bitcast[DType.uint64](y), String(t)
+        )
+    # integers: signs, 18 digits (one pass), 19 digits (atol)
+    var ints: List[Int] = [0, -0, 7, -42, 999999999999999999, -(10**18) - 3]
+    var itext = String("+5 ")
+    for v in ints:
+        itext += String(v, " ")
+    var ri = ByteReader(List[Byte](itext.as_bytes()), "test")
+    assert_equal(ri.int_(), 5)
+    for v in ints:
+        assert_equal(ri.int_(), v)
+    for bad in ["5e", "1.5x", "-", "12abc"]:
+        var rb = ByteReader(List[Byte](String(bad).as_bytes()), "test")
+        with assert_raises(contains="not a"):
+            _ = rb.float_() if bad != "12abc" else Float64(rb.int_())
 
 
 def test_mesh_roundtrip() raises:

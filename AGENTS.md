@@ -333,9 +333,14 @@ plan). Key design points that span several files:
   parsing, block copies of binary data); check a count read from a file
   against the bytes left before allocating for it, with
   `require_items(count, size)` rather than `require(count * size)`, which
-  can overflow. Never index a table by a number read from a file (Gmsh
-  node tags are sorted and searched), and bound sizes the file cannot
-  vouch for (`read_sparse`'s `max_dim`). VTK ASCII output raises on NaN
+  can overflow. Never index a table by a number read from a file unless
+  the table is bounded by the file's size (Gmsh node tags index a table
+  only when they span less than 4 times their number, and are bisected
+  otherwise), and bound sizes the file cannot vouch for (`read_sparse`'s
+  `max_dim`). `ByteReader` reads the file with its size given (8x faster
+  than reading to the end) and parses numbers in one pass, decimals by
+  Clinger's exact fast path with `atof` for the rest; keep parsed values
+  equal to `atof`'s bit for bit (`tests/test_io.mojo` checks). VTK ASCII output raises on NaN
   and infinity, which VTK's text reader cannot parse.
   The Gmsh fixtures in `tests/meshes/gmsh/` are generated from the `.geo`
   files there: `pixi exec --spec gmsh gmsh -2 square.geo -format msh41

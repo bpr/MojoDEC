@@ -1018,3 +1018,61 @@ cores.
 **What is left.** The radix sort (2–4 ms) and inverting the vertex
 permutation are serial. On `tet_40` with one thread the sort of the
 elements takes about 7 ms of the 20.
+
+## Reading Gmsh files
+
+`read_gmsh` took longer than building the complex it read: 400–500 ms
+for the Gmsh meshes of [vertex numbering](vertex-numbering.md#gmsh-meshes),
+ASCII or binary. On the 479k-triangle square (24 MB ASCII), in ms:
+looking up node tags 316, parsing 77 (nodes 41, elements 34), the file
+read 22, the duplicate check 19, and the coordinates 18 (another lookup
+per vertex). Three changes, with the same results:
+
+- **Node tags are looked up in a table.** Each element entry's tag was
+  found by bisection over the sorted tags, twice, and each vertex's once
+  more; at about 17 dependent reads into a table larger than L2, a
+  search took over 100 ns. Gmsh numbers nodes 1 to n, so when the tags
+  span less than 4 times their number they now index a table, whose
+  size is then bounded by the file's; other tags are still bisected.
+  Each entry is looked up once, and the duplicate check runs on the
+  positions found (small dense numbers, which `lexsort_rows`
+  bucket-sorts) instead of the tags. The lookups and numbering went
+  from 316 to 12 ms (3 of them lookups), and the coordinates from 18 to
+  1. A bisection without branches was no faster, being bound by the
+  memory reads.
+- **Numbers are parsed in one pass.** An integer is read as its digits
+  are scanned. A decimal with at most 19 significant digits, a
+  significand of at most 2^53, and a power of ten within 10^±22 is
+  exact as a double significand times an exact power of ten, so one
+  multiply or divide rounds it correctly (Clinger's fast path); 93% of
+  Gmsh's coordinates qualify, and the rest go to `atof` as before.
+  Nodes 41 → 27 ms, elements 34 → 28.
+- **The file is read with its size given:** `read_bytes(size)` takes
+  2.4 ms for 24 MB, against 20–40 ms for `read_bytes()`. All the file
+  readers share this and the parsing (`io/scan.mojo`).
+
+`read_gmsh`, best of 5 runs, in three rounds alternating with the
+committed build (`18532d4`; the last round shown), in ms:
+
+| File | elements | 1 thread | all cores |
+|---|---:|---:|---:|
+| square, ASCII 4.1 | 479k | 501 → 102 | 491 → 95 |
+| square, binary 4.1 | 479k | 419 → 53 | 408 → 48 |
+| plate, ASCII 4.1 | 269k | 233 → 51 | 231 → 53 |
+| box, ASCII 4.1 | 438k | 459 → 83 | 455 → 79 |
+| box, binary 4.1 | 438k | 409 → 51 | 396 → 47 |
+| box, ASCII 2.2 | 438k | 507 → 122 | 494 → 117 |
+| inclusions, ASCII 4.1 | 347k | 322 → 65 | 319 → 63 |
+| box, ASCII 2.2, sparse tags | 438k | 553 → 285 | 570 → 280 |
+
+The element counts are the tetrahedra or triangles; the files also hold
+the boundary's faces, edges, and points. The vertices, elements, node
+tags, and groups were checked against the committed build's on 36
+files: the test fixtures, the meshes above at several sizes, and
+versions of the 2.2 box and cube with their tags shuffled or made
+sparse (each tag t written as 1000 t + 7).
+
+**What is left.** In the 480k-element square, ASCII: parsing about 55
+ms, the duplicate check 15–20 ms (a lexicographic sort of the rows,
+needed only for format 2.2's repeats), and numbering the vertices 9 ms.
+Sparse tags still take about 170 ms of bisection.

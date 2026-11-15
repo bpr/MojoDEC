@@ -131,10 +131,12 @@ all cores.
 - **`reorder_vertices`** (20 / 13 ms on `tet_40`, from 24 / 22; see
   [performance](guide/performance.md#reordering-in-parallel)): the
   radix sort of the Morton codes is serial, 2–4 ms.
-- **`read_gmsh`** takes longer than building the complex it reads:
-  250–540 ms for ASCII files of 13–24 MB (270k–480k elements, made by
-  Gmsh 4.15), against 92–501 ms for the build on one thread. It is
-  serial and not profiled yet.
+- **`read_gmsh`** (95 ms for a 480k-triangle ASCII file, 48 binary,
+  from 490 and 410; see
+  [performance](guide/performance.md#reading-gmsh-files)): parsing the
+  text takes about 55 ms and the duplicate check 15–20. Tags that span
+  more than 4 times their number are still bisected, about 170 ms on a
+  438k-tetrahedron file.
 
 ## Memory
 

@@ -17,7 +17,7 @@ from mojodec import (
     kuhn_grid,
     read_gmsh,
 )
-from mojodec.core.utils import cols_of, fget, iget, rows_of
+from mojodec.core.utils import cols_of, fget, iget, row_list, rows_of
 from mojodec.routines.io.gmsh import _numbering_warning
 
 # Fixtures: tests/meshes/gmsh/*.geo, meshed by Gmsh 4.15 in each format.
@@ -285,6 +285,40 @@ def test_malformed() raises:
     assert_equal(cols_of(m.vertices), 3)
     assert_equal(iget(m.elements, 0, 0), 2)  # node 3, in file order
     assert_equal(len(m.groups), 0)
+
+
+def _two_triangles(tags: List[Int], corner: Int) -> String:
+    """Format 2.2: nodes tagged `tags` (at (0, 0), (1, 0), (0, 1), (1, 1)),
+    listed out of order, and two triangles; the first names `corner`
+    where it would name `tags[0]`."""
+    var t = String("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Nodes\n4\n")
+    t += String(tags[3], " 1 1 0\n", tags[0], " 0 0 0\n")
+    t += String(tags[2], " 0 1 0\n", tags[1], " 1 0 0\n")
+    t += "$EndNodes\n$Elements\n2\n"
+    t += String("1 2 0 ", corner, " ", tags[1], " ", tags[2], "\n")
+    t += String("2 2 0 ", tags[1], " ", tags[3], " ", tags[2], "\n")
+    return t + "$EndElements\n"
+
+
+def test_node_tag_gaps() raises:
+    # tags spanning less than 4x their number are looked up in a table
+    # (here with gaps), others by bisection; both number vertices in tag
+    # order and reject tags no node has
+    var cases: List[List[Int]] = [[2, 5, 7, 9], [2, 5000000, 7000000, 9000000]]
+    for ref tags in cases:
+        _write(_two_triangles(tags, tags[0]))
+        var m = read_gmsh(TMP)
+        assert_true(m.node_tags == tags)
+        assert_true(row_list(m.elements, 0) == [0, 1, 2])
+        assert_true(row_list(m.elements, 1) == [1, 3, 2])
+        assert_equal(fget(m.vertices, 3, 0), 1.0)
+        assert_equal(fget(m.vertices, 3, 1), 1.0)
+        for missing in [tags[1] - 1, 1, tags[3] + 1, 0]:
+            _write(_two_triangles(tags, missing))
+            with assert_raises(
+                contains=String("element uses unknown node ", missing)
+            ):
+                _ = read_gmsh(TMP)
 
 
 def test_large_node_tags() raises:

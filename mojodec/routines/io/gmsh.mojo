@@ -63,6 +63,9 @@ from mojodec.routines.mesh_generation import (
     reorder_vertices as _reorder_mesh,
 )
 
+comptime _DENSE = 4
+"""Node tags are looked up in a table when they span less than this many
+times their number."""
 comptime _WARN_MIN_ELEMENTS = 50_000
 """`read_gmsh` checks the numbering of meshes with this many elements or
 more; smaller ones build in a few ms whatever their numbering."""
@@ -516,40 +519,44 @@ def read_gmsh(
             )
         )
     var w = top + 1
-    # the top elements, as node tags, without the repeats that format 2.2
-    # writes for elements in several physical groups
-    var tagged = List[Int]()
+    # each node of the top elements, as its position among the sorted
+    # tags (a repeated tag: its first); tags can be large and sparse, so
+    # they are looked up, not used as indices
+    var nodes = _TagIndex(raw.node_tags)
+    var ats = List[Int]()
     for ref b in raw.blocks:
         if b.dim == top:
-            tagged.extend(Span(b.nodes))
-    var rows = _unique_rows(tagged, w)
-    # number the nodes of the top elements in tag order; tags can be large
-    # and sparse, so they are sorted and searched, not used as indices
-    var nodes = _TagIndex(raw.node_tags)
+            ats.reserve(len(ats) + len(b.nodes))
+            for t in b.nodes:
+                var at = nodes.find(t)
+                if at < 0:
+                    raise Error(
+                        String("read_gmsh: element uses unknown node ", t)
+                    )
+                ats.append(at)
+    # without the repeats that format 2.2 writes for elements in several
+    # physical groups (equal positions are equal tags)
+    var rows = _unique_rows(ats, w)
+    # number the nodes of the top elements in tag order
     for r in rows:
         for j in range(w):
-            var t = tagged.unsafe_get(r * w + j)
-            var at = nodes.find(t)
-            if at < 0:
-                raise Error(String("read_gmsh: element uses unknown node ", t))
-            nodes.vertex.unsafe_set(at, 0)
+            nodes.vertex.unsafe_set(ats.unsafe_get(r * w + j), 0)
     var node_tags = List[Int]()
+    var slots = List[Int]()
     for at in range(len(nodes.tags)):
         if nodes.vertex.unsafe_get(at) == 0:
             nodes.vertex.unsafe_set(at, len(node_tags))
             node_tags.append(nodes.tags.unsafe_get(at))
+            slots.append(nodes.slot.unsafe_get(at))
     var elements = int_array(len(rows), w)
     for i in range(len(rows)):
         var r = rows.unsafe_get(i)
         for j in range(w):
-            var at = nodes.find(tagged.unsafe_get(r * w + j))
+            var at = ats.unsafe_get(r * w + j)
             elements.unsafe_set(
                 i * w + j, Scalar[DType.int](nodes.vertex.unsafe_get(at))
             )
     # coordinates, from the first node with each tag
-    var slots = List[Int](capacity=len(node_tags))
-    for t in node_tags:
-        slots.append(nodes.slot.unsafe_get(nodes.find(t)))
     var flat = True
     for at in slots:
         if raw.coords.unsafe_get(3 * at + 2) != 0:
@@ -687,7 +694,9 @@ struct _Name(Copyable, Movable):
 
 
 struct _TagIndex(Movable):
-    """The node tags of a file in increasing order, searched by bisection."""
+    """The node tags of a file in increasing order, looked up in a table
+    when they are dense (Gmsh numbers nodes 1 to n) and by bisection
+    otherwise."""
 
     var tags: List[Int]
     """The tags, sorted (stably, so a repeated tag finds its first node)."""
@@ -695,6 +704,12 @@ struct _TagIndex(Movable):
     """The position of each tag's node in the file."""
     var vertex: List[Int]
     """Per tag: its vertex number, 0 while marked used, or -1."""
+    var lo: Int
+    """The smallest tag."""
+    var table: List[Int]
+    """`table[t - lo]`: the first position of tag `t`, or -1; empty when
+    the tags span more than `_DENSE` times their number, so its size is
+    bounded by the file's."""
 
     def __init__(out self, file_tags: List[Int]) raises:
         var n = len(file_tags)
@@ -709,9 +724,21 @@ struct _TagIndex(Movable):
         for i in self.slot:
             self.tags.append(file_tags.unsafe_get(i))
         self.vertex = List[Int](length=n, fill=-1)
+        self.lo = self.tags[0] if n > 0 else 0
+        self.table = List[Int]()
+        if n > 0 and self.tags[n - 1] - self.lo < _DENSE * n:
+            self.table = List[Int](
+                length=self.tags[n - 1] - self.lo + 1, fill=-1
+            )
+            for at in range(n - 1, -1, -1):
+                self.table.unsafe_set(self.tags.unsafe_get(at) - self.lo, at)
 
     def find(self, t: Int) -> Int:
         """The first position of tag `t`, or -1."""
+        if self.table:
+            if t < self.lo or t - self.lo >= len(self.table):
+                return -1
+            return self.table.unsafe_get(t - self.lo)
         var lo = 0
         var hi = len(self.tags)
         while lo < hi:
