@@ -1192,7 +1192,41 @@ rows on random rows with about a third repeated: rows of 1 to 4
 entries, spans up to 2^22 (past the packing), fans with one shared vertex, and
 120,000 rows (in parallel).
 
+### Measuring the numbering
+
+`read_gmsh` measures `numbering_spread` of meshes of 50,000 elements or
+more, to warn about scattered numbering (the tables above pass
+`warn=False`, so leave it out). The measure took 6.4 ms on the square
+and 7.5 on the box, on any number of threads: a 64-bit division per
+entry (`v * 16 // nv`), 4.5 ns each.
+
+- **Blocks from a table.** Vertex v is in block k or a later one when
+  16 v >= k nv, that is when v >= ceil(k nv / 16). One byte per vertex,
+  filled from those bounds, gives exactly the division's block.
+- **In parallel.** Each chunk of elements sums its counts (integers, so
+  the spread is the same), and records its first element naming a
+  vertex that does not exist, so the error names the first in order.
+
+The measure takes 0.52 ms on the square and 0.57 on the box (1.6 and
+1.5 on one thread), with the same spread on the 36 files. A test
+compares it with the division on 120,000 random elements, for 5, 16,
+and 100,003 vertices, with vertices at the blocks' bounds.
+
+`read_gmsh` with its default `warn=True`, against `b40717f`, median of
+three alternating rounds, in ms:
+
+| File | 1 thread | all cores |
+|---|---:|---:|
+| square, ASCII 4.1 | 87 → 84 | 44 → 39 |
+| square, binary 4.1 | 44 → 39.5 | 34.5 → 30.5 |
+| plate, ASCII 4.1 | 44 → 41 | 24 → 20.5 |
+| box, ASCII 4.1 | 66.5 → 60 | 38 → 31.5 |
+| box, binary 4.1 | 35 → 31 | 34 → 27 |
+| box, ASCII 2.2 | 83 → 78 | 48 → 40 |
+| inclusions, ASCII 4.1 | 53 → 48 | 30.5 → 25 |
+| box, ASCII 2.2, sparse tags | 248 → 240 | 206 → 201 |
+
 **What is left.** In the 480k-element square, ASCII, on all cores:
-parsing 19 ms, the numbering warning's measure about 9, numbering the
-vertices 9, and the duplicate check 3. Sparse tags still take about 170
-ms of bisection.
+parsing 19 ms, numbering the vertices 9, the duplicate check 3, and the
+numbering measure 0.5. Sparse tags still take about 170 ms of
+bisection.

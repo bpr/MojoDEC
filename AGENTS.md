@@ -416,7 +416,10 @@ loses locality; `reorder_vertices` (`routines/mesh_generation.mojo`:
 Morton order by a radix sort of the codes, which are computed in
 parallel; elements sorted by their sorted rows, orientations kept)
 restores it (see `docs/guide/vertex-numbering.md`). `numbering_spread`
-measures a numbering (blocks per element, 16 blocks), and `read_gmsh`
+measures a numbering (blocks per element, 16 blocks; in parallel, each
+vertex's block from a byte table filled from the bounds ceil(k nv / 16),
+which equals `v * 16 // nv` exactly; a 64-bit division per entry was
+4.5 ns), and `read_gmsh`
 prints a warning to stderr for 50k+ elements above 1.9 (Gmsh's own
 numbering is 2.1–3.6; `warn=False` silences it, and tests check the
 message through `_numbering_warning`). It must not run

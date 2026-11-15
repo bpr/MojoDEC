@@ -6,6 +6,7 @@ from std.testing import (
     assert_false,
     assert_raises,
 )
+from std.bit import pop_count
 from std.math import cos, pi
 
 import numojo as nm
@@ -47,6 +48,7 @@ from mojodec.routines.mesh_generation import (
     morton_keys,
     numbering_spread,
     reorder_vertices,
+    _numbering_spread,
     _radix_order,
 )
 from mojodec.core.abstract_simplicial_complex import AbstractSimplicialComplex
@@ -544,6 +546,42 @@ def test_numbering_spread() raises:
     iset(path.elements, 30, 1, 32)
     with assert_raises(contains="element 30 names vertex 32 of 32"):
         _ = numbering_spread(path)
+
+
+def test_numbering_spread_parallel() raises:
+    # 120,000 elements are counted in parallel chunks, blocks come from a
+    # table: the same spread as dividing v * 16 by nv, for numbers of
+    # vertices that are not multiples of 16 (or below it), with vertices
+    # at the blocks' bounds; the first bad element in file order is named
+    var ne = 120_000
+    var seed: UInt64 = 7
+    for nv in [5, 16, 100_003]:
+        for K in [3, 4]:
+            var E = int_array(ne, K)
+            var blocks = 0
+            for t in range(ne):
+                var seen = 0
+                for j in range(K):
+                    seed = seed * 6364136223846793005 + 1442695040888963407
+                    var v = Int((seed >> 33) % UInt64(nv))
+                    if j == 0:
+                        # a bound: ceil(k nv / 16), or one below it
+                        var k = t % 16
+                        v = (k * nv + 15) // 16 - (t // 16) % 2
+                        v = min(max(v, 0), nv - 1)
+                    iset(E, t, j, v)
+                    seen |= 1 << (v * 16 // nv)
+                blocks += pop_count(seen)
+            var what = String(nv, " ", K)
+            assert_equal(
+                _numbering_spread(E, nv), Float64(blocks) / Float64(ne), what
+            )
+            iset(E, 100_000, 2, nv)
+            iset(E, 70_000, 1, -1)
+            with assert_raises(
+                contains=String("element 70000 names vertex -1 of ", nv)
+            ):
+                _ = _numbering_spread(E, nv)
 
 
 def test_reorder_vertices_small() raises:
