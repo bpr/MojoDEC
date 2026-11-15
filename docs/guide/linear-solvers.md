@@ -4,7 +4,9 @@ DEC turns differential equations into sparse linear systems. This page covers
 the iterative solvers in `mojodec.routines.linalg`:
 - conjugate gradients (`cg`) with or without a preconditioner;
 - MINRES (`minres`) for symmetric systems that are not positive definite;
-- the operator traits both solvers are generic over.
+- the operator traits both solvers are generic over;
+- starting guesses, null spaces of singular systems, and eigenvalue
+  estimates from the solvers' Lanczos coefficients.
 
 It also covers how to put a DEC system into the symmetric form these
 solvers need.
@@ -164,9 +166,9 @@ iterations.
 surface, has the constants in its kernel. CG still converges when the
 system is consistent ($b$ orthogonal to the kernel, as for $b = A f$).
 Starting from $x_0 = 0$, every iterate lies in the range of $A$, so the
-limit is the solution of least norm. The constant is not pinned by
-anything except that start, so add or remove it yourself if you need a
-particular one.
+limit is the solution of least norm, in exact arithmetic. To make that
+hold in practice, and for right-hand sides that are not consistent, pass
+the kernel (see [Null spaces](#null-spaces)).
 
 ## Preconditioning
 
@@ -344,6 +346,133 @@ dominates as $h \to 0$. An inner iterative solve is no substitute for the
 exact block either: CG to a tolerance is not a fixed linear operator, and
 MINRES needs one.
 
+## Starting guesses
+
+Both solvers start from `x0=` when given, zero otherwise:
+
+```mojo
+var res = cg(A, b, M=jacobi(A), rtol=1e-10, x0=previous.copy())
+```
+
+The stopping test stays relative to $\|b\|$, not to the starting residual,
+so a good guess only saves iterations; it never loosens the answer. A guess
+that already passes the test returns at once with 0 iterations and `x`
+equal to the guess.
+
+What a guess saves depends on what its error contains. CG removes error
+components roughly in order of eigenvalue, smooth (small-eigenvalue)
+components last. A rough solve to `rtol=1e-3` has mostly smooth error
+left, so it saves only part of the work. On a 30 × 30 grid Laplacian,
+solving to `1e-10` takes 101 steps from zero and 88 from a 13-step rough
+solve (`tests/test_linalg.mojo`, `test_starting_guess`). On the 1-D Laplacian,
+whose $n$ distinct eigenvalues make CG take exactly $n$ steps, it saves
+nothing. The solution of a nearby problem, such as the previous time step,
+is a better guess.
+
+## Null spaces
+
+A symmetric $A$ with a kernel $N$ (constants for a Neumann or
+closed-surface Laplacian; harmonic forms for a Hodge Laplacian) maps onto
+$N^\perp$, so $A x = b$ has a solution only when $b \perp N$. Then it has
+a whole affine space of them, $x + N$. The solvers' iterates stay in
+$N^\perp$ only in exact arithmetic. A preconditioner that is not
+constant on $N$ reintroduces kernel components at every step, and rounding
+lets them grow. Pass the kernel and the solvers keep it out:
+
+```mojo
+var ns = NullSpace.constants(A.num_rows())      # a connected mesh
+var res = cg(A, b, M=jacobi(A), rtol=1e-10, nullspace=ns)
+```
+
+With an orthonormal basis $Q$ of $N$ and the projector
+$P = I - Q Q^T$, the solvers:
+1. replace $b$ by $P b$, which makes an inconsistent system consistent: its
+   solution is the **least-squares** solution;
+2. replace the starting guess by $P x_0$;
+3. apply $P$ after every application of the preconditioner (CG's
+   $z = P M r$, MINRES's next Lanczos vector).
+
+Since $A$ is symmetric, $A$ commutes with $P$, so this is CG (or MINRES)
+on $A$ restricted to $N^\perp$ with the preconditioner $P M P$, which is
+positive definite there. All iterates are orthogonal to $N$, and the limit
+is the least-squares solution of **least Euclidean norm**: for the Neumann
+path in `test_nullspace`, $f$ minus its mean, from any guess and with or
+without Jacobi.
+
+`NullSpace(vectors)` orthonormalizes any basis by modified Gram–Schmidt,
+twice. For example, `harmonic_basis`'s forms are not orthogonal. It
+raises on dependent vectors, on vectors of different lengths, and on an
+empty list. The solvers check that the basis fits $A$. Each $q$ must
+satisfy $\|A q\| \le \sqrt{\varepsilon}\,\|A\|$, with $\|A\|$
+estimated from the symmetry probes. This catches the kernel of the wrong
+operator. Vectors computed by an iterative solve still pass.
+
+What the residual measures: with a null space, `residual_norm` is
+$\|P b - A x\|$, the residual of the consistent part. The part of $b$ in
+$N$ cannot be matched by any $x$, and is not counted.
+
+The null space is Euclidean. For a typed operator, such as a stiffness
+matrix from primal 0-cochains to dual n-cochains, the same vectors serve
+the input and output kinds, because the matrix is symmetric. For a
+Hodge Laplacian on 1-forms the kernel is the harmonic forms, and its
+dimension is the first Betti number. On a flat 2-torus, in stiffness form,
+`harmonic_basis`'s forms are harmonic in the same diagonal star:
+
+```mojo
+ref d0 = sc[0].d
+ref d1 = sc[1].d
+var g = sc[1].star @ d0
+var K = d1.transpose() @ (sc[2].star @ d1) + g @ (sc[0].star_inv @ g.transpose())
+var H = harmonic_basis(sc, 1)                # 2 forms
+var vectors = List[RealArray]()
+for ref h in H:
+    vectors.append(h.v.copy())
+var res = minres(K, b, rtol=1e-10, nullspace=NullSpace(vectors))
+```
+
+Without the null space, MINRES stalls on a `b` with a harmonic part. With
+it, MINRES and CG converge to the least-squares solution orthogonal to the
+harmonic forms (`tests/test_cohomology.mojo`,
+`test_harmonic_forms_as_null_space`).
+
+## Ritz values and eigenvalue estimates
+
+CG is the Lanczos process in disguise. Its step lengths $\alpha_j$ and
+ratios $\beta_j = r_{j+1}^T z_{j+1} / r_j^T z_j$ define a symmetric
+tridiagonal matrix $T_k$, with
+
+$$
+(T_k)_{jj} = \frac{1}{\alpha_j} + \frac{\beta_{j-1}}{\alpha_{j-1}}, \qquad
+(T_k)_{j,j+1} = \frac{\sqrt{\beta_j}}{\alpha_j},
+$$
+
+which is the matrix of $M^{1/2} A M^{1/2}$ in the Lanczos basis of the
+Krylov space. Its eigenvalues, the **Ritz values**, lie inside the
+spectrum of $M A$ and approach its ends first. MINRES runs the Lanczos
+process directly: its $\alpha$s and $\beta$s are $T_k$'s entries, and its
+Ritz values have both signs for an indefinite $A$. `ritz=True` returns them
+in `res.ritz_values`, ascending, for one extra $O(k^2)$ tridiagonal
+eigenvalue solve (`dense.tridiagonal_eigenvalues`) at the end.
+
+`eigenvalue_range` packages the common use, the top of the spectrum of a
+preconditioned operator. It runs 10 CG steps on a fixed pseudorandom
+right-hand side and returns the extreme Ritz values:
+
+```mojo
+var lam = eigenvalue_range(A, M=jacobi(A))
+var top = 1.1 * lam.highest                 # a bound with a margin
+```
+
+Both values are inner bounds: `lowest` $\ge \lambda_{\min}$ and
+`highest` $\le \lambda_{\max}$. `highest` converges fast: within a few
+percent after 10 steps on the 200-point Laplacian. `lowest` converges
+slowly and is usually far above $\lambda_{\min}$. Multiply `highest` by a
+margin where an upper bound is needed. Chebyshev smoothers, for example,
+target $[0.1, 1.1] \cdot \lambda_{\max}$. The right-hand side is the same
+every call, so the estimate is reproducible. Pass `nullspace=` to leave a
+kernel's zero eigenvalues out. `steps` is capped at $n - \dim N$, the
+largest Krylov space there is.
+
 ## Stopping and breakdown
 
 | | `cg` | `minres` | `minres` with `M=` |
@@ -403,7 +532,11 @@ cg: the operator is not symmetric (u^T A w = -484.22, w^T A u = -400.53)
   cancellation, pass `atol` too.
 - **Reproducibility.** Without `M=`, both solvers run with `Identity`,
   and `cg` produces exactly the iterates it did before preconditioning
-  existed.
+  existed. Likewise, without `x0`, `nullspace`, and `ritz`, the iterates
+  are bit for bit those from before those options.
+- **A null space with Dirichlet conditions.** Fixing values removes the
+  kernel: a Laplacian with Dirichlet rows is nonsingular, and passing the
+  constants as its null space raises.
 
 ## Tests to read
 
@@ -419,8 +552,17 @@ cg: the operator is not symmetric (u^T A w = -484.22, w^T A u = -400.53)
     each block to its half.
   - `test_solver_input_checks`: non-symmetric operators, indefinite
     preconditioners, `jacobi`'s errors.
+  - `test_starting_guess`: an exact guess takes 0 steps, a rough one
+    fewer; wrong lengths refused.
+  - `test_nullspace`: the least-squares solution of least norm for an
+    inconsistent Neumann problem, by both solvers, from a guess, with
+    and without Jacobi; orthonormalization; the errors.
+  - `test_ritz_values`: Ritz values inside the spectrum of the 1-D
+    Laplacian, `eigenvalue_range` against the closed form, MINRES's of
+    both signs.
 - `tests/test_typed.mojo`, `test_solvers`: typed `cg` and `minres` with a
-  `jacobi` preconditioner of the right kinds.
+  `jacobi` preconditioner of the right kinds, and with `x0`, `nullspace`,
+  and `ritz` on a stiffness matrix with constants in its kernel.
 - `tests/test_typed_block.mojo`, `test_minres_on_blocks`: the Darcy
   saddle point against `spsolve`, and a non-symmetric block operator
   refused.

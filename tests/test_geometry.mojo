@@ -10,7 +10,7 @@ from std.testing import (
 import numojo as nm
 from numojo.prelude import *
 
-from mojodec.core.simplicial_complex import SimplicialComplex
+from mojodec.core.simplicial_complex import SimplicialComplex, _simplex_volumes
 from mojodec.core.utils import (
     fget,
     int_array,
@@ -278,6 +278,61 @@ def test_thin_triangle_gradients() raises:
                 s += fget(G, i, k) * (pts[j][k] - pts[0][k])
             var want = 1.0 if i == j else 0.0
             assert_true(abs(s - want) < 1e-7, String(i, " ", j, ": ", s))
+
+
+def test_needle_tetrahedron_volumes() raises:
+    # Four vertices near a line, with integer coordinates around 2^25-2^27:
+    # the exact volume comes from 128-bit integers, while the triple
+    # product's rounding (about eps |a| |b| |c|) exceeds it; it used to be
+    # off by a factor of thousands, with flipped signs. The general path's
+    # pivoted elimination loses only eps / thickness.
+    comptime I128 = Scalar[DType.int128]
+    var S = int_array(1, 4)
+    for j in range(4):
+        S.unsafe_set(j, j)
+    var seed = 99
+    for t in range(300):
+        var D = List[Int]()
+        for _ in range(3):
+            seed = (seed * 6364136223846793005 + 1442695040888963407) & (
+                (1 << 62) - 1
+            )
+            D.append((1 << 25) + Int((seed >> 20) % (1 << 24)))
+        var e = List[Int](length=9, fill=0)
+        for m in range(3):
+            for k in range(3):
+                seed = (seed * 6364136223846793005 + 1442695040888963407) & (
+                    (1 << 62) - 1
+                )
+                e[m * 3 + k] = (m + 1) * D[k] + Int((seed >> 30) % 7) - 3
+        var x = List[I128]()
+        for i in range(9):
+            x.append(I128(e[i]))
+        var det = (
+            x[0] * (x[4] * x[8] - x[5] * x[7])
+            + x[1] * (x[5] * x[6] - x[3] * x[8])
+            + x[2] * (x[3] * x[7] - x[4] * x[6])
+        )
+        if det == 0:
+            continue
+        var V = nm.zeros[f64](Shape(4, 3))
+        for m in range(3):
+            for k in range(3):
+                V[Item(m + 1, k)] = Float64(e[m * 3 + k])
+        var want = Float64(det) / 6.0
+        var out = real_vector(1)
+        _simplex_volumes(V, S, 3, True, out)
+        var got = out.unsafe_get(0)
+        assert_true(
+            (got > 0) == (want > 0) and abs(got - want) <= 1e-2 * abs(want),
+            String(t, ": signed ", got, " against ", want),
+        )
+        _simplex_volumes(V, S, 3, False, out)
+        got = out.unsafe_get(0)
+        assert_true(
+            abs(got - abs(want)) <= 1e-2 * abs(want),
+            String(t, ": unsigned ", got, " against ", abs(want)),
+        )
 
 
 def main() raises:

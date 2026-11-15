@@ -38,7 +38,8 @@ how to use it, and what can go wrong.
 - **[Linear solvers](linear-solvers.md)**: putting DEC systems in
   symmetric form, the `LinearOperator` and `Preconditioner` traits,
   conjugate gradients and preconditioning, MINRES for saddle points,
-  stopping tests, and the symmetry check.
+  starting guesses, null spaces of singular systems, Ritz values and
+  eigenvalue estimates, stopping tests, and the symmetry check.
 - **[Eigenproblems](eigenproblems.md)**: the symmetric-definite problem
   `K x = lambda M x`, how `eigh_generalized` reduces it, and checking
   eigenpairs with their backward errors (`EighResult.residuals`).

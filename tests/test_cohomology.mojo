@@ -7,8 +7,10 @@ from std.testing import (
 )
 
 from mojodec import (
+    NullSpace,
     SimplicialComplex,
     cg,
+    minres,
     jacobi,
     TypedComplex,
     cohomology_basis,
@@ -445,6 +447,46 @@ def test_errors() raises:
     cols.append(b^)
     with assert_raises(contains="non-integer multiple 3/2"):
         _ = _reduce(cols, 1, List[Bool](), "test")
+
+
+def test_harmonic_forms_as_null_space() raises:
+    # the Hodge Laplacian on 1-forms of the flat 2-torus, in stiffness form
+    # (symmetric): K = d1^T star2 d1 + star1 d0 star0^-1 d0^T star1. Its
+    # kernel is the harmonic forms, two of them
+    var sc = SimplicialComplex(flat_torus([5, 4], [1.0, 1.5]))
+    ref d0 = sc[0].d
+    ref d1 = sc[1].d
+    var g = sc[1].star @ d0
+    var K = d1.transpose() @ (sc[2].star @ d1) + g @ (
+        sc[0].star_inv @ g.transpose()
+    )
+    var H = harmonic_basis(sc, 1)
+    assert_equal(len(H), 2)
+    var vectors = List[RealArray]()
+    for ref h in H:
+        vectors.append(h.v.copy())
+    var ns = NullSpace(vectors)
+    var E = sc[1].num_simplices
+    var b = real_vector(E)
+    for e in range(E):
+        b.unsafe_set(e, Float64((e * 7) % 11) - 5.0)
+    # b has a harmonic part: no solution, and MINRES alone stalls
+    assert_true(not minres(K, b, rtol=1e-10, maxiter=2000).converged())
+    # with the kernel, the least-squares solution orthogonal to it
+    for solver in range(2):
+        var res = minres(K, b, rtol=1e-10, nullspace=ns) if solver == 0 else cg(
+            K, b, rtol=1e-10, nullspace=ns
+        )
+        assert_true(res.converged())
+        for i in range(2):
+            # the iterates stay orthogonal to the kernel, to rounding
+            assert_true(abs(dot(ns.vector(i), res.x)) < 1e-12 * norm2(res.x))
+        var Pb = b.copy()
+        ns.remove_from(Pb)
+        var r = K @ res.x
+        for e in range(E):
+            r.unsafe_set(e, Pb.unsafe_get(e) - r.unsafe_get(e))
+        assert_true(norm2(r) <= 2e-10 * norm2(Pb))
 
 
 def main() raises:

@@ -255,7 +255,18 @@ plan). Key design points that span several files:
   `Identity`, which reproduces the old iterates bit for bit. Both raise on
   a non-symmetric operator (`_require_symmetric`, two probe products) and
   stop with `BREAKDOWN` on `r^T M r < 0`. Typed preconditioners map `A`'s
-  output kind back to its input kind (`jacobi(A)` does).
+  output kind back to its input kind (`jacobi(A)` does). Keyword options
+  on both (and their typed `MatrixOp` overloads, not the `BlockOp` one):
+  `x0=` (tolerance stays relative to `||b||`), `nullspace=` (a
+  `NullSpace`, orthonormalized by Gram–Schmidt twice and shared behind an
+  `ArcPointer`; removed from `b`, `x0`, and every preconditioned residual
+  or Lanczos vector, and checked against `||A q|| <= sqrt(eps) ||A||`
+  with `||A||` from the symmetry probes), and `ritz=True` (the Ritz
+  values of the Lanczos tridiagonal, from CG's `alpha`/`beta` or MINRES's
+  `alfa`/`beta`, by `dense.tridiagonal_eigenvalues`, QL without vectors).
+  `eigenvalue_range` runs 10 CG steps on `probe_vector(n, 3)` for the
+  extreme Ritz values (inner bounds). Without the options, every solve is
+  bit for bit what it was before them; keep it so.
   `EighResult.residuals(K, M)` (and `TypedEighResult`'s) gives each
   pair's normwise backward error with norms from 30 power steps (lower
   bounds, so the errors err high); dense arrays are wrapped in a private

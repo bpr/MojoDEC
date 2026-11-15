@@ -217,8 +217,18 @@ def simplex_array_boundary(
         `num_faces x N` boundary matrix.
 
     Raises:
-        Does not raise in practice.
+        If a row of `s` is not strictly increasing (unsorted, or with a
+        repeated vertex), or `parity` does not have one entry per row.
     """
+    _require_increasing_rows(s)
+    if parity.size != rows_of(s):
+        raise Error(
+            "simplex_array_boundary: "
+            + String(parity.size)
+            + " parities for "
+            + String(rows_of(s))
+            + " simplices"
+        )
     # From a few thousand simplices with vertex ids in a narrow range, as a
     # complex's levels have, the faces are sorted by buckets, in parallel;
     # the result is the same either way.
@@ -232,6 +242,53 @@ def simplex_array_boundary(
 comptime _BUCKETS_FROM = 16384
 """Face occurrences (simplices x faces per simplex) from which
 `simplex_array_boundary` sorts by buckets."""
+
+
+def _require_increasing_rows(s: IntArray) raises:
+    """Raise unless every row of `s` is strictly increasing.
+
+    `_boundary_by_buckets` relies on it: each chunk counts occurrences only
+    in the buckets from its rows' smallest first entry to their largest
+    second one, so a row out of order would write outside them.
+    """
+    var N = rows_of(s)
+    var K = cols_of(s)
+    if K < 2 or N == 0:
+        return
+    comptime SERIAL_BELOW = 65536
+    var C = num_chunks(N, SERIAL_BELOW)
+    # the first offending row of each chunk, or -1
+    var bad = List[Int](length=C, fill=-1)
+    var bp = bad.unsafe_ptr()
+    var sp = s.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()
+
+    def check(chunk: Int, lo: Int, hi: Int) {sp, bp, K}:
+        for r in range(lo, hi):
+            for j in range(1, K):
+                if (
+                    sp[unsafe_offset=r * K + j - 1]
+                    >= sp[unsafe_offset=r * K + j]
+                ):
+                    bp[unsafe_offset=chunk] = r
+                    return
+
+    parallel_ranges(N, SERIAL_BELOW, check)
+    for c in range(C):
+        var r = bad[c]
+        if r >= 0:
+            var row = String("[")
+            for j in range(K):
+                if j > 0:
+                    row += ", "
+                row += String(Int(s.unsafe_get(r * K + j)))
+            raise Error(
+                "simplex_array_boundary: simplex "
+                + String(r)
+                + " "
+                + row
+                + "] is not strictly increasing (rows must be sorted,"
+                " with distinct vertices)"
+            )
 
 
 def _boundary_by_lexsort(

@@ -105,6 +105,11 @@ def test_boundary() raises:
     fb = simplex_array_boundary(I("[[2,9]]"), I("[0]"))
     assert_equal(fb.boundary[0, 0], -1.0)
     assert_equal(fb.boundary[1, 0], 1.0)
+    # rows must be sorted, with distinct vertices
+    with assert_raises(contains="simplex 1 [2, 1, 3] is not strictly"):
+        _ = simplex_array_boundary(I("[[0,1,2],[2,1,3]]"), I("[0,0]"))
+    with assert_raises(contains="is not strictly increasing"):
+        _ = simplex_array_boundary(I("[[0,0,2]]"), I("[0]"))
     # the coboundary is the boundary's transpose, built in canonical form
     fb = simplex_array_boundary(
         I("[[0,1,2],[1,2,3],[0,2,3],[3,4,5]]"), I("[0,1,0,1]")

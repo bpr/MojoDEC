@@ -502,6 +502,57 @@ def eigh(A: RealArray) raises -> EighResult:
     return EighResult(w^, Z^)
 
 
+def tridiagonal_eigenvalues(
+    diagonal: List[Float64], off_diagonal: List[Float64]
+) raises -> RealArray:
+    """The eigenvalues (ascending) of a symmetric tridiagonal matrix.
+
+    The implicit QL method (EISPACK's `tql2`) without eigenvectors, so
+    O(n^2). The Lanczos tridiagonal that `cg(..., ritz=True)` builds goes
+    through here.
+
+    ```mojo
+    var w = dense.tridiagonal_eigenvalues([2.0, 2.0, 2.0], [-1.0, -1.0])
+    # 2 - sqrt(2), 2, 2 + sqrt(2)
+    ```
+
+    Args:
+        diagonal: The `n` diagonal entries.
+        off_diagonal: The `n - 1` entries below (and above) the diagonal.
+
+    Returns:
+        The `n` eigenvalues in ascending order.
+
+    Raises:
+        If `off_diagonal` does not have `n - 1` entries (none when `n` is
+            0), or the QL iteration does not converge within 100 sweeps for
+            some eigenvalue.
+    """
+    var n = len(diagonal)
+    if len(off_diagonal) != max(n - 1, 0):
+        raise Error(
+            String(
+                "tridiagonal_eigenvalues: ",
+                len(off_diagonal),
+                " off-diagonal entries for ",
+                n,
+                " diagonal ones",
+            )
+        )
+    if n == 0:
+        return real_vector(0)
+    var d = diagonal.copy()
+    var e = List[Float64](length=n, fill=0)
+    for i in range(1, n):
+        e.unsafe_set(i, off_diagonal[i - 1])
+    var V = List[Float64]()
+    _tql2[vectors=False](n, V, d, e)
+    var w = real_vector(n)
+    for i in range(n):
+        w.unsafe_set(i, d.unsafe_get(i))
+    return w^
+
+
 def _tred2(
     n: Int, mut V: List[Float64], mut d: List[Float64], mut e: List[Float64]
 ):
@@ -585,9 +636,14 @@ def _tred2(
     e.unsafe_set(0, 0)
 
 
-def _tql2(
+def _tql2[
+    vectors: Bool = True
+](
     n: Int, mut V: List[Float64], mut d: List[Float64], mut e: List[Float64]
 ) raises:
+    """EISPACK's implicit QL on the tridiagonal (`d`, `e`), `e[i]` coupling
+    `i - 1` and `i`; with `vectors`, the rotations are applied to the rows
+    of `V` too."""
     for i in range(1, n):
         e.unsafe_set(i - 1, e.unsafe_get(i))
     e.unsafe_set(n - 1, 0)
@@ -638,7 +694,8 @@ def _tql2(
                     c = p / r
                     p = c * d.unsafe_get(i) - s * g
                     d.unsafe_set(i + 1, h + s * (c * g + s * d.unsafe_get(i)))
-                    _rotate_rows(V, n, i, c, s)
+                    comptime if vectors:
+                        _rotate_rows(V, n, i, c, s)
                 p = -s * s2 * c3 * el1 * e.unsafe_get(l) / dl1
                 e.unsafe_set(l, s * p)
                 d.unsafe_set(l, c * p)
@@ -657,10 +714,11 @@ def _tql2(
         if k != i:
             d.unsafe_set(k, d.unsafe_get(i))
             d.unsafe_set(i, p)
-            for j in range(n):
-                var t = V.unsafe_get(i * n + j)
-                V.unsafe_set(i * n + j, V.unsafe_get(k * n + j))
-                V.unsafe_set(k * n + j, t)
+            comptime if vectors:
+                for j in range(n):
+                    var t = V.unsafe_get(i * n + j)
+                    V.unsafe_set(i * n + j, V.unsafe_get(k * n + j))
+                    V.unsafe_set(k * n + j, t)
 
 
 def _dot_at(a: RealArray, i: Int, b: RealArray, j: Int, n: Int) -> Float64:

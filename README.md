@@ -132,7 +132,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/combinatorial.mojo` | `math/combinatorial.py`, `math/parity.py` |
 | `mojodec/routines/innerproduct.mojo` | `fem/innerproduct.py` |
 | `mojodec/routines/mesh_generation.mojo` | `mesh/generation.py`, `mesh/subdivision.py` |
-| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
+| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
 | `mojodec/routines/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh`, `EighResult.residuals` | `numpy.linalg` (called by PyDEC) |
 | `mojodec/routines/io/` — `read_array`, `write_array`, `read_mesh`, `write_mesh`, `loadtxt` | `io/arrayio.py`, `io/meshio.py` |
 | `mojodec/routines/io/vtk.mojo` — `write_vtu`, `write_vtu_cubes`, `VTKField` | (new) |
@@ -475,6 +475,12 @@ the published mathematics:
   Both raise on an operator that is not symmetric (two probe products), so
   a matrix such as `delta(d(.))`, self-adjoint only in the Hodge-star
   inner product, cannot be passed by mistake.
+  Both take a starting guess (`x0=`), the kernel of a singular operator
+  (`nullspace=NullSpace(...)`, e.g. `NullSpace.constants(n)` for a
+  Neumann Laplacian: the solution of least norm even for an inconsistent
+  right-hand side), and return Ritz values (`ritz=True`), estimates of
+  the preconditioned spectrum; `eigenvalue_range(A, M=P)` gets its ends
+  from 10 CG steps.
 - **Kuhn grids and flat tori** (`kuhn_grid`, `flat_torus`) in any
   dimension: each box cell split into d! simplices, and the periodic
   version embedded in R^(2d) so that it is exactly the flat torus (Betti

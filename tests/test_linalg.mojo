@@ -6,6 +6,7 @@ from std.testing import (
     assert_true,
 )
 
+from std.math import cos, pi, sqrt
 from std.utils.numerics import nan
 import numojo as nm
 from numojo.prelude import *
@@ -23,8 +24,10 @@ from mojodec.core.utils import (
 )
 from mojodec.routines.linalg import (
     DenseCholesky,
+    NullSpace,
     StopReason,
     cg,
+    eigenvalue_range,
     eigh_generalized,
     jacobi,
     lsqr,
@@ -319,6 +322,22 @@ def test_minres_indefinite() raises:
     assert_equal(z.iterations, 0)
 
 
+def neumann_path(n: Int) raises -> CSRMatrix:
+    """The Laplacian of a path with free ends: constants in the kernel."""
+    var r = List[Int]()
+    var c = List[Int]()
+    var v = List[Float64]()
+    for i in range(n - 1):
+        for e in [(i, i, 1.0), (i + 1, i + 1, 1.0), (i, i + 1, -1.0)]:
+            r.append(e[0])
+            c.append(e[1])
+            v.append(e[2])
+        r.append(i + 1)
+        c.append(i)
+        v.append(-1.0)
+    return CSRMatrix.from_coo(n, n, r, c, v)
+
+
 def test_minres_singular_consistent() raises:
     # the Neumann Laplacian of a path: constants in the kernel
     var n = 40
@@ -508,6 +527,210 @@ def test_eigen_residuals() raises:
         _ = fake.residuals(K, DiagonalOperator.identity(4))
     var empty = dense.eigh(real_array(0, 0))
     assert_equal(empty.residuals(real_array(0, 0)).size, 0)
+
+
+def laplacian_2d(m: Int) raises -> CSRMatrix:
+    """The 5-point Laplacian on an m x m grid, Dirichlet boundary."""
+    var r = List[Int]()
+    var c = List[Int]()
+    var v = List[Float64]()
+    for i in range(m):
+        for j in range(m):
+            var k = i * m + j
+            r.append(k)
+            c.append(k)
+            v.append(4.0)
+            for d in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                var ii = i + d[0]
+                var jj = j + d[1]
+                if ii >= 0 and ii < m and jj >= 0 and jj < m:
+                    r.append(k)
+                    c.append(ii * m + jj)
+                    v.append(-1.0)
+    return CSRMatrix.from_coo(m * m, m * m, r, c, v)
+
+
+def test_starting_guess() raises:
+    var n = 60
+    var A = _scaled_laplacian(n)
+    var f = _rhs(n)
+    var b = A @ f
+    # the exact solution as the guess: done before the first step
+    var exact = cg(A, b, rtol=1e-10, x0=f.copy())
+    assert_true(exact.converged())
+    assert_equal(exact.iterations, 0)
+    for i in range(n):
+        assert_equal(exact.x.unsafe_get(i), f.unsafe_get(i))
+    # a rough solution as the guess: fewer steps to the same tolerance,
+    # which stays relative to ||b|| (on a 2-D grid, where CG converges in
+    # fewer than n steps; in 1-D it takes n either way)
+    var L = laplacian_2d(30)
+    var g = _rhs(900)
+    var rough = cg(L, g, rtol=1e-3).take_x()
+    var cold = cg(L, g, rtol=1e-10)
+    var warm = cg(L, g, rtol=1e-10, x0=rough.copy())
+    assert_true(cold.converged() and warm.converged())
+    assert_true(warm.iterations < cold.iterations)
+    assert_true(warm.residual_norm <= 1e-10 * norm2(g))
+    var m_cold = minres(L, g, rtol=1e-10)
+    var m_warm = minres(L, g, rtol=1e-10, x0=rough.copy())
+    assert_true(m_warm.converged())
+    assert_true(m_warm.iterations < m_cold.iterations)
+    assert_true(m_warm.residual_norm <= 2e-10 * norm2(g))
+    rough = cg(A, b, M=jacobi(A), rtol=1e-3).take_x()
+    # minres with a preconditioner
+    var mp = minres(A, b, M=jacobi(A), rtol=1e-10, x0=f.copy())
+    assert_equal(mp.iterations, 0)
+    var mp_warm = minres(A, b, M=jacobi(A), rtol=1e-10, x0=rough.copy())
+    assert_true(mp_warm.converged())
+    for i in range(n):
+        # cond(A) ~ 1e6 for the scaled Laplacian, |f| ~ 5
+        assert_almost_equal(
+            mp_warm.x.unsafe_get(i), f.unsafe_get(i), atol=1e-3, rtol=0
+        )
+    with assert_raises(contains="x0 has length 3, not 60"):
+        _ = cg(A, b, x0=real_vector(3))
+    with assert_raises(contains="x0 has length 3, not 60"):
+        _ = minres(A, b, x0=real_vector(3))
+
+
+def test_nullspace() raises:
+    var n = 40
+    var A = neumann_path(n)
+    var f = _rhs(n)
+    var mean: Float64 = 0
+    for i in range(n):
+        mean += f.unsafe_get(i) / Float64(n)
+    # an inconsistent right-hand side: A f plus a constant
+    var b = A @ f
+    for i in range(n):
+        b.unsafe_set(i, b.unsafe_get(i) + 3.0)
+    var ns = NullSpace.constants(n)
+    assert_equal(len(ns), 1)
+    assert_equal(ns.size(), n)
+    # without the kernel, CG cannot converge: the constant part of b is
+    # not in the range
+    assert_true(not cg(A, b, rtol=1e-10, maxiter=400).converged())
+    # with it, every solver finds the least-squares solution of least
+    # norm, f minus its mean, even from a guess with a constant part and
+    # with a preconditioner that is not constant on the diagonal
+    var guess = real_vector(n)
+    for i in range(n):
+        guess.unsafe_set(i, 7.0 + 0.1 * Float64(i))
+    var results = List[RealArray]()
+    var r1 = cg(A, b, rtol=1e-12, nullspace=ns)
+    assert_true(r1.converged())
+    results.append(r1^.take_x())
+    var r2 = cg(A, b, M=jacobi(A), rtol=1e-12, x0=guess.copy(), nullspace=ns)
+    assert_true(r2.converged())
+    results.append(r2^.take_x())
+    var r3 = minres(A, b, rtol=1e-12, nullspace=ns)
+    assert_true(r3.converged())
+    results.append(r3^.take_x())
+    var r4 = minres(
+        A, b, M=jacobi(A), rtol=1e-12, x0=guess.copy(), nullspace=ns
+    )
+    assert_true(r4.converged())
+    results.append(r4^.take_x())
+    for ref x in results:
+        for i in range(n):
+            # cond ~ 1e3 on the range of A, times |f| ~ 20
+            assert_almost_equal(
+                x.unsafe_get(i), f.unsafe_get(i) - mean, atol=1e-8, rtol=0
+            )
+    # the basis is orthonormalized, whatever the input
+    var w = List[RealArray]()
+    var e = real_vector(n)
+    e.unsafe_set(0, 1.0)
+    w.append(nm.ones[f64](Shape(n)) * 5.0)
+    w.append(nm.ones[f64](Shape(n)) + e)
+    var two = NullSpace(w)
+    var q0 = two.vector(0)
+    var q1 = two.vector(1)
+    assert_almost_equal(norm2(q0), 1.0, atol=1e-15, rtol=0)
+    assert_almost_equal(norm2(q1), 1.0, atol=1e-15, rtol=0)
+    var q01: Float64 = 0
+    for i in range(n):
+        q01 += q0.unsafe_get(i) * q1.unsafe_get(i)
+    assert_almost_equal(q01, 0.0, atol=1e-15, rtol=0)
+    # what is refused
+    with assert_raises(contains="no vectors"):
+        _ = NullSpace(List[RealArray]())
+    var dep = List[RealArray]()
+    dep.append(nm.ones[f64](Shape(n)))
+    dep.append(nm.ones[f64](Shape(n)) * 2.0)
+    with assert_raises(contains="vector 1 depends on the ones before it"):
+        _ = NullSpace(dep)
+    var mixed = List[RealArray]()
+    mixed.append(nm.ones[f64](Shape(n)))
+    mixed.append(real_vector(3))
+    with assert_raises(contains="vector 1 has length 3, not 40"):
+        _ = NullSpace(mixed)
+    with assert_raises(contains="not in the operator's kernel"):
+        _ = cg(laplacian_1d(n), b, nullspace=ns)
+    with assert_raises(contains="not in the operator's kernel"):
+        _ = minres(laplacian_1d(n), b, nullspace=ns)
+    with assert_raises(contains="null space has vectors of length 40, not 41"):
+        _ = cg(neumann_path(n + 1), real_vector(n + 1), nullspace=ns)
+
+
+def test_ritz_values() raises:
+    # the eigenvalues of the 1-D Laplacian: 2 - 2 cos(k pi / (n + 1))
+    var w = dense.tridiagonal_eigenvalues([2.0, 2.0, 2.0], [-1.0, -1.0])
+    assert_almost_equal(w.unsafe_get(0), 2 - sqrt(2.0), atol=1e-15, rtol=0)
+    assert_almost_equal(w.unsafe_get(1), 2.0, atol=1e-15, rtol=0)
+    assert_almost_equal(w.unsafe_get(2), 2 + sqrt(2.0), atol=1e-15, rtol=0)
+    assert_equal(dense.tridiagonal_eigenvalues([], []).size, 0)
+    with assert_raises(contains="1 off-diagonal entries for 1 diagonal"):
+        _ = dense.tridiagonal_eigenvalues([1.0], [1.0])
+    var n = 200
+    var A = laplacian_1d(n)
+    var lo = 2 - 2 * cos(pi / Float64(n + 1))
+    var hi = 2 - 2 * cos(Float64(n) * pi / Float64(n + 1))
+    # no Ritz values unless asked for
+    assert_true(not cg(A, _rhs(n), rtol=1e-8).ritz_values)
+    # run to convergence, the Ritz values lie inside the spectrum and the
+    # extreme ones converge first
+    var res = cg(A, _rhs(n), rtol=1e-12, ritz=True)
+    assert_true(res.converged())
+    ref t = res.ritz_values.value()
+    assert_equal(t.size, res.iterations)
+    for i in range(t.size):
+        assert_true(t.unsafe_get(i) >= lo - 1e-12)
+        assert_true(t.unsafe_get(i) <= hi + 1e-12)
+    assert_almost_equal(t.unsafe_get(t.size - 1), hi, atol=1e-8, rtol=0)
+    # ten steps: inner bounds, the top within a few percent
+    var est = eigenvalue_range(A)
+    assert_equal(est.steps, 10)
+    assert_true(est.highest <= hi and est.highest >= 0.9 * hi)
+    assert_true(est.lowest >= lo)
+    # with Jacobi, the spectrum of M A = A / 2
+    var pre = eigenvalue_range(A, M=jacobi(A), steps=20)
+    assert_true(pre.highest <= hi / 2 + 1e-15)
+    assert_true(pre.highest >= 0.95 * hi / 2)
+    # reproducible: the same right-hand side every call
+    assert_equal(eigenvalue_range(A).highest, est.highest)
+    # a singular operator, its kernel excluded; steps capped at n - 1
+    var N = neumann_path(6)
+    var small = eigenvalue_range(N, steps=50, nullspace=NullSpace.constants(6))
+    assert_equal(small.steps, 5)
+    # the path's nonzero eigenvalues: 2 - 2 cos(k pi / 6), k = 1..5
+    assert_almost_equal(small.lowest, 2 - 2 * cos(pi / 6), atol=1e-12, rtol=0)
+    assert_almost_equal(
+        small.highest, 2 - 2 * cos(5 * pi / 6), atol=1e-12, rtol=0
+    )
+    # minres: Ritz values of an indefinite operator, both signs
+    var S = A - CSRMatrix.identity(n) * 0.5  # eigenvalues in (-0.5, 3.5)
+    var m = minres(S, _rhs(n), rtol=1e-12, ritz=True)
+    ref mt = m.ritz_values.value()
+    assert_true(mt.unsafe_get(0) < 0 and mt.unsafe_get(mt.size - 1) > 0)
+    for i in range(mt.size):
+        assert_true(mt.unsafe_get(i) >= lo - 0.5 - 1e-10)
+        assert_true(mt.unsafe_get(i) <= hi - 0.5 + 1e-10)
+    with assert_raises(contains="CG broke down"):
+        _ = eigenvalue_range(S)
+    with assert_raises(contains="steps must be positive"):
+        _ = eigenvalue_range(A, steps=0)
 
 
 def main() raises:

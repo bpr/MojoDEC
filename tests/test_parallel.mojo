@@ -42,6 +42,7 @@ from mojodec.routines.simplex_array import (
     _boundary_by_buckets,
     _boundary_by_lexsort,
     _vertex_bound,
+    simplex_array_boundary,
     simplex_array_parity,
 )
 
@@ -246,6 +247,34 @@ def test_boundary_by_buckets_matches_lexsort() raises:
     # buckets past _RANK_SORT_TO, sorted by merging
     _check_boundary_paths(_fan(5000, 3))
     _check_boundary_paths(_fan(3000, 4))
+
+
+def test_boundary_refuses_unsorted_rows() raises:
+    # past the 65536 rows where the check goes parallel, and past the
+    # bucket path's threshold: a row out of order would have let a chunk
+    # count outside its band of buckets (heap corruption on several
+    # threads); now the first offending row is named, in either chunk
+    var mesh = kuhn_grid([200, 200])
+    var s = mesh.elements.copy()
+    var parity = simplex_array_parity(s)
+    sort_each_row(s)
+    var n = rows_of(s)
+    _ = simplex_array_boundary(s, parity)
+    var U = s.copy()
+    # reversed rows in two different chunks
+    for r in [70_000, 60_000]:
+        var a = iget(U, r, 0)
+        iset(U, r, 0, iget(U, r, 2))
+        iset(U, r, 2, a)
+    with assert_raises(contains="simplex 60000 ["):
+        _ = simplex_array_boundary(U, parity)
+    # a repeated vertex
+    var R = s.copy()
+    iset(R, n - 1, 1, iget(R, n - 1, 0))
+    with assert_raises(contains="is not strictly increasing"):
+        _ = simplex_array_boundary(R, parity)
+    with assert_raises(contains="parities for"):
+        _ = simplex_array_boundary(s, int_vector(n - 1))
 
 
 def test_large_meshes_check_distinct_simplices() raises:

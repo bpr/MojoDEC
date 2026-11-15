@@ -19,6 +19,7 @@ from mojodec import (
     TypedComplex,
     TypedComplexVisitor,
     TypedSubset,
+    NullSpace,
     cg,
     d,
     delta,
@@ -281,6 +282,33 @@ def test_solvers() raises:
         _ = minres(A, other.cochain[2, DUAL]())
     with assert_raises(contains="different complexes"):
         _ = cg(A, b, M=jacobi(_stiffness(other)))
+    # an inconsistent right-hand side (b plus a constant): with the
+    # constants as the null space, the least-squares solution of least norm,
+    # from any starting guess; Ritz values pass through
+    var shifted = b.copy()
+    for i in range(len(shifted)):
+        shifted[i] = shifted[i] + 0.25
+    var ns = NullSpace.constants(len(u))
+    var guess = tc.cochain[0, PRIMAL]()
+    for i in range(len(guess)):
+        guess[i] = 3.0
+    var nsr = cg(
+        A, shifted, M=J, rtol=1e-12, x0=guess^, nullspace=ns, ritz=True
+    )
+    assert_true(nsr.converged())
+    assert_true(nsr.ritz_values)
+    var mean_f: Float64 = 0
+    for i in range(len(f)):
+        mean_f += f[i] / Float64(len(f))
+    for i in range(len(f)):
+        # cond ~ 100 on the range, |f| ~ 3
+        assert_almost_equal(nsr.x[i], f[i] - mean_f, atol=1e-9, rtol=0)
+    var nsm = minres(A, shifted, rtol=1e-12, nullspace=ns)
+    assert_true(nsm.converged())
+    for i in range(len(f)):
+        assert_almost_equal(nsm.x[i], f[i] - mean_f, atol=1e-9, rtol=0)
+    with assert_raises(contains="x0 is on a different complex"):
+        _ = cg(A, b, x0=other.cochain[0, PRIMAL]())
 
 
 def test_whitney_and_eigenproblems() raises:

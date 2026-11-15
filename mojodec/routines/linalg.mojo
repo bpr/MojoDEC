@@ -13,6 +13,10 @@ use, over `CSRMatrix` and NuMojo arrays.
 - `minres`: Paige and Saunders' MINRES for symmetric indefinite systems,
   such as the saddle-point `BlockOp`s of mixed formulations; not in PyDEC's
   examples.
+- `NullSpace`: the kernel of a singular operator, for `cg` and `minres`
+  to keep out of their iterates.
+- `eigenvalue_range`: the extreme eigenvalues of a preconditioned
+  operator, estimated from the Ritz values of a few CG steps.
 - `jacobi`: the diagonal (Jacobi) preconditioner of a matrix.
 - `lsqr`: Paige and Saunders' LSQR for least-squares problems.
 - `spsolve`: a direct solve (dense pivoted LU; intended for moderate sizes).
@@ -21,7 +25,8 @@ use, over `CSRMatrix` and NuMojo arrays.
   as a Hodge star).
 
 `cg` and `minres` take any `LinearOperator` (`mojodec.core.operator`) and,
-as `M`, any `Preconditioner`. Each solver has a typed overload on
+as `M`, any `Preconditioner`, and optionally a starting guess (`x0`), a
+`NullSpace`, and `ritz=True` for the Ritz values. Each solver has a typed overload on
 `MatrixOp`s and `TypedCochain`s, and `minres` and `spsolve` one on a
 `BlockOp` and `CochainPair`s (`spsolve` with some unknowns optionally
 given). An operator
@@ -39,6 +44,7 @@ var u = cg(A, b, rtol=1e-10).take_x()      # TypedCochain[2, 0, PRIMAL]
 """
 
 from std.math import isfinite, sqrt
+from std.memory import ArcPointer
 import numojo as nm
 from numojo.prelude import *
 
@@ -138,6 +144,10 @@ struct SolveResult[X: Movable & Deinitable = RealArray](Movable):
     var normal_residual_norm: Optional[Float64]
     """`||A^T (b - A x)||` for `lsqr`, the quantity least squares drives to
     zero; `None` for `cg`."""
+    var ritz_values: Optional[RealArray]
+    """The Ritz values (ascending) from `cg` or `minres` called with
+    `ritz=True`: estimates of the preconditioned operator's eigenvalues;
+    `None` otherwise."""
 
     def __init__(
         out self,
@@ -161,6 +171,7 @@ struct SolveResult[X: Movable & Deinitable = RealArray](Movable):
         self.iterations = iterations
         self.residual_norm = residual_norm
         self.normal_residual_norm = normal_residual_norm
+        self.ritz_values = None
 
     def converged(self) -> Bool:
         """Whether the stopping test passed.
@@ -179,6 +190,216 @@ struct SolveResult[X: Movable & Deinitable = RealArray](Movable):
         return self.x^
 
 
+struct NullSpace(ImplicitlyCopyable, Movable, Sized):
+    """An orthonormal basis of the kernel of a symmetric operator, for `cg`
+    and `minres` to keep out of their iterates.
+
+    A singular symmetric system `A x = b` (a Neumann or closed-surface
+    Laplacian: the constants; a Hodge Laplacian: the harmonic forms) has a
+    solution only when `b` is orthogonal to the kernel, and then a whole
+    affine space of them. Given the kernel, the solvers remove it from `b`
+    (so an inconsistent system is solved in the least-squares sense), from
+    the starting guess, and from every preconditioned residual, so the
+    iterates stay orthogonal to it and converge to the solution of least
+    Euclidean norm. Without the projection, a preconditioner reintroduces
+    kernel components that rounding then lets grow.
+
+    ```mojo
+    var ns = NullSpace.constants(A.num_rows())     # a connected closed surface
+    var u = cg(A, b, M=jacobi(A), nullspace=ns, rtol=1e-10).take_x()
+    ```
+
+    Copies share one basis (it lives behind an `ArcPointer`), so passing a
+    `NullSpace` to a solver is cheap.
+    """
+
+    var _basis: ArcPointer[List[RealArray]]
+
+    def __init__(out self, vectors: List[RealArray]) raises:
+        """Orthonormalize the vectors spanning a kernel.
+
+        Modified Gram–Schmidt, applied twice ("twice is enough": the result
+        is orthonormal to rounding even for nearly dependent input).
+
+        Args:
+            vectors: One or more vectors of a common length spanning the
+                kernel, in any scaling; they need not be orthogonal (the
+                harmonic forms of `harmonic_basis` are not).
+
+        Raises:
+            If `vectors` is empty, the lengths differ, a vector is not
+            finite, or a vector is numerically dependent on the earlier
+            ones (less than `1e-10` of its norm is new).
+        """
+        if len(vectors) == 0:
+            raise Error("NullSpace: no vectors")
+        var n = vectors[0].size
+        var basis = List[RealArray]()
+        for i in range(len(vectors)):
+            ref v = vectors[i]
+            if v.size != n:
+                raise Error(
+                    String(
+                        "NullSpace: vector ",
+                        i,
+                        " has length ",
+                        v.size,
+                        ", not ",
+                        n,
+                    )
+                )
+            var w = v.copy()
+            var size = norm2(w)
+            if not isfinite(size):
+                raise Error(String("NullSpace: vector ", i, " is not finite"))
+            for _ in range(2):
+                for ref q in basis:
+                    axpy(-dot(q, w), q, w)
+            var left = norm2(w)
+            if not left > 1e-10 * size:
+                raise Error(
+                    String(
+                        "NullSpace: vector ",
+                        i,
+                        " depends on the ones before it",
+                    )
+                )
+            _scale(w, 1 / left)
+            basis.append(w^)
+        self._basis = ArcPointer(basis^)
+
+    @staticmethod
+    def constants(n: Int) raises -> NullSpace:
+        """The constant vectors: the kernel of a Laplacian on 0-cochains of a
+        connected mesh without Dirichlet conditions.
+
+        Args:
+            n: The length.
+
+        Returns:
+            The span of `(1, ..., 1)`.
+
+        Raises:
+            If `n` is not positive.
+        """
+        if n <= 0:
+            raise Error("NullSpace.constants: n must be positive")
+        var ones = List[RealArray]()
+        ones.append(nm.ones[f64](Shape(n)))
+        return NullSpace(ones)
+
+    def __len__(self) -> Int:
+        """The dimension of the kernel.
+
+        Returns:
+            The number of basis vectors.
+        """
+        return len(self._basis[])
+
+    def size(self) -> Int:
+        """The length of the basis vectors.
+
+        Returns:
+            `n`, the operator's dimension.
+        """
+        return self._basis[][0].size
+
+    def vector(self, i: Int) -> RealArray:
+        """One basis vector.
+
+        Args:
+            i: Its index, `0 <= i < len(self)`.
+
+        Returns:
+            A copy of orthonormal basis vector `i`.
+        """
+        return self._basis[][i].copy()
+
+    def remove_from(self, mut x: RealArray):
+        """Project `x` onto the orthogonal complement of the kernel.
+
+        Args:
+            x: A vector of length `size()`, updated in place to
+                `x - sum_i (q_i^T x) q_i`.
+        """
+        for ref q in self._basis[]:
+            axpy(-dot(q, x), q, x)
+
+
+def _require_kernel[
+    Op: LinearOperator
+](A: Op, ns: NullSpace, scale: Float64, who: String) raises:
+    """Raise unless `A` maps each null-space vector to (nearly) zero.
+
+    `scale` estimates `||A||` (from the symmetry probes); a basis vector
+    with `||A q|| > sqrt(eps) * scale` is not in the kernel. A check
+    against mistakes, such as the kernel of the wrong operator, not a
+    certificate: vectors computed by an iterative solve pass.
+    """
+    var n = A.num_rows()
+    if ns.size() != n:
+        raise Error(
+            String(
+                who,
+                ": the null space has vectors of length ",
+                ns.size(),
+                ", not ",
+                n,
+            )
+        )
+    var Aq = real_vector(n)
+    for i in range(len(ns)):
+        A.apply_into(ns._basis[][i], Aq)
+        var r = norm2(Aq)
+        if r > 1.4901161193847656e-08 * scale:
+            raise Error(
+                String(
+                    who,
+                    ": null-space vector ",
+                    i,
+                    " is not in the operator's kernel (||A q|| = ",
+                    r,
+                    ", ||A|| about ",
+                    scale,
+                    ")",
+                )
+            )
+
+
+def _start[
+    Op: LinearOperator
+](
+    A: Op,
+    x0: Optional[RealArray],
+    nullspace: Optional[NullSpace],
+    who: String,
+    mut rhs: RealArray,
+    mut x: RealArray,
+    mut r: RealArray,
+) raises:
+    """Remove the kernel from the right-hand side `rhs` (a copy of `b`), and
+    set the starting iterate `x` (zero on entry) and its residual `r` (a
+    copy of `b` on entry). Without `x0` and `nullspace`, nothing changes.
+    """
+    var n = A.num_rows()
+    if nullspace:
+        nullspace.value().remove_from(rhs)
+    if not x0:
+        if nullspace:
+            r = rhs.copy()
+        return
+    ref guess = x0.value()
+    if guess.size != n:
+        raise Error(String(who, ": x0 has length ", guess.size, ", not ", n))
+    x = guess.copy()
+    if nullspace:
+        nullspace.value().remove_from(x)
+    r = rhs.copy()
+    var Ax = real_vector(n)
+    A.apply_into(x, Ax)
+    axpy(-1.0, Ax, r)
+
+
 def cg[
     Op: LinearOperator
 ](
@@ -187,13 +408,19 @@ def cg[
     rtol: Float64 = 1e-5,
     atol: Float64 = 0.0,
     maxiter: Optional[Int] = None,
+    *,
+    x0: Optional[RealArray] = None,
+    nullspace: Optional[NullSpace] = None,
+    ritz: Bool = False,
 ) raises -> SolveResult[RealArray]:
     """Conjugate gradients for `A x = b`, `A` symmetric positive semidefinite.
 
     Stops when `||b - A x|| <= max(rtol * ||b||, atol)`, as SciPy's `cg`
     does. Singular but consistent systems (e.g. Laplacians with constant
-    kernels) converge to a solution. The iteration starts from zero and
-    stops early with `StopReason.BREAKDOWN` if `p^T A p` is not positive (or is NaN).
+    kernels) converge to a solution; pass their kernel as `nullspace` to
+    get the solution of least norm whatever `b` and `x0`. The iteration
+    starts from `x0` (zero by default) and stops early with
+    `StopReason.BREAKDOWN` if `p^T A p` is not positive (or is NaN).
 
     Parameters:
         Op: The operator type: `CSRMatrix`, `DiagonalOperator`, a typed
@@ -205,17 +432,31 @@ def cg[
         rtol: Relative tolerance on the residual norm.
         atol: Absolute tolerance on the residual norm.
         maxiter: Iteration limit; `None` means `10 * n`.
+        x0: The starting guess; `None` means zero.
+        nullspace: The kernel of `A`, removed from `b`, `x0`, and every
+            search direction.
+        ritz: Whether to return the Ritz values, estimates of `A`'s
+            eigenvalues (see the preconditioned overload).
 
     Returns:
-        The solution with why it stopped, the iteration count and the
-        residual norm.
+        The solution with why it stopped, the iteration count, the
+        residual norm, and with `ritz` the Ritz values.
 
     Raises:
         If `A` is not square or not symmetric (checked on two probe
-        vectors), `b` does not have length `n`, or `maxiter` is negative.
+        vectors), `b` or `x0` does not have length `n`, `maxiter` is
+        negative, or `nullspace` does not fit `A`.
     """
     return cg(
-        A, b, M=Identity(A.num_rows()), rtol=rtol, atol=atol, maxiter=maxiter
+        A,
+        b,
+        M=Identity(A.num_rows()),
+        rtol=rtol,
+        atol=atol,
+        maxiter=maxiter,
+        x0=x0,
+        nullspace=nullspace,
+        ritz=ritz,
     )
 
 
@@ -229,6 +470,9 @@ def cg[
     rtol: Float64 = 1e-5,
     atol: Float64 = 0.0,
     maxiter: Optional[Int] = None,
+    x0: Optional[RealArray] = None,
+    nullspace: Optional[NullSpace] = None,
+    ritz: Bool = False,
 ) raises -> SolveResult[RealArray]:
     """Preconditioned conjugate gradients for `A x = b`.
 
@@ -240,6 +484,14 @@ def cg[
     ```mojo
     var res = cg(A, b, M=jacobi(A), rtol=1e-10)
     ```
+
+    CG is the Lanczos process in disguise: its step lengths `alpha_j` and
+    ratios `beta_j = r_(j+1)^T z_(j+1) / r_j^T z_j` are the entries of a
+    symmetric tridiagonal `T` (diagonal `1/alpha_j + beta_(j-1)/alpha_(j-1)`,
+    off-diagonal `sqrt(beta_j)/alpha_j`) whose eigenvalues, the Ritz
+    values, approximate those of `M A`. With `ritz=True` they are returned:
+    they lie inside `M A`'s spectrum, and the extreme ones converge first,
+    so they bound it from inside (`eigenvalue_range` packages this).
 
     Parameters:
         Op: The operator type.
@@ -253,15 +505,25 @@ def cg[
         rtol: Relative tolerance on the residual norm.
         atol: Absolute tolerance on the residual norm.
         maxiter: Iteration limit; `None` means `10 * n`.
+        x0: The starting guess; `None` means zero. The tolerance stays
+            relative to `||b||`, so a good guess saves iterations.
+        nullspace: The kernel of `A`. It is removed from `b` (the residual
+            then measures the consistent part of the system), from `x0`,
+            and from every preconditioned residual, so `x` is orthogonal to
+            it.
+        ritz: Whether to return the Ritz values (ascending), of `M A`
+            restricted to the complement of `nullspace`.
 
     Returns:
         The solution with why it stopped (`StopReason.BREAKDOWN` also when
-        `r^T M r < 0`), the iteration count and the residual norm.
+        `r^T M r < 0`), the iteration count, the residual norm, and with
+        `ritz` the Ritz values.
 
     Raises:
         If `A` is not square or not symmetric (checked on two probe
-        vectors), `b` or `M` does not have size `n`, or `maxiter` is
-        negative.
+        vectors), `b`, `x0` or `M` does not have size `n`, `maxiter` is
+        negative, or a `nullspace` vector has the wrong length or is not
+        in `A`'s kernel.
     """
     var n = A.num_rows()
     if A.num_cols() != n or b.size != n:
@@ -271,19 +533,31 @@ def cg[
     var limit = maxiter.value() if maxiter else 10 * n
     if limit < 0:
         raise Error("cg: maxiter must be >= 0")
-    _require_symmetric(A, "cg")
+    var scale = _require_symmetric(A, "cg")
+    if nullspace:
+        _require_kernel(A, nullspace.value(), scale, "cg")
+    var rhs = b.copy()
     var x = real_vector(n)
     var r = b.copy()
-    var bnorm = norm2(b)
+    _start(A, x0, nullspace, "cg", rhs, x, r)
+    var bnorm = norm2(rhs)
     var tol = max(rtol * bnorm, atol)
-    var rnorm = bnorm
+    var rnorm = norm2(r) if x0 else bnorm
+    var alphas = List[Float64]()
+    var betas = List[Float64]()
     if rnorm <= tol:
-        return SolveResult(x^, StopReason.CONVERGED, 0, rnorm)
+        return _cg_result(
+            x^, StopReason.CONVERGED, 0, rnorm, ritz, alphas, betas
+        )
     var z = real_vector(n)
     M.apply_into(r, z)
+    if nullspace:
+        nullspace.value().remove_from(z)
     var rz = dot(r, z)
     if not rz > 0:  # an indefinite preconditioner, or NaN
-        return SolveResult(x^, StopReason.BREAKDOWN, 0, rnorm)
+        return _cg_result(
+            x^, StopReason.BREAKDOWN, 0, rnorm, ritz, alphas, betas
+        )
     var p = z.copy()
     var Ap = real_vector(n)
     var it = 0
@@ -292,20 +566,60 @@ def cg[
         A.apply_into(p, Ap)
         var pAp = dot(p, Ap)
         if not pAp > 0:  # also NaN, from a NaN or infinite entry
-            return SolveResult(x^, StopReason.BREAKDOWN, it, rnorm)
+            return _cg_result(
+                x^, StopReason.BREAKDOWN, it, rnorm, ritz, alphas, betas
+            )
         var alpha = rz / pAp
+        if ritz:
+            alphas.append(alpha)
         axpy(alpha, p, x)
         axpy(-alpha, Ap, r)
         rnorm = norm2(r)
         if rnorm <= tol:
-            return SolveResult(x^, StopReason.CONVERGED, it, rnorm)
+            return _cg_result(
+                x^, StopReason.CONVERGED, it, rnorm, ritz, alphas, betas
+            )
         M.apply_into(r, z)
+        if nullspace:
+            nullspace.value().remove_from(z)
         var rz_new = dot(r, z)
         if not rz_new > 0:
-            return SolveResult(x^, StopReason.BREAKDOWN, it, rnorm)
+            return _cg_result(
+                x^, StopReason.BREAKDOWN, it, rnorm, ritz, alphas, betas
+            )
+        if ritz:
+            betas.append(rz_new / rz)
         _xpby(z, rz_new / rz, p)
         rz = rz_new
-    return SolveResult(x^, StopReason.MAX_ITER, it, rnorm)
+    return _cg_result(x^, StopReason.MAX_ITER, it, rnorm, ritz, alphas, betas)
+
+
+def _cg_result(
+    var x: RealArray,
+    stop: StopReason,
+    iterations: Int,
+    rnorm: Float64,
+    ritz: Bool,
+    alphas: List[Float64],
+    betas: List[Float64],
+) raises -> SolveResult[RealArray]:
+    """`cg`'s result, with the Ritz values of its Lanczos tridiagonal when
+    asked for: from `k` step lengths and the `k - 1` ratios between them.
+    """
+    var result = SolveResult(x^, stop, iterations, rnorm)
+    if ritz:
+        var k = len(alphas)
+        var diagonal = List[Float64](length=k, fill=0)
+        var off = List[Float64](length=max(k - 1, 0), fill=0)
+        for j in range(k):
+            var t = 1 / alphas[j]
+            if j > 0:
+                t += betas[j - 1] / alphas[j - 1]
+            diagonal[j] = t
+            if j + 1 < k:
+                off[j] = sqrt(betas[j]) / alphas[j]
+        result.ritz_values = dense.tridiagonal_eigenvalues(diagonal, off)
+    return result^
 
 
 def minres[
@@ -316,6 +630,10 @@ def minres[
     rtol: Float64 = 1e-5,
     atol: Float64 = 0.0,
     maxiter: Optional[Int] = None,
+    *,
+    x0: Optional[RealArray] = None,
+    nullspace: Optional[NullSpace] = None,
+    ritz: Bool = False,
 ) raises -> SolveResult[RealArray]:
     """MINRES for `A x = b`, `A` symmetric, possibly indefinite or singular.
 
@@ -328,7 +646,8 @@ def minres[
     recurrence; the result's `residual_norm` is recomputed from `x`. On a
     singular consistent system it converges to a solution; on an
     inconsistent one the residual stalls at the least-squares residual
-    and the solver runs to `maxiter`.
+    and the solver runs to `maxiter`, unless the kernel is given as
+    `nullspace`, which makes the system consistent.
 
     Parameters:
         Op: The operator type: `CSRMatrix`, a typed `BlockOp`, or any other
@@ -340,17 +659,31 @@ def minres[
         rtol: Relative tolerance on the residual norm.
         atol: Absolute tolerance on the residual norm.
         maxiter: Iteration limit; `None` means `10 * n`.
+        x0: The starting guess; `None` means zero.
+        nullspace: The kernel of `A`, removed from `b`, `x0`, and every
+            Lanczos vector.
+        ritz: Whether to return the Ritz values, estimates of `A`'s
+            eigenvalues of both signs.
 
     Returns:
-        The solution with why it stopped, the iteration count and the
-        residual norm.
+        The solution with why it stopped, the iteration count, the
+        residual norm, and with `ritz` the Ritz values.
 
     Raises:
         If `A` is not square or not symmetric (checked on two probe
-        vectors), `b` does not have length `n`, or `maxiter` is negative.
+        vectors), `b` or `x0` does not have length `n`, `maxiter` is
+        negative, or `nullspace` does not fit `A`.
     """
     return minres(
-        A, b, M=Identity(A.num_rows()), rtol=rtol, atol=atol, maxiter=maxiter
+        A,
+        b,
+        M=Identity(A.num_rows()),
+        rtol=rtol,
+        atol=atol,
+        maxiter=maxiter,
+        x0=x0,
+        nullspace=nullspace,
+        ritz=ritz,
     )
 
 
@@ -364,6 +697,9 @@ def minres[
     rtol: Float64 = 1e-5,
     atol: Float64 = 0.0,
     maxiter: Optional[Int] = None,
+    x0: Optional[RealArray] = None,
+    nullspace: Optional[NullSpace] = None,
+    ritz: Bool = False,
 ) raises -> SolveResult[RealArray]:
     """Preconditioned MINRES for `A x = b`, `A` symmetric.
 
@@ -371,7 +707,12 @@ def minres[
     the inverse of `A` in size, not sign) each iterate minimizes the
     residual in the norm `||r||_M = sqrt(r^T M r)`, and the stopping test
     is `||r||_M <= max(rtol * ||b||_M, atol)` in that norm. The result's
-    `residual_norm` is the Euclidean `||b - A x||`, recomputed from `x`.
+    `residual_norm` is the Euclidean `||b - A x||`, recomputed from `x`
+    (with `b`'s kernel component removed when `nullspace` is given).
+
+    The Lanczos coefficients MINRES runs on are the entries of a symmetric
+    tridiagonal whose eigenvalues, the Ritz values, approximate those of
+    `M A`, negative ones included; `ritz=True` returns them.
 
     Parameters:
         Op: The operator type.
@@ -384,15 +725,24 @@ def minres[
         rtol: Relative tolerance on the residual norm.
         atol: Absolute tolerance on the residual norm.
         maxiter: Iteration limit; `None` means `10 * n`.
+        x0: The starting guess; `None` means zero. The tolerance stays
+            relative to `||b||_M`.
+        nullspace: The kernel of `A`. It is removed from `b`, from `x0`,
+            and from every preconditioned Lanczos vector, so `x` is
+            orthogonal to it.
+        ritz: Whether to return the Ritz values (ascending), of `M A`
+            restricted to the complement of `nullspace`.
 
     Returns:
         The solution with why it stopped (`StopReason.BREAKDOWN` when
-        `r^T M r < 0`), the iteration count and the residual norm.
+        `r^T M r < 0`), the iteration count, the residual norm, and with
+        `ritz` the Ritz values.
 
     Raises:
         If `A` is not square or not symmetric (checked on two probe
-        vectors), `b` or `M` does not have size `n`, or `maxiter` is
-        negative.
+        vectors), `b`, `x0` or `M` does not have size `n`, `maxiter` is
+        negative, or a `nullspace` vector has the wrong length or is not
+        in `A`'s kernel.
     """
     var n = A.num_rows()
     if A.num_cols() != n or b.size != n:
@@ -402,20 +752,45 @@ def minres[
     var limit = maxiter.value() if maxiter else 10 * n
     if limit < 0:
         raise Error("minres: maxiter must be >= 0")
-    _require_symmetric(A, "minres")
+    var scale = _require_symmetric(A, "minres")
+    if nullspace:
+        _require_kernel(A, nullspace.value(), scale, "minres")
+    var rhs = b.copy()
     var x = real_vector(n)
+    var r0 = b.copy()
+    _start(A, x0, nullspace, "minres", rhs, x, r0)
+    var alfas = List[Float64]()
+    var betas = List[Float64]()
     # Lanczos vectors: r1, r2 the last two unpreconditioned ones, y = M r2
-    var r1 = b.copy()
-    var r2 = b.copy()
+    var r1 = r0.copy()
+    var r2 = r0^
     var y = real_vector(n)
     M.apply_into(r1, y)
+    if nullspace:
+        nullspace.value().remove_from(y)
     var beta1 = dot(r1, y)
     if not beta1 >= 0:  # an indefinite preconditioner, or NaN
-        return SolveResult(x^, StopReason.BREAKDOWN, 0, norm2(b))
+        return _minres_result(
+            x^, StopReason.BREAKDOWN, 0, norm2(r1), ritz, alfas, betas
+        )
     beta1 = sqrt(beta1)
-    var tol = max(rtol * beta1, atol)
+    var bnorm = beta1
+    if x0:  # the tolerance is relative to ||b||_M, not ||r0||_M
+        var yb = real_vector(n)
+        M.apply_into(rhs, yb)
+        if nullspace:
+            nullspace.value().remove_from(yb)
+        var bb = dot(rhs, yb)
+        if not bb >= 0:
+            return _minres_result(
+                x^, StopReason.BREAKDOWN, 0, norm2(r1), ritz, alfas, betas
+            )
+        bnorm = sqrt(bb)
+    var tol = max(rtol * bnorm, atol)
     if beta1 <= tol:
-        return SolveResult(x^, StopReason.CONVERGED, 0, norm2(b))
+        return _minres_result(
+            x^, StopReason.CONVERGED, 0, norm2(r1), ritz, alfas, betas
+        )
     var v = real_vector(n)
     var w = real_vector(n)
     var w1 = real_vector(n)
@@ -439,16 +814,22 @@ def minres[
         if it >= 2:
             axpy(-beta / oldb, r1, y)
         var alfa = dot(v, y)
+        if ritz:
+            alfas.append(alfa)
         axpy(-alfa / beta, r2, y)
         swap(r1, r2)  # r1 = old r2
         swap(r2, y)  # r2 = the new vector; y is overwritten next
         M.apply_into(r2, y)
+        if nullspace:
+            nullspace.value().remove_from(y)
         oldb = beta
         beta = dot(r2, y)
         if not beta >= 0:
             stop = StopReason.BREAKDOWN
             break
         beta = sqrt(beta)
+        if ritz:
+            betas.append(beta)
         # apply the previous rotation, then make the next one
         var oldeps = epsln
         var delta = cs * dbar + sn * alfa
@@ -481,10 +862,163 @@ def minres[
             break
         if beta == 0:  # an invariant Krylov space: nothing more to gain
             break
-    var r = b.copy()
+    var r = rhs^
     A.apply_into(x, y)
     axpy(-1.0, y, r)
-    return SolveResult(x^, stop, it, norm2(r))
+    return _minres_result(x^, stop, it, norm2(r), ritz, alfas, betas)
+
+
+def _minres_result(
+    var x: RealArray,
+    stop: StopReason,
+    iterations: Int,
+    rnorm: Float64,
+    ritz: Bool,
+    alfas: List[Float64],
+    betas: List[Float64],
+) raises -> SolveResult[RealArray]:
+    """`minres`'s result, with the Ritz values of its Lanczos tridiagonal
+    when asked for: diagonal `alfas`, off-diagonal the `betas` between them.
+    """
+    var result = SolveResult(x^, stop, iterations, rnorm)
+    if ritz:
+        var k = len(alfas)
+        var off = List[Float64](length=max(k - 1, 0), fill=0)
+        for j in range(k - 1):
+            off[j] = betas[j]
+        result.ritz_values = dense.tridiagonal_eigenvalues(alfas, off)
+    return result^
+
+
+struct EigenvalueRange(ImplicitlyCopyable, Movable):
+    """Estimates of the extreme eigenvalues of a preconditioned symmetric
+    positive definite operator, from `eigenvalue_range`.
+
+    Both are Ritz values, so they lie inside the spectrum:
+    `lowest >= lambda_min` and `highest <= lambda_max`. The largest
+    converges fastest (a few percent low after 10 steps on a mesh
+    Laplacian); multiply it by a safety factor, such as 1.1, where an upper
+    bound is needed.
+    """
+
+    var lowest: Float64
+    """The smallest Ritz value; slow to converge, so usually well above
+    `lambda_min`."""
+    var highest: Float64
+    """The largest Ritz value, just below `lambda_max`."""
+    var steps: Int
+    """The CG steps taken."""
+
+    def __init__(out self, lowest: Float64, highest: Float64, steps: Int):
+        """An estimate from its parts; built by `eigenvalue_range`.
+
+        Args:
+            lowest: The smallest Ritz value.
+            highest: The largest Ritz value.
+            steps: The CG steps taken.
+        """
+        self.lowest = lowest
+        self.highest = highest
+        self.steps = steps
+
+
+def eigenvalue_range[
+    Op: LinearOperator
+](
+    A: Op,
+    *,
+    steps: Int = 10,
+    nullspace: Optional[NullSpace] = None,
+) raises -> EigenvalueRange:
+    """Estimate the extreme eigenvalues of a symmetric positive definite
+    operator; see the preconditioned overload.
+
+    Parameters:
+        Op: The operator type.
+
+    Args:
+        A: An `n x n` symmetric positive (semi)definite operator.
+        steps: CG steps, at most `n` minus the kernel's dimension.
+        nullspace: The kernel of `A`, whose zero eigenvalues are excluded.
+
+    Returns:
+        The smallest and largest Ritz values.
+
+    Raises:
+        As the preconditioned overload.
+    """
+    return eigenvalue_range(
+        A, M=Identity(A.num_rows()), steps=steps, nullspace=nullspace
+    )
+
+
+def eigenvalue_range[
+    Op: LinearOperator, P: Preconditioner
+](
+    A: Op,
+    *,
+    M: P,
+    steps: Int = 10,
+    nullspace: Optional[NullSpace] = None,
+) raises -> EigenvalueRange:
+    """Estimate the extreme eigenvalues of `M A`, `A` symmetric positive
+    definite (or semidefinite, with its kernel given), `M` a preconditioner.
+
+    Runs `steps` iterations of `cg(A, b, M=M, ritz=True)` on a fixed
+    pseudorandom `b` (the same every call, so the estimate is
+    reproducible) and returns the extreme Ritz values. This is how
+    smoothers such as Chebyshev's, and step-size limits, get the top of a
+    spectrum: 10 steps cost 10 products with `A` and `M`.
+
+    ```mojo
+    var lam = eigenvalue_range(A, M=jacobi(A))
+    var top = 1.1 * lam.highest          # an upper bound, with a margin
+    ```
+
+    Parameters:
+        Op: The operator type.
+        P: The preconditioner type.
+
+    Args:
+        A: An `n x n` symmetric positive (semi)definite operator.
+        M: A symmetric positive definite `n x n` preconditioner.
+        steps: CG steps, capped at `n` minus the kernel's dimension (the
+            Krylov space cannot grow further).
+        nullspace: The kernel of `A`, whose zero eigenvalues are excluded.
+
+    Returns:
+        The smallest and largest Ritz values, both inside the spectrum.
+
+    Raises:
+        If `steps` is not positive, `A` is empty, CG breaks down (`M A` is
+        not positive definite on the Krylov space), or as `cg`.
+    """
+    var n = A.num_rows()
+    if steps <= 0:
+        raise Error("eigenvalue_range: steps must be positive")
+    if n == 0:
+        raise Error("eigenvalue_range: the operator is empty")
+    var kernel = len(nullspace.value()) if nullspace else 0
+    var b = probe_vector(n, 3)
+    var res = cg(
+        A,
+        b,
+        M=M,
+        rtol=0,
+        atol=0,
+        maxiter=min(steps, n - kernel),
+        nullspace=nullspace,
+        ritz=True,
+    )
+    if res.stop == StopReason.BREAKDOWN:
+        raise Error(
+            "eigenvalue_range: CG broke down; the preconditioned operator"
+            " is not positive definite"
+        )
+    ref w = res.ritz_values.value()
+    if w.size == 0:
+        raise Error("eigenvalue_range: no Krylov space (b is in the kernel)")
+    return EigenvalueRange(w.unsafe_get(0), w.unsafe_get(w.size - 1), w.size)
 
 
 struct DenseCholesky(Movable, Preconditioner):
@@ -512,7 +1046,7 @@ struct DenseCholesky(Movable, Preconditioner):
         """
         if A.nrows != A.ncols:
             raise Error("DenseCholesky: the matrix is not square")
-        _require_symmetric(A, "DenseCholesky")
+        _ = _require_symmetric(A, "DenseCholesky")
         self._L = dense.cholesky(A.todense())
 
     def num_rows(self) -> Int:
@@ -585,15 +1119,19 @@ def jacobi(A: CSRMatrix) raises -> DiagonalOperator:
     return DiagonalOperator(out^)
 
 
-def _require_symmetric[Op: LinearOperator](A: Op, who: String) raises:
+def _require_symmetric[
+    Op: LinearOperator
+](A: Op, who: String) raises -> Float64:
     """Raise unless `u^T A w = w^T A u` on two probe vectors, to rounding.
 
     Two products with `A`; a non-symmetric `A` fails for all but a
     measure-zero set of probes. NaN results pass, for the solver to report.
+    Returns `max(||A u|| / ||u||, ||A w|| / ||w||)`, a lower estimate of
+    `||A||` (about its root-mean-square singular value).
     """
     var n = A.num_rows()
     if n == 0:
-        return
+        return 0
     var u = probe_vector(n, 1)
     var w = probe_vector(n, 2)
     var Au = real_vector(n)
@@ -614,6 +1152,7 @@ def _require_symmetric[Op: LinearOperator](A: Op, who: String) raises:
                 ")",
             )
         )
+    return max(norm2(Au) / norm2(u), norm2(Aw) / norm2(w))
 
 
 def lsqr(
@@ -969,13 +1508,16 @@ def _typed_result[
     var iterations = res.iterations
     var residual_norm = res.residual_norm
     var normal_residual_norm = res.normal_residual_norm
-    return SolveResult[TypedCochain[n, k, primal]](
+    var ritz_values = res.ritz_values.copy()
+    var typed = SolveResult[TypedCochain[n, k, primal]](
         TypedCochain[n, k, primal](complex, res^.take_x()),
         stop,
         iterations,
         residual_norm,
         normal_residual_norm,
     )
+    typed.ritz_values = ritz_values^
+    return typed^
 
 
 def cg[
@@ -986,6 +1528,10 @@ def cg[
     rtol: Float64 = 1e-5,
     atol: Float64 = 0.0,
     maxiter: Optional[Int] = None,
+    *,
+    x0: Optional[TypedCochain[n, in_k, in_primal]] = None,
+    nullspace: Optional[NullSpace] = None,
+    ritz: Bool = False,
 ) raises -> SolveResult[TypedCochain[n, in_k, in_primal]]:
     """Conjugate gradients for `A x = b` on cochains; see the untyped overload.
 
@@ -1003,6 +1549,9 @@ def cg[
         rtol: Relative tolerance on the residual norm.
         atol: Absolute tolerance on the residual norm.
         maxiter: Iteration limit; `None` means 10 times the size.
+        x0: The starting guess, of `A`'s input kind; `None` means zero.
+        nullspace: The kernel of `A` (vectors of its input kind).
+        ritz: Whether to return the Ritz values.
 
     Returns:
         The solution, of `A`'s input kind, with why the iteration stopped.
@@ -1011,8 +1560,23 @@ def cg[
         If `A` and `b` are on different complexes, or as the untyped `cg`.
     """
     _typed_complex(A.complex, b.complex, "cg")
+    var guess: Optional[RealArray] = None
+    if x0:
+        if not x0.value().complex.is_same(b.complex):
+            raise Error("cg: x0 is on a different complex")
+        guess = x0.value().v.copy()
     return _typed_result[n, in_k, in_primal](
-        cg(A.mat, b.v, rtol, atol, maxiter), b.complex
+        cg(
+            A.mat,
+            b.v,
+            rtol,
+            atol,
+            maxiter,
+            x0=guess,
+            nullspace=nullspace,
+            ritz=ritz,
+        ),
+        b.complex,
     )
 
 
@@ -1026,6 +1590,9 @@ def cg[
     rtol: Float64 = 1e-5,
     atol: Float64 = 0.0,
     maxiter: Optional[Int] = None,
+    x0: Optional[TypedCochain[n, in_k, in_primal]] = None,
+    nullspace: Optional[NullSpace] = None,
+    ritz: Bool = False,
 ) raises -> SolveResult[TypedCochain[n, in_k, in_primal]]:
     """Preconditioned conjugate gradients on cochains; see the untyped
     overload.
@@ -1049,6 +1616,9 @@ def cg[
         rtol: Relative tolerance on the residual norm.
         atol: Absolute tolerance on the residual norm.
         maxiter: Iteration limit; `None` means 10 times the size.
+        x0: The starting guess, of `A`'s input kind; `None` means zero.
+        nullspace: The kernel of `A` (vectors of its input kind).
+        ritz: Whether to return the Ritz values.
 
     Returns:
         The solution, of `A`'s input kind, with why the iteration stopped.
@@ -1058,8 +1628,23 @@ def cg[
     """
     _typed_complex(A.complex, b.complex, "cg")
     _typed_complex(M.complex, b.complex, "cg")
+    var guess: Optional[RealArray] = None
+    if x0:
+        if not x0.value().complex.is_same(b.complex):
+            raise Error("cg: x0 is on a different complex")
+        guess = x0.value().v.copy()
     return _typed_result[n, in_k, in_primal](
-        cg(A.mat, b.v, M=M.diag, rtol=rtol, atol=atol, maxiter=maxiter),
+        cg(
+            A.mat,
+            b.v,
+            M=M.diag,
+            rtol=rtol,
+            atol=atol,
+            maxiter=maxiter,
+            x0=guess,
+            nullspace=nullspace,
+            ritz=ritz,
+        ),
         b.complex,
     )
 
@@ -1072,6 +1657,10 @@ def minres[
     rtol: Float64 = 1e-5,
     atol: Float64 = 0.0,
     maxiter: Optional[Int] = None,
+    *,
+    x0: Optional[TypedCochain[n, in_k, in_primal]] = None,
+    nullspace: Optional[NullSpace] = None,
+    ritz: Bool = False,
 ) raises -> SolveResult[TypedCochain[n, in_k, in_primal]]:
     """MINRES for `A x = b` on cochains; see the untyped overload.
 
@@ -1088,6 +1677,9 @@ def minres[
         rtol: Relative tolerance on the residual norm.
         atol: Absolute tolerance on the residual norm.
         maxiter: Iteration limit; `None` means 10 times the size.
+        x0: The starting guess, of `A`'s input kind; `None` means zero.
+        nullspace: The kernel of `A` (vectors of its input kind).
+        ritz: Whether to return the Ritz values.
 
     Returns:
         The solution, of `A`'s input kind, with why the iteration stopped.
@@ -1097,8 +1689,23 @@ def minres[
         `minres`.
     """
     _typed_complex(A.complex, b.complex, "minres")
+    var guess: Optional[RealArray] = None
+    if x0:
+        if not x0.value().complex.is_same(b.complex):
+            raise Error("minres: x0 is on a different complex")
+        guess = x0.value().v.copy()
     return _typed_result[n, in_k, in_primal](
-        minres(A.mat, b.v, rtol, atol, maxiter), b.complex
+        minres(
+            A.mat,
+            b.v,
+            rtol,
+            atol,
+            maxiter,
+            x0=guess,
+            nullspace=nullspace,
+            ritz=ritz,
+        ),
+        b.complex,
     )
 
 
@@ -1112,6 +1719,9 @@ def minres[
     rtol: Float64 = 1e-5,
     atol: Float64 = 0.0,
     maxiter: Optional[Int] = None,
+    x0: Optional[TypedCochain[n, in_k, in_primal]] = None,
+    nullspace: Optional[NullSpace] = None,
+    ritz: Bool = False,
 ) raises -> SolveResult[TypedCochain[n, in_k, in_primal]]:
     """Preconditioned MINRES on cochains; see the untyped overload.
 
@@ -1130,6 +1740,9 @@ def minres[
         rtol: Relative tolerance on the residual in the `M` norm.
         atol: Absolute tolerance on the residual in the `M` norm.
         maxiter: Iteration limit; `None` means 10 times the size.
+        x0: The starting guess, of `A`'s input kind; `None` means zero.
+        nullspace: The kernel of `A` (vectors of its input kind).
+        ritz: Whether to return the Ritz values.
 
     Returns:
         The solution, of `A`'s input kind, with why the iteration stopped.
@@ -1140,8 +1753,23 @@ def minres[
     """
     _typed_complex(A.complex, b.complex, "minres")
     _typed_complex(M.complex, b.complex, "minres")
+    var guess: Optional[RealArray] = None
+    if x0:
+        if not x0.value().complex.is_same(b.complex):
+            raise Error("minres: x0 is on a different complex")
+        guess = x0.value().v.copy()
     return _typed_result[n, in_k, in_primal](
-        minres(A.mat, b.v, M=M.diag, rtol=rtol, atol=atol, maxiter=maxiter),
+        minres(
+            A.mat,
+            b.v,
+            M=M.diag,
+            rtol=rtol,
+            atol=atol,
+            maxiter=maxiter,
+            x0=guess,
+            nullspace=nullspace,
+            ritz=ritz,
+        ),
         b.complex,
     )
 

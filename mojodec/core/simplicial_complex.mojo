@@ -2568,6 +2568,13 @@ def _triangle_circumcenter[
     return True
 
 
+comptime _TRIPLE_PRODUCT_MIN_SQ = 1e-4
+"""Square of the smallest `|a . (b x c)| / (|a| |b| |c|)` for which
+`_simplex_volumes` keeps a tetrahedron's triple product: above it the
+relative error is at most a few `eps / 0.01`; regular and Kuhn tetrahedra
+are at 0.71 and 0.41."""
+
+
 def _simplex_volumes(
     V: RealArray, S: IntArray, dim: Int, signed: Bool, mut out: RealArray
 ):
@@ -2576,9 +2583,11 @@ def _simplex_volumes(
     Signed: the determinant of the edge vectors over `dim!` (needs
     `dim` equal to the embedding dimension). Unsigned: the volume of the
     parallelotope they span (by Householder QR) over `dim!`. Tetrahedra in
-    3D take the triple product `a . (b x c)` and triangles in 3D `|u x w|`
-    instead, whose components are 2 x 2 minors, as accurate as QR. Runs in
-    parallel chunks, each with its own buffers.
+    3D take the triple product `a . (b x c)` unless they are thin relative
+    to their edges (`_TRIPLE_PRODUCT_MIN_SQ`): for a needle, whose vertices
+    lie near a line, its error is most of the volume and can flip its sign.
+    Triangles in 3D take `|u x w|`, whose components are 2 x 2 minors, as
+    accurate as QR. Runs in parallel chunks, each with its own buffers.
     """
     var E = cols_of(V)
     var w = dim + 1
@@ -2616,10 +2625,18 @@ def _simplex_volumes(
                     + ay * (bz * cx - bx * cz)
                     + az * (bx * cy - by * cx)
                 )
-                op[unsafe_offset=i] = (
-                    det / scale if signed else abs(det) / scale
-                )
-                continue
+                # its error is about eps |a| |b| |c|; when all four
+                # vertices lie near a line (a needle, det ~ t^2 L^3) that
+                # is most of det, and the sign can flip, while pivoted
+                # elimination and QR lose only eps / t: take them below
+                var aa = ax * ax + ay * ay + az * az
+                var bb = bx * bx + by * by + bz * bz
+                var cc = cx * cx + cy * cy + cz * cz
+                if det * det >= _TRIPLE_PRODUCT_MIN_SQ * (aa * bb * cc):
+                    op[unsafe_offset=i] = (
+                        det / scale if signed else abs(det) / scale
+                    )
+                    continue
             if dim == 2 and E == 3 and not signed:
                 var v0 = Int(Sp[unsafe_offset=3 * i]) * 3
                 var v1 = Int(Sp[unsafe_offset=3 * i + 1]) * 3

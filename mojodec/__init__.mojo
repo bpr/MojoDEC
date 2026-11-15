@@ -114,7 +114,10 @@ from mojodec.routines.innerproduct import (
 )
 from mojodec.routines.linalg import (
     DenseCholesky,
+    EigenvalueRange,
+    NullSpace,
     cg,
+    eigenvalue_range,
     jacobi,
     minres,
     lsqr,
