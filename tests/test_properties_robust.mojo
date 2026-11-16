@@ -65,7 +65,12 @@ from mojodec.routines.linalg import (
     jacobi,
     minres,
 )
-from mojodec.routines.time import CrankNicolson, ImplicitMidpoint, _Guess
+from mojodec.routines.time import (
+    CrankNicolson,
+    ImplicitMidpoint,
+    StepSolver,
+    _Guess,
+)
 from mojodec.routines.ordering import amd_ordering
 from mojodec.routines.sparse_ldlt import (
     FillOrdering,
@@ -713,18 +718,21 @@ def axpy_into(a: Float64, x: RealArray, mut y: RealArray):
 
 
 def test_implicit_steppers_match_dense_steps() raises:
-    """Crank-Nicolson and the implicit midpoint rule, whose CG starts from
-    the previous steps' guess, follow the dense step to rounding over many
-    steps, at small and large dt."""
+    """Crank-Nicolson and the implicit midpoint rule, factored once or by
+    CG started from the previous steps' guess, follow the dense step to
+    rounding over many steps, at small and large dt."""
 
-    def prop(ints: List[Int], n: Int, steps: Int, big: Bool) raises:
+    def prop(
+        ints: List[Int], n: Int, steps: Int, big: Bool, factored: Bool
+    ) raises:
         var dt = 0.7 if big else 0.03
+        var solver = StepSolver.CHOLESKY if factored else StepSolver.CG
         # Crank-Nicolson: M SPD, K a PSD Laplacian, a source
         var Md = _graph(n, ints, True)
         var rotated: List[Int] = [ints[len(ints) - 1]]
         rotated.extend(ints.copy())
         var Kd = _graph(n, rotated, False)
-        var cn = CrankNicolson(_csr(Md), _csr(Kd), dt)
+        var cn = CrankNicolson(_csr(Md), _csr(Kd), dt, solver=solver)
         var u = _vector(n, ints, 2)
         var f = _vector(n, ints, 4)
         var ref_u = u.copy()
@@ -754,7 +762,7 @@ def test_implicit_steppers_match_dense_steps() raises:
         for j in range(n2):
             mp.append(Float64(1 + abs(ints[(j + 2) % len(ints)]) % 3))
         var im = ImplicitMidpoint(
-            _csr(Md), DiagonalOperator(mp.copy()), _csr(Kc), dt
+            _csr(Md), DiagonalOperator(mp.copy()), _csr(Kc), dt, solver=solver
         )
         var q = _vector(n, ints, 1)
         var p = _vector(n2, ints, 3)
@@ -807,6 +815,7 @@ def test_implicit_steppers_match_dense_steps() raises:
         lists(integers(-5, 5), min_size=1, max_size=40),
         integers(1, 8),
         integers(1, 30),
+        booleans(),
         booleans(),
         prop,
         quick(),

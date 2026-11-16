@@ -291,10 +291,8 @@ K^T q_m ,
 $$
 
 then $q_1 = 2 q_m - q_0$ and $p_1 = 2 p_m - p_0$. The matrix is symmetric
-positive definite and is assembled once. Each step solves it with
-Jacobi-preconditioned CG for the change $q_m - q_0$, so the tolerance
-`rtol` (default $10^{-12}$) applies to that change and the energy stays
-constant to about that relative accuracy.
+positive definite and is assembled once; see **Solving each step** below
+for how it is solved.
 
 This needs $M_p^{-1}$, so **$M_p$ must be diagonal**, while **$M_q$ may be
 any symmetric positive definite matrix**. For Maxwell's equations in 2D:
@@ -336,8 +334,49 @@ With a constant source, `step(u, f, steps)` approaches the steady state
 $K u = f$. Here `f` is a load vector, such as `whitney_load` or a mass
 times nodal values; the typed version types it as the dual kind.
 
-**Starting guesses.** Both implicit schemes solve with one matrix $S$ at
-every step, so each CG solve starts from Fischer's guess: the point
+**Solving each step.** Both implicit schemes solve with one symmetric
+positive definite matrix $S$ at every step ($M_q + \frac{\Delta t^2}{4} K
+M_p^{-1} K^T$, or $M + \frac{\Delta t}{2} K$). The `solver=` keyword says
+how:
+
+- `StepSolver.CHOLESKY` factors $S$ once (`SparseCholesky`, AMD
+  ordering), and each step is two sparse triangular solves: exact to
+  rounding, so the midpoint energy is constant to $10^{-14}$.
+- `StepSolver.CG` runs Jacobi-preconditioned CG each step, for the
+  change $q_m - q_0$ (or $u_1 - u_0$), to `rtol` (default $10^{-12}$)
+  relative to that change, from Fischer's guess (below). It needs only a
+  few vectors.
+- `StepSolver.AUTO`, the default, decides from the fill: it computes the
+  AMD ordering and counts $\operatorname{nnz}(L)$ from the elimination
+  tree (`cholesky_nonzeros`, no arithmetic), and factors when
+  $\operatorname{nnz}(L) \le 8 \operatorname{nnz}(S)$. The stepper's
+  `solver` field then says which it chose.
+
+Measured on Kuhn grids, one thread, release build, $\Delta t = 0.01$,
+100 steps; heat is P1 on the interior vertices with a source, Maxwell
+the Whitney mass on the interior edges:
+
+| | unknowns | nnz(L) / nnz(S) | CG | factor + steps |
+|---|---|---|---|---|
+| heat, 32 × 32 | 961 | 2.4 | 10.6 ms | 0.6 + 2.0 ms |
+| heat, 128 × 128 | 16,129 | 4.4 | 592 ms | 15 + 58 ms |
+| heat, 256 × 256 | 65,025 | 5.7 | 4.75 s | 93 + 297 ms |
+| Maxwell, 32 × 32 | 3,008 | 2.4 | 16.9 ms | 1.2 + 5.1 ms |
+| Maxwell, 128 × 128 | 48,896 | 3.5 | 769 ms | 26 + 114 ms |
+| Maxwell, 256 × 256 | 196,096 | 3.9 | 5.20 s | 149 + 589 ms |
+| heat, 16³ | 3,375 | 9.1 | 46 ms | 21 + 47 ms |
+| heat, 24³ | 12,167 | 18.5 | 230 ms | 343 + 350 ms |
+| heat, 32³ | 29,791 | 28.0 | 653 ms | 2.37 + 2.27 s |
+
+In 2D the factor is 6–16 times faster over 100 steps, and its setup is
+repaid within a few steps. In 3D the fill grows like $n^{4/3}$ and
+a triangular solve costs more than a CG solve from a good guess
+(the step matrix is well conditioned for small $\Delta t$), so `AUTO`
+keeps CG there. Large $\Delta t$ makes $S$ worse conditioned and moves
+the balance toward factoring; pass `solver=StepSolver.CHOLESKY` then.
+
+**Starting guesses.** With `StepSolver.CG`, each solve starts from
+Fischer's guess: the point
 closest to the new solution, in the $S$ norm, in the span of the last 16
 solutions. The span is kept as an $S$-orthonormal basis $y_1, \dots, y_l$,
 and the guess for $S x = b$ is
@@ -394,7 +433,8 @@ with `select(free, free)`. Nonzero Dirichlet data enters as a source.
     limit, energy constant to $10^{-14}$;
   - Maxwell on a Kuhn grid with the Whitney mass, which the leapfrog
     refuses: the lowest mode turns as predicted to $10^{-10}$ over 200
-    steps, with energy constant to $10^{-12}$.
+    steps, with energy constant to $10^{-14}$ factored and $10^{-12}$
+    with CG.
 - **Crank–Nicolson:**
   - the slowest and stiffest modes against $g^n$, including $g < -0.9$ at
     a large step;
@@ -403,9 +443,11 @@ with `select(free, free)`. Nonzero Dirichlet data enters as a source.
   - the typed versions and the errors.
 
 `tests/test_properties_robust.mojo`:
-- `test_implicit_steppers_match_dense_steps`: both schemes against dense
-  steps over up to 30 steps, at small and large $\Delta t$, with the
-  midpoint energy conserved;
+- `test_implicit_steppers_match_dense_steps`: both schemes, factored and
+  with CG, against dense steps over up to 30 steps, at small and large
+  $\Delta t$, with the midpoint energy conserved;
+- `test_auto_factors_in_2d_and_iterates_in_3d` (in `test_time.mojo`):
+  the choice on a 2D and a 3D grid, and factored steps against CG's;
 - `test_fischer_guess_is_never_worse_than_zero`: the guess's error in the
   $S$ norm against the zero start, for any sequence of right-hand sides.
 

@@ -53,6 +53,8 @@ from mojodec.core.sparse import CSRMatrix
 from mojodec.core.typed import DiagonalOp, MatrixOp, TypedCochain
 from mojodec.core.utils import RealArray, axpy, dot, real_vector
 from mojodec.routines.linalg import cg, jacobi
+from mojodec.routines.ordering import amd_ordering
+from mojodec.routines.sparse_ldlt import SparseCholesky, cholesky_nonzeros
 
 
 struct Leapfrog(Movable):
@@ -364,6 +366,87 @@ def _require_positive(
 # ===----------------------------------------------------------------------=== #
 
 
+struct StepSolver(Equatable, ImplicitlyCopyable, Writable):
+    """How `ImplicitMidpoint` and `CrankNicolson` solve each step.
+
+    ```mojo
+    var cn = CrankNicolson(M, K, dt)            # AUTO: factored in 2D
+    print(cn.solver)                            # what AUTO chose
+    var it = CrankNicolson(M, K, dt, solver=StepSolver.CG)
+    ```
+    """
+
+    var _code: UInt8
+
+    comptime AUTO = StepSolver(2)
+    """`CHOLESKY` when the factor stays small, `CG` otherwise: the AMD
+    ordering and the elimination tree count `nnz(L)` without arithmetic,
+    and the step matrix is factored when `nnz(L) <= 8 nnz(S)`
+    (`_FACTOR_FILL`). On Kuhn grids that is every 2D mesh measured
+    (ratios 2.4 to 5.7, up to 256 x 256) and no 3D one (9 to 28, from
+    16^3), where factoring cost 1.0x to 7x CG's 100 steps."""
+    comptime CHOLESKY = StepSolver(0)
+    """Factor the step matrix once (`SparseCholesky`, AMD ordering) and
+    take two triangular solves per step: exact to rounding, and the
+    fastest whenever the factor fits in memory (2D, moderate 3D)."""
+    comptime CG = StepSolver(1)
+    """Jacobi-preconditioned CG each step, to `rtol`, started from
+    Fischer's guess: memory of a few vectors, for large 3D meshes whose
+    factor fills in."""
+
+    def __init__(out self, code: UInt8):
+        """A solver from its code; use the named members instead.
+
+        Args:
+            code: 0, 1, or 2.
+        """
+        self._code = code
+
+    def __eq__(self, other: Self) -> Bool:
+        """Whether two solvers are the same.
+
+        Args:
+            other: The solver to compare with.
+
+        Returns:
+            True if they are equal.
+        """
+        return self._code == other._code
+
+    def write_to(self, mut writer: Some[Writer]):
+        """Write the solver's name.
+
+        Args:
+            writer: The destination.
+        """
+        if self == Self.CHOLESKY:
+            writer.write("sparse Cholesky")
+        elif self == Self.CG:
+            writer.write("CG")
+        else:
+            writer.write("auto")
+
+
+comptime _FACTOR_FILL = 8
+"""`StepSolver.AUTO` factors when `nnz(L) <= _FACTOR_FILL nnz(S)`."""
+
+
+def _factor_if_small(
+    S: CSRMatrix, solver: StepSolver
+) raises -> Optional[SparseCholesky]:
+    """The factor of `S` for `CHOLESKY`, and for `AUTO` when its fill is
+    at most `_FACTOR_FILL nnz(S)`; `None` for CG."""
+    if solver == StepSolver.CG:
+        return None
+    var perm = amd_ordering(S)
+    if (
+        solver == StepSolver.AUTO
+        and cholesky_nonzeros(S, perm) > _FACTOR_FILL * S.nnz()
+    ):
+        return None
+    return SparseCholesky(S, perm=perm^)
+
+
 comptime _GUESS_HISTORY = 16
 """Solutions `_Guess` keeps before it restarts."""
 
@@ -446,18 +529,26 @@ struct ImplicitMidpoint(Movable):
     For Maxwell's equations that puts the electric field on the edges with
     `whitney_innerproduct(sc, 1)` and the flux on the triangles with the
     star `1 / area`, which is positive on every mesh: unlike the leapfrog,
-    no well-centered mesh is needed. The solve is Jacobi-preconditioned CG
-    for the change of `qm` from `q0`, started from the previous step's
-    change projected on the last solutions (Fischer's guess, `_Guess`), so a step's result
-    depends on the one before it, within `rtol`.
+    no well-centered mesh is needed. The step matrix does not change, so
+    it is factored once when its factor stays small (`StepSolver.AUTO`:
+    2D meshes, not 3D ones), and each step takes two sparse triangular
+    solves. With `StepSolver.CG`, each step
+    runs Jacobi-preconditioned CG for the change of `qm` from `q0`,
+    started from the previous changes projected on the last solutions
+    (Fischer's guess, `_Guess`), so a step's result depends on the one
+    before it, within `rtol`.
     """
 
     var dt: Float64
     """The time step."""
     var rtol: Float64
-    """The relative residual at which each step's CG stops."""
+    """The relative residual at which each step's CG stops (`StepSolver.CG`
+    only)."""
+    var solver: StepSolver
+    """How each step is solved: `CHOLESKY` or `CG`, never `AUTO` (it
+    holds what `AUTO` chose)."""
     var last_iterations: Int
-    """CG iterations of the last step."""
+    """CG iterations of the last step (0 with `StepSolver.CHOLESKY`)."""
     var _mq: CSRMatrix
     var _mp: DiagonalOperator
     var _K: CSRMatrix
@@ -467,6 +558,7 @@ struct ImplicitMidpoint(Movable):
     """`Mq + dt^2/4 K Mp^-1 K^T`."""
     var _P: DiagonalOperator
     var _guess: _Guess
+    var _F: Optional[SparseCholesky]
 
     def __init__(
         out self,
@@ -475,6 +567,8 @@ struct ImplicitMidpoint(Movable):
         K: CSRMatrix,
         dt: Float64,
         rtol: Float64 = 1e-12,
+        *,
+        solver: StepSolver = StepSolver.AUTO,
     ) raises:
         """The scheme with step `dt`.
 
@@ -484,11 +578,13 @@ struct ImplicitMidpoint(Movable):
             K: The coupling, `len(Mq) x len(Mp)`.
             dt: The time step, positive; any size is stable.
             rtol: The relative residual at which each step's CG stops.
+            solver: `StepSolver.AUTO` (factor once when the fill is
+                small), `StepSolver.CHOLESKY`, or `StepSolver.CG`.
 
         Raises:
             If the shapes do not match, an entry of `Mp` is not positive
-            and finite, `Mq` is not symmetric, or `dt` or `rtol` is not
-            positive.
+            and finite, `Mq` is not symmetric (or, factored, not positive
+            definite), or `dt` or `rtol` is not positive.
         """
         var nq = Mq.nrows
         var np = len(Mp)
@@ -518,6 +614,7 @@ struct ImplicitMidpoint(Movable):
             raise Error("ImplicitMidpoint: rtol must be positive")
         self.dt = dt
         self.rtol = rtol
+        self.solver = solver
         self.last_iterations = 0
         self._B = Mp.inverse() @ K.transpose()
         self._S = Mq + (K @ self._B) * (dt * dt / 4)
@@ -526,8 +623,13 @@ struct ImplicitMidpoint(Movable):
         self._mq = Mq.copy()
         self._mp = Mp.copy()
         self._K = K.copy()
-        # cg checks symmetry on its first solve; check it here, once
-        _ = cg(self._S, real_vector(nq), M=self._P, maxiter=0)
+        self._F = _factor_if_small(self._S, solver)
+        if self._F:
+            self.solver = StepSolver.CHOLESKY
+        else:
+            self.solver = StepSolver.CG
+            # cg checks symmetry on its first solve; check it here, once
+            _ = cg(self._S, real_vector(nq), M=self._P, maxiter=0)
 
     def __init__(
         out self,
@@ -536,6 +638,8 @@ struct ImplicitMidpoint(Movable):
         K: CSRMatrix,
         dt: Float64,
         rtol: Float64 = 1e-12,
+        *,
+        solver: StepSolver = StepSolver.AUTO,
     ) raises:
         """The scheme with a diagonal `Mq`, such as a Hodge star.
 
@@ -545,13 +649,15 @@ struct ImplicitMidpoint(Movable):
             K: The coupling, `len(Mq) x len(Mp)`.
             dt: The time step, positive; any size is stable.
             rtol: The relative residual at which each step's CG stops.
+            solver: `StepSolver.AUTO` (factor once when the fill is
+                small), `StepSolver.CHOLESKY`, or `StepSolver.CG`.
 
         Raises:
             As the overload with a general `Mq`, or if an entry of `Mq`
             is not positive and finite.
         """
         _require_positive(Mq, "Mq", "ImplicitMidpoint")
-        self = Self(Mq.to_csr(), Mp, K, dt, rtol)
+        self = Self(Mq.to_csr(), Mp, K, dt, rtol, solver=solver)
 
     def step(
         mut self, mut q: RealArray, mut p: RealArray, steps: Int = 1
@@ -581,30 +687,37 @@ struct ImplicitMidpoint(Movable):
             var rhs = self._K @ w
             for i in range(rhs.size):
                 rhs.unsafe_set(i, h * rhs.unsafe_get(i))
-            var res = cg(
-                self._S,
-                rhs,
-                M=self._P,
-                rtol=self.rtol,
-                x0=self._guess.for_rhs(rhs),
-            )
-            if not res.converged():
-                raise Error(
-                    String(
-                        "ImplicitMidpoint.step: CG stopped (",
-                        res.stop,
-                        ") at residual ",
-                        res.residual_norm,
-                    )
-                )
-            self.last_iterations = res.iterations
-            var dq = res^.take_x()
-            self._guess.keep(self._S, dq)
+            var dq = self._solve(rhs)
             # qm = q + dq, pm = p - h B qm; q1 = 2 qm - q, p1 = 2 pm - p
             axpy(1.0, dq, q)  # q = qm
             var bq = self._B @ q
             axpy(1.0, dq, q)  # q1 = qm + dq
             axpy(-self.dt, bq, p)
+
+    def _solve(mut self, rhs: RealArray) raises -> RealArray:
+        """`S^-1 rhs`, by the factor or by CG from Fischer's guess."""
+        if self._F:
+            return self._F.value().solve(rhs)
+        var res = cg(
+            self._S,
+            rhs,
+            M=self._P,
+            rtol=self.rtol,
+            x0=self._guess.for_rhs(rhs),
+        )
+        if not res.converged():
+            raise Error(
+                String(
+                    "ImplicitMidpoint.step: CG stopped (",
+                    res.stop,
+                    ") at residual ",
+                    res.residual_norm,
+                )
+            )
+        self.last_iterations = res.iterations
+        var dq = res^.take_x()
+        self._guess.keep(self._S, dq)
+        return dq^
 
     def energy(self, q: RealArray, p: RealArray) raises -> Float64:
         """The energy, which `step` conserves.
@@ -634,23 +747,32 @@ struct CrankNicolson(Movable):
     `(1 - dt lambda / 2) / (1 + dt lambda / 2)` each step, which tends to
     -1 for `dt lambda >> 1`: stiff modes are damped slowly and flip sign
     every step instead of decaying (the scheme is A-stable, not L-stable).
-    The solve is Jacobi-preconditioned CG for `u1 - u0`, started from the
-    previous step's change projected on the last solutions (Fischer's guess, `_Guess`), so
-    a step's result depends on the one before it, within `rtol`.
+    `M + dt/2 K` is factored once when its factor stays small
+    (`StepSolver.AUTO`: 2D meshes, not 3D ones), and each step takes two
+    sparse triangular solves. With `StepSolver.CG`,
+    each step runs Jacobi-preconditioned CG for `u1 - u0`, started from the
+    previous changes projected on the last solutions (Fischer's guess,
+    `_Guess`), so a step's result depends on the one before it, within
+    `rtol`.
     """
 
     var dt: Float64
     """The time step."""
     var rtol: Float64
-    """The relative residual at which each step's CG stops."""
+    """The relative residual at which each step's CG stops (`StepSolver.CG`
+    only)."""
+    var solver: StepSolver
+    """How each step is solved: `CHOLESKY` or `CG`, never `AUTO` (it
+    holds what `AUTO` chose)."""
     var last_iterations: Int
-    """CG iterations of the last step."""
+    """CG iterations of the last step (0 with `StepSolver.CHOLESKY`)."""
     var _M: CSRMatrix
     var _K: CSRMatrix
     var _A: CSRMatrix
     """`M + dt/2 K`."""
     var _P: DiagonalOperator
     var _guess: _Guess
+    var _F: Optional[SparseCholesky]
 
     def __init__(
         out self,
@@ -658,6 +780,8 @@ struct CrankNicolson(Movable):
         K: CSRMatrix,
         dt: Float64,
         rtol: Float64 = 1e-12,
+        *,
+        solver: StepSolver = StepSolver.AUTO,
     ) raises:
         """The scheme with step `dt`.
 
@@ -666,10 +790,13 @@ struct CrankNicolson(Movable):
             K: The stiffness, symmetric positive semidefinite, same size.
             dt: The time step, positive; any size is stable.
             rtol: The relative residual at which each step's CG stops.
+            solver: `StepSolver.AUTO` (factor once when the fill is
+                small), `StepSolver.CHOLESKY`, or `StepSolver.CG`.
 
         Raises:
             If the shapes do not match, `M + dt/2 K` is not symmetric or
-            has a zero diagonal entry, or `dt` or `rtol` is not positive.
+            has a zero diagonal entry (or, factored, is not positive
+            definite), or `dt` or `rtol` is not positive.
         """
         var n = M.nrows
         if M.ncols != n or K.nrows != n or K.ncols != n:
@@ -692,13 +819,19 @@ struct CrankNicolson(Movable):
             raise Error("CrankNicolson: rtol must be positive")
         self.dt = dt
         self.rtol = rtol
+        self.solver = solver
         self.last_iterations = 0
         self._A = M + K * (0.5 * dt)
         self._P = jacobi(self._A)
         self._guess = _Guess()
         self._M = M.copy()
         self._K = K.copy()
-        _ = cg(self._A, real_vector(n), M=self._P, maxiter=0)
+        self._F = _factor_if_small(self._A, solver)
+        if self._F:
+            self.solver = StepSolver.CHOLESKY
+        else:
+            self.solver = StepSolver.CG
+            _ = cg(self._A, real_vector(n), M=self._P, maxiter=0)
 
     def __init__(
         out self,
@@ -706,6 +839,8 @@ struct CrankNicolson(Movable):
         K: CSRMatrix,
         dt: Float64,
         rtol: Float64 = 1e-12,
+        *,
+        solver: StepSolver = StepSolver.AUTO,
     ) raises:
         """The scheme with a diagonal mass, such as a Hodge star.
 
@@ -714,13 +849,15 @@ struct CrankNicolson(Movable):
             K: The stiffness, symmetric positive semidefinite, same size.
             dt: The time step, positive; any size is stable.
             rtol: The relative residual at which each step's CG stops.
+            solver: `StepSolver.AUTO` (factor once when the fill is
+                small), `StepSolver.CHOLESKY`, or `StepSolver.CG`.
 
         Raises:
             As the overload with a general `M`, or if an entry of `M` is
             not positive and finite.
         """
         _require_positive(M, "M", "CrankNicolson")
-        self = Self(M.to_csr(), K, dt, rtol)
+        self = Self(M.to_csr(), K, dt, rtol, solver=solver)
 
     def step(mut self, mut u: RealArray, steps: Int = 1) raises:
         """Advance `u` in place, without a source.
@@ -767,6 +904,9 @@ struct CrankNicolson(Movable):
                 if f:
                     s += f.value().unsafe_get(i)
                 rhs.unsafe_set(i, self.dt * s)
+            if self._F:
+                axpy(1.0, self._F.value().solve(rhs), u)
+                continue
             var res = cg(
                 self._A,
                 rhs,
@@ -851,6 +991,8 @@ struct TypedImplicitMidpoint[n: Int, kq: Int, pq: Bool, kp: Int, pp: Bool](
         K: MatrixOp[Self.n, Self.kp, Self.pp, oq, opq],
         dt: Float64,
         rtol: Float64 = 1e-12,
+        *,
+        solver: StepSolver = StepSolver.AUTO,
     ) raises:
         """The scheme with a general mass for `q`, such as
         `whitney_innerproduct[kq](tc)`.
@@ -867,6 +1009,8 @@ struct TypedImplicitMidpoint[n: Int, kq: Int, pq: Bool, kp: Int, pp: Bool](
             K: The coupling from `p` to the kind `Mq` gives.
             dt: The time step.
             rtol: The relative residual at which each step's CG stops.
+            solver: `StepSolver.AUTO` (factor once when the fill is
+                small), `StepSolver.CHOLESKY`, or `StepSolver.CG`.
 
         Raises:
             If the operators are on different complexes, or as
@@ -881,7 +1025,9 @@ struct TypedImplicitMidpoint[n: Int, kq: Int, pq: Bool, kp: Int, pp: Bool](
         self.complex = _join_complexes(
             [Mq.complex, Mp.complex, K.complex], "TypedImplicitMidpoint"
         )
-        self.core = ImplicitMidpoint(Mq.mat, Mp.diag, K.mat, dt, rtol)
+        self.core = ImplicitMidpoint(
+            Mq.mat, Mp.diag, K.mat, dt, rtol, solver=solver
+        )
 
     def __init__[
         oq: Int, opq: Bool, op: Int, opp: Bool
@@ -892,6 +1038,8 @@ struct TypedImplicitMidpoint[n: Int, kq: Int, pq: Bool, kp: Int, pp: Bool](
         K: MatrixOp[Self.n, Self.kp, Self.pp, oq, opq],
         dt: Float64,
         rtol: Float64 = 1e-12,
+        *,
+        solver: StepSolver = StepSolver.AUTO,
     ) raises:
         """The scheme with a diagonal mass for `q`, such as a Hodge star.
 
@@ -907,6 +1055,8 @@ struct TypedImplicitMidpoint[n: Int, kq: Int, pq: Bool, kp: Int, pp: Bool](
             K: The coupling from `p` to the kind `Mq` gives.
             dt: The time step.
             rtol: The relative residual at which each step's CG stops.
+            solver: `StepSolver.AUTO` (factor once when the fill is
+                small), `StepSolver.CHOLESKY`, or `StepSolver.CG`.
 
         Raises:
             If the operators are on different complexes, or as
@@ -921,7 +1071,9 @@ struct TypedImplicitMidpoint[n: Int, kq: Int, pq: Bool, kp: Int, pp: Bool](
         self.complex = _join_complexes(
             [Mq.complex, Mp.complex, K.complex], "TypedImplicitMidpoint"
         )
-        self.core = ImplicitMidpoint(Mq.diag, Mp.diag, K.mat, dt, rtol)
+        self.core = ImplicitMidpoint(
+            Mq.diag, Mp.diag, K.mat, dt, rtol, solver=solver
+        )
 
     def step(
         mut self,
@@ -992,6 +1144,8 @@ struct TypedCrankNicolson[n: Int, k: Int, primal: Bool](Movable):
         ],
         dt: Float64,
         rtol: Float64 = 1e-12,
+        *,
+        solver: StepSolver = StepSolver.AUTO,
     ) raises:
         """The scheme with a general mass, such as
         `whitney_innerproduct[k](tc)`.
@@ -1001,6 +1155,8 @@ struct TypedCrankNicolson[n: Int, k: Int, primal: Bool](Movable):
             K: The stiffness, such as `d.T() @ star @ d`.
             dt: The time step.
             rtol: The relative residual at which each step's CG stops.
+            solver: `StepSolver.AUTO` (factor once when the fill is
+                small), `StepSolver.CHOLESKY`, or `StepSolver.CG`.
 
         Raises:
             If the operators are on different complexes, or as
@@ -1009,7 +1165,7 @@ struct TypedCrankNicolson[n: Int, k: Int, primal: Bool](Movable):
         self.complex = _join_complexes(
             [M.complex, K.complex], "TypedCrankNicolson"
         )
-        self.core = CrankNicolson(M.mat, K.mat, dt, rtol)
+        self.core = CrankNicolson(M.mat, K.mat, dt, rtol, solver=solver)
 
     def __init__(
         out self,
@@ -1021,6 +1177,8 @@ struct TypedCrankNicolson[n: Int, k: Int, primal: Bool](Movable):
         ],
         dt: Float64,
         rtol: Float64 = 1e-12,
+        *,
+        solver: StepSolver = StepSolver.AUTO,
     ) raises:
         """The scheme with a diagonal mass, such as a Hodge star.
 
@@ -1029,6 +1187,8 @@ struct TypedCrankNicolson[n: Int, k: Int, primal: Bool](Movable):
             K: The stiffness.
             dt: The time step.
             rtol: The relative residual at which each step's CG stops.
+            solver: `StepSolver.AUTO` (factor once when the fill is
+                small), `StepSolver.CHOLESKY`, or `StepSolver.CG`.
 
         Raises:
             If the operators are on different complexes, or as
@@ -1037,7 +1197,7 @@ struct TypedCrankNicolson[n: Int, k: Int, primal: Bool](Movable):
         self.complex = _join_complexes(
             [M.complex, K.complex], "TypedCrankNicolson"
         )
-        self.core = CrankNicolson(M.diag, K.mat, dt, rtol)
+        self.core = CrankNicolson(M.diag, K.mat, dt, rtol, solver=solver)
 
     def step(
         mut self,

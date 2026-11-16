@@ -163,6 +163,7 @@ struct SparseLDLT(LinearOperator, Movable):
         A: CSRMatrix,
         *,
         ordering: FillOrdering = FillOrdering.AMD,
+        perm: Optional[List[Int]] = None,
         signs: Optional[List[Int]] = None,
         regularization: Float64 = 0,
         refinement_steps: Int = 1,
@@ -172,6 +173,9 @@ struct SparseLDLT(LinearOperator, Movable):
         Args:
             A: An `n x n` symmetric matrix, both triangles stored.
             ordering: The fill-reducing permutation.
+            perm: A permutation to use instead of `ordering` (row
+                `perm[k]` of `A` becomes row `k`), such as one
+                `amd_ordering(A)` already computed.
             signs: The expected sign (`+1` or `-1`) of each pivot, by row
                 of `A`, for the regularization; e.g. `-1` on a mass block
                 and `+1` on a constraint block, or the reverse. Without it
@@ -188,8 +192,9 @@ struct SparseLDLT(LinearOperator, Movable):
             If `A` is not square or not symmetric (an entry differs from
             its transpose by more than `1e-12` times the largest), a pivot
             is zero or not finite (with the row of `A` it belongs to), the
-            lengths of `signs` or its entries are wrong, or
-            `regularization` or `refinement_steps` is negative.
+            lengths of `signs` or its entries are wrong, `perm` is not a
+            permutation of `0..n-1`, or `regularization` or
+            `refinement_steps` is negative.
         """
         var n = A.nrows
         if A.ncols != n:
@@ -215,55 +220,24 @@ struct SparseLDLT(LinearOperator, Movable):
         self.n = n
         self.num_regularized = 0
         self.refinement_steps = refinement_steps
-        if ordering == FillOrdering.AMD:
+        if perm:
+            self.perm = perm.value().copy()
+        elif ordering == FillOrdering.AMD:
             self.perm = amd_ordering(A)
         else:
             self.perm = List[Int](capacity=n)
             for i in range(n):
                 self.perm.append(i)
-        self._perm_inv = List[Int](length=n, fill=0)
-        for k in range(n):
-            self._perm_inv[self.perm[k]] = k
+        self._perm_inv = _inverse_permutation(self.perm, n, "SparseLDLT")
         self._A = A.copy()
-        # C = P A P^T, lower triangle, by rows (= upper, by columns)
-        var Cp = List[Int](length=n + 1, fill=0)
-        for i in range(n):
-            var ki = self._perm_inv[i]
-            for t in range(A.indptr[i], A.indptr[i + 1]):
-                if self._perm_inv[A.indices[t]] <= ki:
-                    Cp[ki + 1] += 1
-        for k in range(n):
-            Cp[k + 1] += Cp[k]
-        var Ci = List[Int](length=Cp[n], fill=0)
-        var Cx = List[Float64](length=Cp[n], fill=0)
-        var at = Cp.copy()
-        for i in range(n):
-            var ki = self._perm_inv[i]
-            for t in range(A.indptr[i], A.indptr[i + 1]):
-                var kj = self._perm_inv[A.indices[t]]
-                if kj <= ki:
-                    Ci[at[ki]] = kj
-                    Cx[at[ki]] = A.data[t]
-                    at[ki] += 1
-        # elimination tree and column counts of L
+        var C = _PermutedLower(A, self._perm_inv)
+        ref Cp = C.Cp
+        ref Ci = C.Ci
+        ref Cx = C.Cx
         var etree = List[Int](length=n, fill=_NONE)
         var counts = List[Int](length=n, fill=1)
         var visited = List[Int](length=n, fill=_NONE)
-        for k in range(n):
-            visited[k] = k
-            for t in range(Cp[k], Cp[k + 1]):
-                var i = Ci[t]
-                if i < k:
-                    while visited[i] != k:
-                        var nxt: Int
-                        if etree[i] != _NONE:
-                            nxt = etree[i]
-                        else:
-                            etree[i] = k
-                            nxt = k
-                        counts[i] += 1
-                        visited[i] = k
-                        i = nxt
+        _etree_and_counts(Cp, Ci, etree, counts, visited)
         self._Lp = List[Int](length=n + 1, fill=0)
         for j in range(n):
             self._Lp[j + 1] = self._Lp[j] + counts[j]
@@ -461,13 +435,19 @@ struct SparseCholesky(Movable, Preconditioner):
     """The factorization."""
 
     def __init__(
-        out self, A: CSRMatrix, ordering: FillOrdering = FillOrdering.AMD
+        out self,
+        A: CSRMatrix,
+        ordering: FillOrdering = FillOrdering.AMD,
+        *,
+        perm: Optional[List[Int]] = None,
     ) raises:
         """Factor `A`.
 
         Args:
             A: An `n x n` symmetric positive definite matrix.
             ordering: The fill-reducing permutation.
+            perm: A permutation to use instead of `ordering`, as
+                `SparseLDLT` takes it.
 
         Raises:
             If `A` is not square or not symmetric, or a pivot is not
@@ -475,7 +455,9 @@ struct SparseCholesky(Movable, Preconditioner):
         """
         # positive definite: no growth, so the bare solves are backward
         # stable, and the preconditioner stays one linear map
-        self.factor = SparseLDLT(A, ordering=ordering, refinement_steps=0)
+        self.factor = SparseLDLT(
+            A, ordering=ordering, perm=perm, refinement_steps=0
+        )
         ref F = self.factor
         for k in range(F.n):
             var d = F._Lx[F._Lp[k]]
@@ -533,6 +515,121 @@ struct SparseCholesky(Movable, Preconditioner):
             If `x` or `y` does not have length `n`.
         """
         self.factor.apply_into(x, y)
+
+
+def cholesky_nonzeros(A: CSRMatrix, perm: List[Int]) raises -> Int:
+    """The number of nonzeros `SparseLDLT(A, perm=perm)` would store in
+    `L` (its diagonal included), from the elimination tree alone: no
+    arithmetic, about the cost of reading `A`.
+
+    ```mojo
+    var p = amd_ordering(A)
+    if cholesky_nonzeros(A, p) <= 8 * A.nnz():  # little fill: factor
+        var F = SparseCholesky(A, perm=p^)
+    ```
+
+    Args:
+        A: An `n x n` matrix with a symmetric pattern; only the entries on
+            and below the diagonal of `P A P^T` are read.
+        perm: The ordering: row `perm[k]` of `A` becomes row `k`.
+
+    Returns:
+        `nnz(L)`, as `factor_nonzeros()` would report it.
+
+    Raises:
+        If `A` is not square or `perm` is not a permutation of `0..n-1`.
+    """
+    var n = A.nrows
+    if A.ncols != n:
+        raise Error(
+            String("cholesky_nonzeros: the matrix is ", n, " x ", A.ncols)
+        )
+    var C = _PermutedLower(
+        A, _inverse_permutation(perm, n, "cholesky_nonzeros")
+    )
+    var etree = List[Int](length=n, fill=_NONE)
+    var counts = List[Int](length=n, fill=1)
+    var visited = List[Int](length=n, fill=_NONE)
+    _etree_and_counts(C.Cp, C.Ci, etree, counts, visited)
+    var total = 0
+    for j in range(n):
+        total += counts[j]
+    return total
+
+
+def _inverse_permutation(
+    perm: List[Int], n: Int, who: String
+) raises -> List[Int]:
+    """`perm`'s inverse; raises unless it is a permutation of `0..n-1`."""
+    if len(perm) != n:
+        raise Error(String(who, ": perm has ", len(perm), " entries for ", n))
+    var inv = List[Int](length=n, fill=_NONE)
+    for k in range(n):
+        var i = perm[k]
+        if i < 0 or i >= n or inv[i] != _NONE:
+            raise Error(
+                String(who, ": perm is not a permutation (entry ", k, ")")
+            )
+        inv[i] = k
+    return inv^
+
+
+struct _PermutedLower(Movable):
+    """`C = P A P^T`, its lower triangle by rows (= upper, by columns)."""
+
+    var Cp: List[Int]
+    var Ci: List[Int]
+    var Cx: List[Float64]
+
+    def __init__(out self, A: CSRMatrix, perm_inv: List[Int]):
+        var n = A.nrows
+        self.Cp = List[Int](length=n + 1, fill=0)
+        for i in range(n):
+            var ki = perm_inv[i]
+            for t in range(A.indptr[i], A.indptr[i + 1]):
+                if perm_inv[A.indices[t]] <= ki:
+                    self.Cp[ki + 1] += 1
+        for k in range(n):
+            self.Cp[k + 1] += self.Cp[k]
+        self.Ci = List[Int](length=self.Cp[n], fill=0)
+        self.Cx = List[Float64](length=self.Cp[n], fill=0)
+        var at = self.Cp.copy()
+        for i in range(n):
+            var ki = perm_inv[i]
+            for t in range(A.indptr[i], A.indptr[i + 1]):
+                var kj = perm_inv[A.indices[t]]
+                if kj <= ki:
+                    self.Ci[at[ki]] = kj
+                    self.Cx[at[ki]] = A.data[t]
+                    at[ki] += 1
+
+
+def _etree_and_counts(
+    Cp: List[Int],
+    Ci: List[Int],
+    mut etree: List[Int],
+    mut counts: List[Int],
+    mut visited: List[Int],
+):
+    """The elimination tree of `C` and the column counts of `L` (each
+    starting at 1, for the diagonal), by walking each row's paths up the
+    tree as far as they are new."""
+    var n = len(etree)
+    for k in range(n):
+        visited[k] = k
+        for t in range(Cp[k], Cp[k + 1]):
+            var i = Ci[t]
+            if i < k:
+                while visited[i] != k:
+                    var nxt: Int
+                    if etree[i] != _NONE:
+                        nxt = etree[i]
+                    else:
+                        etree[i] = k
+                        nxt = k
+                    counts[i] += 1
+                    visited[i] = k
+                    i = nxt
 
 
 def _ereach(

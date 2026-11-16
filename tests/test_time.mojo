@@ -20,6 +20,7 @@ from mojodec.routines.mesh_generation import loop_subdivision
 from mojodec.routines.time import (
     CrankNicolson,
     ImplicitMidpoint,
+    StepSolver,
     Leapfrog,
     TypedCrankNicolson,
     TypedImplicitMidpoint,
@@ -213,22 +214,28 @@ def test_midpoint_maxwell_with_whitney_mass() raises:
     for i in range(len(inner)):
         q0.unsafe_set(i, fget_col(eig.vectors, i, first))
     var dt = 0.05
-    var im = ImplicitMidpoint(Mq, star2, K, dt)
-    var q = q0.copy()
-    var p = real_vector(sc[2].num_simplices)
-    var E0 = im.energy(q, p)
     var theta = 2 * atan(sqrt(lam) * dt / 2)
     var norm = dot(q0, Mq @ q0)
-    for n in range(1, 201):
-        im.step(q, p)
-        assert_almost_equal(im.energy(q, p), E0, atol=1e-12 * E0, rtol=0)
-        assert_almost_equal(
-            dot(q, Mq @ q0) / norm,
-            cos(Float64(n) * theta),
-            atol=1e-10,
-            rtol=0,
-        )
-    assert_true(im.last_iterations > 0)
+    for solver in [StepSolver.CHOLESKY, StepSolver.CG]:
+        var im = ImplicitMidpoint(Mq, star2, K, dt, solver=solver)
+        var q = q0.copy()
+        var p = real_vector(sc[2].num_simplices)
+        var E0 = im.energy(q, p)
+        for n in range(1, 201):
+            im.step(q, p)
+            # factored, the energy is conserved to rounding
+            var tol = 1e-14 if solver == StepSolver.CHOLESKY else 1e-12
+            assert_almost_equal(im.energy(q, p), E0, atol=tol * E0, rtol=0)
+            assert_almost_equal(
+                dot(q, Mq @ q0) / norm,
+                cos(Float64(n) * theta),
+                atol=1e-10,
+                rtol=0,
+            )
+        if solver == StepSolver.CG:
+            assert_true(im.last_iterations > 0)
+        else:
+            assert_equal(im.last_iterations, 0)
 
 
 def fget_col(A: RealArray, i: Int, j: Int) raises -> Float64:
@@ -347,6 +354,35 @@ def test_typed_implicit_schemes() raises:
     var other = equilateral(2)
     with assert_raises(contains="different complexes"):
         _ = TypedImplicitMidpoint(W1, other.star[2, PRIMAL](), K, 0.1)
+
+
+def test_auto_factors_in_2d_and_iterates_in_3d() raises:
+    # AUTO factors when nnz(L) <= 8 nnz(S): the 2D heat equation's L is
+    # ~3x S, the 3D one's ~9x from 16^3 cells. The choice is reported
+    var sc2 = SimplicialComplex(kuhn_grid([24, 24]))
+    var M = whitney_innerproduct(sc2, 0)
+    var K = sc2[0].d.transpose() @ whitney_innerproduct(sc2, 1) @ sc2[0].d
+    var auto = CrankNicolson(M, K, 0.01)
+    assert_true(auto.solver == StepSolver.CHOLESKY, String(auto.solver))
+    assert_equal(String(auto.solver), "sparse Cholesky")
+    # the factored steps agree with CG's to its tolerance
+    var it = CrankNicolson(M, K, 0.01, solver=StepSolver.CG)
+    assert_true(it.solver == StepSolver.CG)
+    var u = real_vector(M.nrows)
+    for i in range(u.size):
+        u.unsafe_set(i, Float64(i % 7) - 3.0)
+    var v = u.copy()
+    auto.step(u, steps=3)
+    it.step(v, steps=3)
+    for i in range(u.size):
+        assert_almost_equal(u.unsafe_get(i), v.unsafe_get(i), atol=1e-9, rtol=0)
+    # 3D: the fill is counted, and too large to factor
+    var sc3 = SimplicialComplex(kuhn_grid([16, 16, 16]))
+    var K3 = sc3[0].d.transpose() @ sc3[0].d + CSRMatrix.identity(
+        sc3[0].num_simplices
+    )
+    var three = CrankNicolson(CSRMatrix.identity(K3.nrows), K3, 0.01)
+    assert_true(three.solver == StepSolver.CG, String(three.solver))
 
 
 def test_invalid_implicit_schemes() raises:

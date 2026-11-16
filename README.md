@@ -456,7 +456,8 @@ the published mathematics:
 - **Implicit midpoint and Crank–Nicolson** (`ImplicitMidpoint`,
   `CrankNicolson`, typed versions): the wave system with any symmetric
   positive definite mass for `q` (the Whitney mass) and a diagonal one for
-  `p`, one SPD solve per step, unconditionally stable and conserving the
+  `p`, one SPD solve per step (factored once when the fill is small, as
+  in 2D; CG otherwise), unconditionally stable and conserving the
   plain energy exactly. Maxwell then runs on meshes that are not
   well-centered. `CrankNicolson` steps `M u' = -K u + f` with monotone
   energy decay and the steady state as its limit.

@@ -12,6 +12,7 @@ from mojodec import (
     SparseCholesky,
     SparseLDLT,
     amd_ordering,
+    cholesky_nonzeros,
     cg,
     kuhn_grid,
     whitney_innerproduct,
@@ -259,6 +260,39 @@ def test_ldlt_inertia_of_a_shifted_laplacian() raises:
         var F = SparseLDLT(K - M * s)
         assert_equal(F.inertia().negative, below)
         assert_equal(F.inertia().positive, K.nrows - below)
+
+
+def test_symbolic_count_and_given_permutation() raises:
+    # cholesky_nonzeros counts L from the elimination tree alone; it
+    # matches the factor, for AMD and the natural order, in 2D and 3D
+    var grids = List[List[Int]]()
+    grids.append([9, 7])
+    grids.append([4, 5, 3])
+    for ref dims in grids:
+        var sc = SimplicialComplex(kuhn_grid(dims))
+        var K = _laplacian(sc, 1)
+        var p = amd_ordering(K)
+        var F = SparseLDLT(K, perm=p.copy())
+        assert_equal(cholesky_nonzeros(K, p), F.factor_nonzeros())
+        assert_equal(F.factor_nonzeros(), SparseLDLT(K).factor_nonzeros())
+        var natural = List[Int]()
+        for i in range(K.nrows):
+            natural.append(i)
+        assert_equal(
+            cholesky_nonzeros(K, natural),
+            SparseLDLT(K, ordering=FillOrdering.NATURAL).factor_nonzeros(),
+        )
+        # a given permutation is the ordering
+        var b = probe_vector(K.nrows, 2)
+        var G = SparseCholesky(K, perm=natural^)
+        assert_true(_residual(K, G.solve(b), b) < 1e-13)
+    var I3 = CSRMatrix.identity(3)
+    with assert_raises(contains="perm has 2 entries for 3"):
+        _ = SparseLDLT(I3, perm=_ints([0, 1]))
+    with assert_raises(contains="perm is not a permutation (entry 2)"):
+        _ = cholesky_nonzeros(I3, _ints([0, 1, 1]))
+    with assert_raises(contains="perm is not a permutation (entry 0)"):
+        _ = SparseLDLT(I3, perm=_ints([3, 1, 0]))
 
 
 def _ints(xs: List[Int]) -> List[Int]:

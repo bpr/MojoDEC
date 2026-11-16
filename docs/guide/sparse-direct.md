@@ -101,7 +101,15 @@ faer's order, so ties break the same way, and its permutations equal
 faer's entry for entry (`test_amd_matches_faer`, against
 `tests/data/amd/`).
 
-`FillOrdering.NATURAL` keeps $A$'s order.
+`FillOrdering.NATURAL` keeps $A$'s order, and `perm=` takes any
+permutation, such as one `amd_ordering` already computed.
+
+`cholesky_nonzeros(A, perm)` counts the entries of $L$ from the
+elimination tree, before any arithmetic: the factor's memory and, with
+it, whether factoring is worth it. The implicit time steppers' default
+(`StepSolver.AUTO`, see [Time stepping](time-stepping.md)) factors when
+it is at most 8 times $\operatorname{nnz}(A)$, which holds on 2D meshes
+and not on 3D ones.
 
 ### Saddle points: zero diagonals last
 
@@ -185,6 +193,7 @@ non-singular matrix of a few thousand unknowns.
 var F = SparseLDLT(
     A,                                   # both triangles stored
     ordering=FillOrdering.AMD,           # or .NATURAL
+    perm=None,                           # or a permutation, replacing it
     signs=None,                          # +-1 per row, for regularization
     regularization=0,                    # delta; 0 turns it off
     refinement_steps=1,                  # per solve; 0 for bare solves
@@ -195,6 +204,8 @@ F.inertia()               # Inertia(positive, negative)
 F.factor_nonzeros()       # nnz(L), its diagonal included
 F.perm                    # the ordering
 F.num_regularized
+
+cholesky_nonzeros(A, amd_ordering(A))  # nnz(L) before factoring
 
 var C = SparseCholesky(K)  # raises unless every pivot is positive
 cg(K, b, M=C)              # an exact preconditioner: one iteration
@@ -237,6 +248,8 @@ instead of dense exact blocks.
   - `test_regularization_and_refinement`;
   - `test_ldlt_inertia_of_a_shifted_laplacian`: the negative pivots of
     $K - s M$ count the eigenvalues below $s$;
+  - `test_symbolic_count_and_given_permutation`: `cholesky_nonzeros`
+    against the factor, `perm=`, and its errors;
   - `test_errors`.
 - `tests/test_properties_robust.mojo`:
   `test_sparse_cholesky_matches_dense_solves` and

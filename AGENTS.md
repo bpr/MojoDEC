@@ -286,7 +286,10 @@ plan). Key design points that span several files:
   `regularization`) as faer's. Every `solve` takes `refinement_steps`
   (default 1) of iterative refinement against a stored copy of `A`: the
   unpivoted indefinite factor is not backward stable, and DarcyFlow's
-  pressures need the step to agree to 1e-14. `SparseCholesky` wraps it
+  pressures need the step to agree to 1e-14. `perm=` replaces the
+  ordering; `cholesky_nonzeros(A, perm)` runs only the symbolic phase
+  (`_PermutedLower`, `_etree_and_counts`, shared with the factor).
+  `SparseCholesky` wraps it
   with no refinement, requires positive pivots, and is a
   `Preconditioner`. Serial. `spsolve(..., method=DirectMethod.SPARSE_LDLT)`
   (CSR, `MatrixOp`, `BlockOp`, fixed cells) uses it; DarcyFlow does.
@@ -347,8 +350,13 @@ plan). Key design points that span several files:
   `dt` at or above the stability limit (power iteration). `TypedLeapfrog`
   infers its kinds from the operators and checks them with
   `comptime assert`. `ImplicitMidpoint` (any SPD `Mq`, diagonal `Mp`)
-  and `CrankNicolson` assemble one SPD matrix and solve each step with
-  Jacobi-PCG for the increment (the tolerance is relative to the change,
+  and `CrankNicolson` assemble one SPD matrix `S`.
+  `solver=StepSolver.AUTO` (default) counts `nnz(L)` under AMD
+  (`cholesky_nonzeros`, symbolic only) and factors `S` once
+  (`SparseCholesky`, reusing the permutation) when it is at most
+  `_FACTOR_FILL = 8` times `nnz(S)` (Kuhn grids: 2D 2.4-5.7, 3D from
+  16^3 9-28), recording the choice in `.solver`; `CHOLESKY` and `CG`
+  force one. CG solves each step with Jacobi-PCG for the increment (the tolerance is relative to the change,
   not the state), started from Fischer's guess (`_Guess`: an
   `S`-orthonormal basis of the last 16 solutions, the projection of the
   new one; never worse than zero in the `S` norm), so a step's bits

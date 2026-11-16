@@ -137,11 +137,13 @@ from mojodec.routines.sparse_ldlt import (
     Inertia,
     SparseCholesky,
     SparseLDLT,
+    cholesky_nonzeros,
 )
 from mojodec.routines.time import (
     CrankNicolson,
     ImplicitMidpoint,
     Leapfrog,
+    StepSolver,
     TypedCrankNicolson,
     TypedImplicitMidpoint,
     TypedLeapfrog,
