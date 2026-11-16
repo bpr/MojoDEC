@@ -215,12 +215,14 @@ and `reorder_vertices` fixes it. See
   last bit. One example is the Whitney top-form mass against the primal
   volume.
 - **Solvers:** `routines/dense.mojo` and `routines/linalg.mojo` provide
-  pivoted LU, Householder `eigh`, and Krylov methods. NuMojo's unpivoted
-  `solve` and Jacobi `eigh` are not used.
+  pivoted LU, Householder `eigh`, and Krylov methods;
+  `routines/sparse_ldlt.mojo` and `routines/ordering.mojo` the sparse
+  LDL^T and Cholesky factorizations with AMD (ported from faer). NuMojo's
+  unpivoted `solve` and Jacobi `eigh` are not used.
 
 ## Verification
 
-- **Unit and property tests:** `pixi run test` runs 34 test files. The
+- **Unit and property tests:** `pixi run test` runs 35 test files. The
   property tests cover rigid motions, relabeling, thin and far-away
   simplices, and corrupted files.
 - **Examples:** the examples are regression checks against PyDEC.

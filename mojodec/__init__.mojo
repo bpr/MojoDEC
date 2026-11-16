@@ -130,6 +130,13 @@ from mojodec.routines.linalg import (
 from mojodec.routines.dense import (
     EighResult,
 )
+from mojodec.routines.ordering import amd_ordering
+from mojodec.routines.sparse_ldlt import (
+    FillOrdering,
+    Inertia,
+    SparseCholesky,
+    SparseLDLT,
+)
 from mojodec.routines.time import (
     CrankNicolson,
     ImplicitMidpoint,

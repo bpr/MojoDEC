@@ -1,0 +1,225 @@
+# Sparse direct solvers: AMD and LDLᵀ
+
+`mojodec.routines.sparse_ldlt` factors a sparse symmetric matrix and
+solves with it. It suits DEC's mass, stiffness, and saddle-point systems
+in 2D, and moderate ones in 3D:
+
+```mojo
+var F = SparseCholesky(K)        # K symmetric positive definite
+var x = F.solve(b)               # K x = b; further solves are cheap
+```
+
+```mojo
+var F = SparseLDLT(A)            # A symmetric, possibly indefinite
+var x = F.solve(b)
+print(F.inertia())               # (positive, negative) eigenvalue counts
+```
+
+The code is a port of [faer](https://codeberg.org/sarah-quinones/faer)'s
+AMD ordering and simplicial Cholesky (MIT; faer's AMD translates
+SuiteSparse's, BSD-3; both notices are in `NOTICE`).
+
+## When to use it
+
+| | direct (`SparseCholesky`, `SparseLDLT`) | iterative (`cg`, `minres`) |
+|---|---|---|
+| cost of the first solve | the factorization: fill-dependent | iterations × products |
+| each further solve | two triangular solves | a whole new iteration |
+| conditioning | barely matters | iteration count grows with $\kappa$ |
+| memory | the factor $L$ | a few vectors |
+| saddle points, indefinite | yes, with the right ordering | `minres` with a good block preconditioner |
+
+The factorization pays off when the conditioning is bad, when one matrix
+is solved many times (time stepping, inverse iteration), and for
+saddle points. Measured on Kuhn grids, one thread, release build, for the
+0-form stiffness plus $10^{-3}$ times the identity, to $10^{-10}$:
+
+| mesh | unknowns | nnz(L) | AMD | AMD + factor | solve | Jacobi-CG |
+|---|---|---|---|---|---|---|
+| 300 × 300 | 90,601 | 3.6 M | 18 ms | 128 ms | 4 ms | 249 ms, 924 iterations |
+| 30 × 30 × 30 | 29,791 | 11.9 M | 12 ms | 2.3 s | 15 ms | 40 ms, 230 iterations |
+
+In 2D the factorization wins even for one solve. In 3D the factor fills
+in: $O(n^{4/3})$ entries and $O(n^2)$ work for nested-dissection-like
+orderings, against $O(n \log n)$ and $O(n^{3/2})$ in 2D. That is where a
+supernodal factorization (dense kernels on blocks of columns) or
+multigrid comes in; neither is in MojoDEC yet.
+
+## The factorization
+
+For symmetric $A$ and a permutation $P$,
+
+$$
+P A P^T = L D L^T ,
+$$
+
+with $L$ unit lower triangular and $D$ diagonal. Solving $A x = b$ is then
+a forward solve with $L$, a division by $D$, and a backward solve with
+$L^T$, each touching every entry of $L$ once.
+
+**Elimination tree.** Eliminating column $j$ creates fill in the rows
+where column $j$ of $L$ has entries. The parent of $j$ in the elimination
+tree is the row of the first entry below the diagonal in column $j$ of
+$L$ (Liu, 1990). Row $k$ of $L$ has its entries exactly at the vertices
+of the paths from the entries of row $k$ of $A$ (left of the diagonal) up
+the tree, stopping at $k$. So the pattern of $L$, and the count of each
+column, comes from the tree before any arithmetic.
+
+**Up-looking factorization.** Row $k$ of $L$ solves a sparse triangular
+system with the rows above it,
+
+$$
+L_{1:k-1,\,1:k-1} \, D_{1:k-1} \, \ell_k = a_{1:k-1,\,k} ,
+$$
+
+whose nonzero pattern is that set of paths (the "reach" of row $k$), so
+the work is proportional to the flops, not to $n^2$. Then
+$d_k = a_{kk} - \sum_j \ell_{kj}^2 d_j$.
+
+**No pivoting.** The ordering is fixed before any number is seen, so a
+pivot $d_k$ can be zero or tiny even when $A$ is nonsingular. For
+positive definite $A$ that cannot happen: every $d_k > 0$ (they are
+ratios of leading principal minors of $P A P^T$). For indefinite $A$ it
+depends on the order.
+
+## Orderings
+
+The fill of $L$ depends entirely on $P$. `FillOrdering.AMD` (the default)
+is Amestoy, Davis, and Duff's approximate minimum degree: at each step,
+eliminate a vertex of nearly least degree in the graph of the remaining
+Schur complement. It works on a quotient graph that never forms the fill
+explicitly, merges vertices with identical neighborhoods, and bounds
+degrees from above instead of computing them, so it costs about as much as
+a few matrix-vector products (18 ms for 90,601 unknowns). On the 11 × 11
+grid of `test_amd_is_a_permutation_with_zero_diagonals_last` it gives
+fewer nonzeros than the natural (banded) order; on the 300 × 300 grid,
+3.6 M.
+
+`amd_ordering(A)` returns the permutation itself: row `p[k]` of $A$
+becomes row $k$ of $P A P^T$. The port builds AMD's quotient graph in
+faer's order, so ties break the same way, and its permutations equal
+faer's entry for entry (`test_amd_matches_faer`, against
+`tests/data/amd/`).
+
+`FillOrdering.NATURAL` keeps $A$'s order.
+
+### Saddle points: zero diagonals last
+
+DarcyFlow's mixed system, and every mixed formulation, is
+
+$$
+A = \begin{bmatrix} -M & B^T \\ B & 0 \end{bmatrix},
+$$
+
+with $M$ symmetric positive definite (a Hodge star or a Whitney mass) and
+$B$ of full row rank ($d_1$ on a disk). Ordered as written, eliminating
+the first block gives pivots of $-M$'s factorization, all negative, and
+leaves the Schur complement $B M^{-1} B^T$, positive definite: no pivot is
+zero. Ordered with a constraint row first, the very first pivot is the
+zero diagonal entry, and the factorization fails.
+
+So `amd_ordering` puts every row whose diagonal entry is absent or zero
+after all others, as Eigen's AMD does, and orders the rest by minimum
+degree. Then `SparseLDLT(A)` factors a saddle point with no pivoting and
+no regularization, and its inertia is ($c$ positive, $m$ negative), with
+$c$ constraints and $m$ unknowns in the first block.
+
+The price is that the constraint block is not reordered for fill. Its
+rows are numbered as the input numbers them, which for cells of a mesh in
+Morton order (`reorder_vertices`) is spatially coherent.
+
+## Regularization and refinement
+
+For an indefinite matrix whose order cannot avoid small pivots, pass the
+expected sign of each pivot and a regularization $\delta$:
+
+```mojo
+var F = SparseLDLT(A, signs=signs, regularization=1e-10)
+```
+
+A pivot $d_k$ of the wrong sign, or with $|d_k| \le \delta$, becomes
+$\pm\delta$ (dynamic regularization, as interior-point solvers use). The
+factor is then that of a nearby matrix $A + E$, and each `solve` takes
+`refinement_steps` (default 2) steps of iterative refinement against $A$
+itself:
+
+$$
+x \leftarrow x + F^{-1} (b - A x) .
+$$
+
+`F.num_regularized` counts the replaced pivots; without them no
+refinement is done. Without `signs`, a small pivot keeps its sign.
+
+## The API
+
+```mojo
+var F = SparseLDLT(
+    A,                                   # both triangles stored
+    ordering=FillOrdering.AMD,           # or .NATURAL
+    signs=None,                          # +-1 per row, for regularization
+    regularization=0,                    # delta; 0 turns it off
+    refinement_steps=2,
+)
+F.solve(b)                # A x = b
+F.apply_into(b, x)        # the same, as a LinearOperator
+F.inertia()               # Inertia(positive, negative)
+F.factor_nonzeros()       # nnz(L), its diagonal included
+F.perm                    # the ordering
+F.num_regularized
+
+var C = SparseCholesky(K)  # raises unless every pivot is positive
+cg(K, b, M=C)              # an exact preconditioner: one iteration
+BlockDiagonal(SparseCholesky(A1), SparseCholesky(A2))
+```
+
+`SparseCholesky` is a `Preconditioner`, so it can be a block of
+`BlockDiagonal`: the Arnold–Falk–Winther preconditioner of the mixed
+Hodge Laplacian (see [Linear solvers](linear-solvers.md)) with sparse
+instead of dense exact blocks.
+
+## Pitfalls
+
+- **Singular matrices.** A Neumann or closed-surface Laplacian is
+  singular, so in exact arithmetic its last pivot is zero, and
+  `SparseLDLT` raises when it is. Rounding can instead leave a tiny
+  nonzero pivot, which is not caught, and the solve then returns a huge
+  kernel component. Fix a value (drop a row and column), or use `cg` with
+  a `NullSpace`.
+- **Symmetry.** Both triangles must be stored, and equal to $10^{-12}$
+  of the largest entry; the constructor raises otherwise.
+- **Explicit zeros.** A stored zero on the diagonal counts as a zero
+  diagonal, and the row is ordered last.
+- **3D fill.** The factor of a 3D problem grows fast (11.9 M entries for
+  30³ vertices: 190 MB of values and indices). Watch `factor_nonzeros()`.
+- **Serial.** The factorization runs on one thread.
+
+## Tests to read
+
+- `tests/test_sparse_ldlt.mojo`:
+  - `test_amd_matches_faer`: permutations equal to faer's, including a
+    3D grid that makes AMD compress its workspace and a matrix with a
+    dense row;
+  - `test_cholesky_solves_dec_systems`: every degree's Hodge stiffness
+    plus mass on 2D and 3D grids, against the dense solver, and as an
+    exact preconditioner;
+  - `test_ldlt_solves_saddle_points_without_pivoting`: the Darcy system
+    with the Whitney mass in both block orders, its inertia, and the
+    zero pivot of the natural order with constraints first;
+  - `test_regularization_and_refinement`;
+  - `test_ldlt_inertia_of_a_shifted_laplacian`: the negative pivots of
+    $K - s M$ count the eigenvalues below $s$;
+  - `test_errors`.
+- `tests/test_properties_robust.mojo`:
+  `test_sparse_cholesky_matches_dense_solves` and
+  `test_sparse_ldlt_solves_saddle_points` (random saddle points in either
+  block order).
+
+## References
+
+- P. R. Amestoy, T. A. Davis, I. S. Duff, "An approximate minimum degree
+  ordering algorithm", SIAM J. Matrix Anal. Appl. 17(4), 886–905, 1996.
+- J. W. H. Liu, "The role of elimination trees in sparse factorization",
+  SIAM J. Matrix Anal. Appl. 11(1), 134–172, 1990.
+- T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006,
+  chapters 4 (Cholesky) and 7 (orderings).
+- faer, `sparse::linalg::amd` and `sparse::linalg::cholesky::simplicial`.

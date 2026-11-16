@@ -40,6 +40,11 @@ how to use it, and what can go wrong.
   conjugate gradients and preconditioning, MINRES for saddle points,
   starting guesses, null spaces of singular systems, Ritz values and
   eigenvalue estimates, stopping tests, and the symmetry check.
+- **[Sparse direct solvers](sparse-direct.md)**: `SparseCholesky` and
+  `SparseLDLT` (`P A P^T = L D L^T`), the AMD ordering and why it puts
+  zero diagonals last (saddle points factor without pivoting), the
+  elimination tree, regularization with refinement, inertia, and when a
+  direct solve beats CG.
 - **[Eigenproblems](eigenproblems.md)**: the symmetric-definite problem
   `K x = lambda M x`, how `eigh_generalized` reduces it, and checking
   eigenpairs with their backward errors (`EighResult.residuals`).

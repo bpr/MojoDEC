@@ -18,6 +18,7 @@ solvers need.
 | symmetric positive (semi)definite: Poisson, a Hodge Laplacian, a stiffness matrix | `cg` | the cheapest per step; add `M=` to precondition |
 | symmetric indefinite: a mixed formulation's saddle point, a shifted Laplacian | `minres` | takes a `BlockOp` whole |
 | rectangular, or a least-squares problem | `lsqr` | |
+| symmetric, any of the above, solved often or badly conditioned | `SparseCholesky`, `SparseLDLT` | sparse direct; see [Sparse direct solvers](sparse-direct.md) |
 | non-symmetric, or small | `spsolve` | dense pivoted LU; for moderate sizes |
 
 `cg` and `minres` both raise on an operator that is not symmetric (see
@@ -334,7 +335,9 @@ var res = minres(K, b, M=P, rtol=1e-10)            # 7 iterations
 
 `DenseCholesky(A)` factors a symmetric positive definite matrix densely
 and applies $A^{-1}$ exactly. That costs $n^3/3$ operations and $n^2$
-storage, so it only suits a few thousand unknowns. It shows what the
+storage, so it only suits a few thousand unknowns. `SparseCholesky(A)`
+(see [Sparse direct solvers](sparse-direct.md)) is the same exact inverse
+for sparse matrices, practical in 2D at a hundred thousand unknowns. It shows what the
 ideal preconditioner achieves. A scalable one replaces each exact inverse
 by something spectrally equivalent at linear cost, which for the $H(\mathrm{curl})$
 and $H(\mathrm{div})$ blocks means multigrid with smoothers that respect

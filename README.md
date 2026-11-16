@@ -132,7 +132,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/combinatorial.mojo` | `math/combinatorial.py`, `math/parity.py` |
 | `mojodec/routines/innerproduct.mojo` | `fem/innerproduct.py` |
 | `mojodec/routines/mesh_generation.mojo` | `mesh/generation.py`, `mesh/subdivision.py` |
-| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
+| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range`; `routines/sparse_ldlt.mojo`, `routines/ordering.mojo` — `SparseLDLT`, `SparseCholesky`, `amd_ordering` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
 | `mojodec/routines/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh`, `EighResult.residuals` | `numpy.linalg` (called by PyDEC) |
 | `mojodec/routines/io/` — `read_array`, `write_array`, `read_mesh`, `write_mesh`, `loadtxt` | `io/arrayio.py`, `io/meshio.py` |
 | `mojodec/routines/io/vtk.mojo` — `write_vtu`, `write_vtu_cubes`, `VTKField` | (new) |
@@ -481,6 +481,13 @@ the published mathematics:
   right-hand side), and return Ritz values (`ritz=True`), estimates of
   the preconditioned spectrum; `eigenvalue_range(A, M=P)` gets its ends
   from 10 CG steps.
+- **Sparse direct solvers** (`SparseCholesky`, `SparseLDLT`,
+  `amd_ordering`): `P A P^T = L D L^T` with the approximate minimum degree
+  ordering, ported from faer (MIT, its AMD from SuiteSparse's, BSD-3).
+  Rows with a zero diagonal are ordered last, so mixed formulations'
+  saddle points factor without pivoting; optional sign-aware dynamic
+  regularization with iterative refinement; inertia. 128 ms to factor the
+  2D Laplacian with 90,601 unknowns, where Jacobi-CG takes 924 iterations.
 - **Kuhn grids and flat tori** (`kuhn_grid`, `flat_torus`) in any
   dimension: each box cell split into d! simplices, and the periodic
   version embedded in R^(2d) so that it is exactly the flat torus (Betti

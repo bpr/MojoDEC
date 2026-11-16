@@ -1,8 +1,9 @@
 # Property-based tests of MojoDEC's robustness: readers given damaged files,
 # raw CSR input, the kd-tree and the dense eigensolver against brute force
 # or their defining laws, the Krylov solvers' options (starting guesses,
-# null spaces, Ritz values) and the implicit time steppers against dense
-# solves, and round trips of every array dtype. They use
+# null spaces, Ritz values), the implicit time steppers, and the sparse
+# LDL^T and Cholesky factorizations against dense solves, and round trips
+# of every array dtype. They use
 # proptest (see tests/test_properties.mojo for the setup). To run just this
 # file:
 #
@@ -65,6 +66,12 @@ from mojodec.routines.linalg import (
     minres,
 )
 from mojodec.routines.time import CrankNicolson, ImplicitMidpoint, _Guess
+from mojodec.routines.ordering import amd_ordering
+from mojodec.routines.sparse_ldlt import (
+    FillOrdering,
+    SparseCholesky,
+    SparseLDLT,
+)
 from mojodec.core.diagonal import DiagonalOperator
 
 
@@ -800,6 +807,87 @@ def test_implicit_steppers_match_dense_steps() raises:
         lists(integers(-5, 5), min_size=1, max_size=40),
         integers(1, 8),
         integers(1, 30),
+        booleans(),
+        prop,
+        quick(),
+    )
+
+
+def test_sparse_cholesky_matches_dense_solves() raises:
+    """For SPD A (n <= 12), SparseCholesky with AMD and with the natural
+    order solves A x = b as the dense solver does; all pivots positive."""
+
+    def prop(ints: List[Int], n: Int) raises:
+        var D = _graph(n, ints, True)
+        var A = _csr(D)
+        var b = _vector(n, ints, 1)
+        var exact = dense.solve(D, b)
+        for which in range(2):
+            var F = SparseCholesky(
+                A, FillOrdering.AMD if which == 0 else FillOrdering.NATURAL
+            )
+            _close(F.solve(b), exact, 1e-10, "cholesky")
+            if F.factor.inertia().positive != n:
+                fail("a pivot is not positive")
+        var p = amd_ordering(A)
+        var seen = List[Bool](length=n, fill=False)
+        for k in range(n):
+            if seen[p[k]]:
+                fail("amd_ordering is not a permutation")
+            seen[p[k]] = True
+
+    given(
+        lists(integers(-5, 5), min_size=1, max_size=40),
+        integers(1, 12),
+        prop,
+        quick(),
+    )
+
+
+def test_sparse_ldlt_solves_saddle_points() raises:
+    """For [[-M, B^T], [B, 0]] with M SPD (m <= 10) and B (c x m, c <= m) of
+    full rank, in either block order, SparseLDLT with AMD needs no
+    regularization, puts the constraints last, solves as the dense solver
+    does, and finds m negative and c positive pivots."""
+
+    def prop(ints: List[Int], m: Int, c_in: Int, first: Bool) raises:
+        var c = 1 + c_in % m
+        var Md = _graph(m, ints, True)
+        var N = m + c
+        var Ad = real_array(N, N)
+        var om = c if first else 0  # where the M block starts
+        var oc = 0 if first else m  # where the constraints start
+        for i in range(m):
+            for j in range(m):
+                fset(Ad, om + i, om + j, -fget(Md, i, j))
+        for i in range(c):
+            for j in range(m):
+                # full rank: a nonzero diagonal in the first c columns
+                var x = Float64(ints[(7 * i + 3 * j) % len(ints)] % 2)
+                if j == i:
+                    x = Float64(1 + abs(ints[i % len(ints)]) % 3)
+                elif j < c:
+                    x = 0
+                fset(Ad, oc + i, om + j, x)
+                fset(Ad, om + j, oc + i, x)
+        var A = _csr(Ad)
+        var b = _vector(N, ints, 2)
+        var F = SparseLDLT(A)
+        if F.num_regularized != 0:
+            fail("regularized")
+        _close(F.solve(b), dense.solve(Ad, b), 1e-9, "saddle point")
+        var inertia = F.inertia()
+        if inertia.negative != m or inertia.positive != c:
+            fail(String("inertia ", inertia))
+        for k in range(N - c, N):
+            var row = F.perm[k]
+            if row < oc or row >= oc + c:
+                fail(String("constraint not last at ", k))
+
+    given(
+        lists(integers(-5, 5), min_size=1, max_size=40),
+        integers(1, 10),
+        integers(0, 9),
         booleans(),
         prop,
         quick(),
