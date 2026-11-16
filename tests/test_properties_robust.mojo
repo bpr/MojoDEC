@@ -71,6 +71,7 @@ from mojodec.routines.time import (
     StepSolver,
     _Guess,
 )
+from mojodec.routines.amg import Relaxation, SmoothedAggregation
 from mojodec.routines.lanczos import eigsh
 from mojodec.routines.ordering import amd_ordering
 from mojodec.routines.sparse_ldlt import (
@@ -985,6 +986,46 @@ def test_eigsh_finds_every_copy_of_multiple_eigenvalues() raises:
         integers(0, 30),
         integers(0, 6),
         integers(-4, 60),
+        prop,
+        quick(),
+    )
+
+
+def test_amg_cycle_is_a_valid_preconditioner() raises:
+    """For SPD graph matrices (n <= 60) coarsened down to a few unknowns,
+    the V-cycle is symmetric and positive definite with either smoother
+    (what cg relies on), and cg with it reaches the dense solution."""
+
+    def prop(ints: List[Int], n: Int, gs: Bool, coarse: Int) raises:
+        var D = _graph(n, ints, True)
+        var A = _csr(D)
+        var relax = Relaxation.GAUSS_SEIDEL if gs else Relaxation.CHEBYSHEV
+        var amg = SmoothedAggregation(A, relaxation=relax, coarse_size=coarse)
+        var x = _vector(n, ints, 1)
+        var y = _vector(n, ints, 2)
+        assume(_dot(x, x) > 0 and _dot(y, y) > 0)
+        var Bx = real_vector(n)
+        var By = real_vector(n)
+        amg.apply_into(x, Bx)
+        amg.apply_into(y, By)
+        var a = _dot(y, Bx)
+        var c = _dot(x, By)
+        var scale = sqrt(_dot(x, Bx) * _dot(y, By)) + 1e-300
+        if not (abs(a - c) <= 1e-10 * scale):
+            fail(String("not symmetric: ", a, " vs ", c))
+        if not (_dot(x, Bx) > 0):
+            fail(String("not positive: x^T B x = ", _dot(x, Bx)))
+        var b = _vector(n, ints, 3)
+        var res = cg(A, b, M=amg, rtol=1e-12, maxiter=500)
+        if not res.converged():
+            fail(String("cg stopped: ", res.stop))
+        _close(res^.take_x(), dense.solve(D, b), 1e-8, "amg-cg")
+
+    given(
+        lists(integers(-5, 5), min_size=3, max_size=60),
+        integers(2, 60),
+        booleans(),
+        integers(1, 8),
         prop,
         quick(),
     )

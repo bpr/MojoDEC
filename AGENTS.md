@@ -102,6 +102,10 @@ maintainers, in `third_party/numojo-bugs.md`; add new ones there.
   every call passes `rtol` explicitly (normally `rtol=0`, with an `atol`
   from the problem's conditioning); `tests/run_all.sh` fails on a call
   without one.
+- NuMojo's elementwise array arithmetic (`b - A @ x`) is slow: 0.63 ms
+  for 4,000 entries, 50 times the sparse product itself. In hot loops,
+  write the loop over `unsafe_get`/`unsafe_set` (the AMG cycle went from
+  3 ms to 0.09).
 - Write `sqrt(x)` (`std.math`), never `x ** 0.5`: Mojo's `**` with a
   fractional exponent is off by up to ~5e-12 relative, which Cholesky and
   Gram-matrix solves amplify (it cost DarcyFlow two digits and Sphere's
@@ -309,6 +313,19 @@ plan). Key design points that span several files:
   with no refinement, requires positive pivots, and is a
   `Preconditioner`. Serial. `spsolve(..., method=DirectMethod.SPARSE_LDLT)`
   (CSR, `MatrixOp`, `BlockOp`, fixed cells) uses it; DarcyFlow does.
+- **Algebraic multigrid** (`routines/amg.mojo`): `SmoothedAggregation`
+  ports amgcl's `plain_aggregates` (`_aggregates`: strong when
+  `a_ij^2 > eps^2 a_ii a_jj`, eps halved per level, one serial greedy
+  pass in row order, rows without strong neighbors left out, id `-1`)
+  and its smoothed prolongation (`_smoothed_prolongation`: weak entries
+  lumped into the diagonal, `-omega * (1 / dia)` as amgcl rounds it,
+  rows sorted), equal to amgcl bit for bit (`tests/data/amgcl/`, C++
+  driver there; keep it so). `omega = 4/3 / lambda_max(D^-1 A)` from
+  `eigenvalue_range` (Gershgorin if CG breaks down); `R = P^T`,
+  `A_c = R @ (A @ P)`; coarsest at `coarse_size` by `SparseCholesky`,
+  regularized `SparseLDLT` if singular. V-cycle from zero: Chebyshev on
+  `[0.1, 1.1] lambda` (Saad 12.1) or forward/backward Gauss-Seidel.
+  Residuals by loops (`_residual`), not NuMojo's `-`.
 - **Kuhn grids and flat tori** (`routines/mesh_generation.mojo`):
   `kuhn_grid(dims[, lengths])` cuts each cell into d! simplices (one per
   axis permutation, odd ones with the last two vertices swapped);

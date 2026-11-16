@@ -132,7 +132,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/combinatorial.mojo` | `math/combinatorial.py`, `math/parity.py` |
 | `mojodec/routines/innerproduct.mojo` | `fem/innerproduct.py` |
 | `mojodec/routines/mesh_generation.mojo` | `mesh/generation.py`, `mesh/subdivision.py` |
-| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range`; `routines/sparse_ldlt.mojo`, `routines/ordering.mojo` — `SparseLDLT`, `SparseCholesky`, `amd_ordering`; `routines/lanczos.mojo` — `eigsh` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
+| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range`; `routines/sparse_ldlt.mojo`, `routines/ordering.mojo` — `SparseLDLT`, `SparseCholesky`, `amd_ordering`; `routines/lanczos.mojo` — `eigsh`; `routines/amg.mojo` — `SmoothedAggregation` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
 | `mojodec/routines/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh`, `EighResult.residuals` | `numpy.linalg` (called by PyDEC) |
 | `mojodec/routines/io/` — `read_array`, `write_array`, `read_mesh`, `write_mesh`, `loadtxt` | `io/arrayio.py`, `io/meshio.py` |
 | `mojodec/routines/io/vtk.mojo` — `write_vtu`, `write_vtu_cubes`, `VTKField` | (new) |
@@ -493,6 +493,13 @@ the published mathematics:
   saddle points factor without pivoting; optional sign-aware dynamic
   regularization with iterative refinement; inertia. 128 ms to factor the
   2D Laplacian with 90,601 unknowns, where Jacobi-CG takes 924 iterations.
+- **Algebraic multigrid** (`SmoothedAggregation(A)`): a V-cycle
+  preconditioner for SPD matrices, built from the matrix alone, with
+  amgcl's aggregation and smoothed prolongation (MIT; equal to amgcl's
+  bit for bit), Chebyshev or symmetric Gauss–Seidel smoothing, and a
+  sparse Cholesky on the coarsest level. CG takes 9–10 iterations from
+  4k to 355k unknowns: a graded plate with 355,385 unknowns in 238 ms,
+  where Jacobi-CG takes 732 iterations and 1.03 s.
 - **Sparse eigensolver** (`eigsh(K, M, nev, sigma=s)`): the `nev`
   eigenpairs of `K x = lambda M x` nearest `s` by shift-invert Lanczos in
   the `M` inner product, thick restarts, `K - s M` factored once by
