@@ -64,9 +64,11 @@ struct EighResult(Copyable, Movable):
     eigenproblem."""
 
     var values: RealArray
-    """The `n` eigenvalues, in ascending order."""
+    """The eigenvalues, in ascending order."""
     var vectors: RealArray
-    """The `n x n` eigenvectors: column `i` belongs to `values[i]`."""
+    """The eigenvectors as the columns of an `n x m` array, `m` the number
+    of pairs (`n` from `eigh`, a few from `eigsh`): column `i` belongs to
+    `values[i]`."""
 
     def __init__(out self, var values: RealArray, var vectors: RealArray):
         """A result from its parts.
@@ -168,7 +170,7 @@ struct EighResult(Copyable, Movable):
             If `A` is not `n x n`.
         """
         return _residuals(
-            self.values, self.vectors, _Dense(A), Identity(self.values.size)
+            self.values, self.vectors, _Dense(A), Identity(rows_of(A))
         )
 
 
@@ -206,28 +208,36 @@ struct _Dense(LinearOperator):
 def _residuals[
     KOp: LinearOperator, MOp: LinearOperator
 ](values: RealArray, vectors: RealArray, K: KOp, M: MOp) raises -> RealArray:
-    """The backward error of each eigenpair (`vectors` holds them as
-    columns); see `EighResult.residuals`."""
-    var n = values.size
+    """The backward error of each eigenpair (`vectors` holds them as the
+    columns of an `n x m` array, `m` pairs: all of them from `eigh`, a
+    few from `eigsh`); see `EighResult.residuals`."""
+    var m = values.size
+    var n = vectors.size // m if m > 0 else K.num_rows()
+    if m > 0 and vectors.size != n * m:
+        raise Error(
+            String(
+                "residuals: ", vectors.size, " vector entries for ", m, " pairs"
+            )
+        )
     if K.num_rows() != n or K.num_cols() != n:
         raise Error(
-            String("residuals: K is not ", n, " x ", n, " (one per eigenpair)")
+            String("residuals: K is not ", n, " x ", n, " (the vectors' size)")
         )
     if M.num_rows() != n or M.num_cols() != n:
         raise Error(
-            String("residuals: M is not ", n, " x ", n, " (one per eigenpair)")
+            String("residuals: M is not ", n, " x ", n, " (the vectors' size)")
         )
-    var out = real_vector(n)
-    if n == 0:
+    var out = real_vector(m)
+    if m == 0:
         return out^
     var nK = _norm_lower_bound(K)
     var nM = _norm_lower_bound(M)
     var x = real_vector(n)
     var kx = real_vector(n)
     var mx = real_vector(n)
-    for j in range(n):
+    for j in range(m):
         for i in range(n):
-            x.unsafe_set(i, vectors.unsafe_get(i * n + j))
+            x.unsafe_set(i, vectors.unsafe_get(i * m + j))
         K.apply_into(x, kx)
         M.apply_into(x, mx)
         var lam = values.unsafe_get(j)

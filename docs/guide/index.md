@@ -46,7 +46,9 @@ how to use it, and what can go wrong.
   elimination tree, regularization with refinement, inertia, and when a
   direct solve beats CG.
 - **[Eigenproblems](eigenproblems.md)**: the symmetric-definite problem
-  `K x = lambda M x`, how `eigh_generalized` reduces it, and checking
+  `K x = lambda M x`, how `eigh_generalized` reduces it, a few eigenpairs
+  of large problems by shift-invert Lanczos (`eigsh`, with locking for
+  multiple eigenvalues and deflation of curl-curl kernels), and checking
   eigenpairs with their backward errors (`EighResult.residuals`).
 - **[Time stepping](time-stepping.md)**: the leapfrog for Maxwell's
   equations and other wave systems, its conserved energy, the stability

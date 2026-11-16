@@ -71,6 +71,7 @@ from mojodec.routines.time import (
     StepSolver,
     _Guess,
 )
+from mojodec.routines.lanczos import eigsh
 from mojodec.routines.ordering import amd_ordering
 from mojodec.routines.sparse_ldlt import (
     FillOrdering,
@@ -906,6 +907,87 @@ def test_sparse_ldlt_solves_saddle_points() raises:
 # ===----------------------------------------------------------------------=== #
 # Round trips of every dtype
 # ===----------------------------------------------------------------------=== #
+
+
+def test_eigsh_finds_every_copy_of_multiple_eigenvalues() raises:
+    """K and M are r disjoint copies of a small graph pencil, so every
+    eigenvalue has multiplicity exactly r, the case single-vector Lanczos
+    misses copies of. eigsh's nev eigenvalues are the nev nearest sigma
+    (compared by distance, so ties at the edge of the set don't matter),
+    with small backward errors, for any shift and bases small enough to
+    force restarts."""
+
+    def prop(
+        ints: List[Int], n0: Int, r: Int, nev_pick: Int, extra: Int, s: Int
+    ) raises:
+        var G = _graph(n0, ints, False)
+        var n = n0 * r
+        var K = real_array(n, n)
+        var M = real_array(n, n)
+        for c in range(r):
+            for i in range(n0):
+                fset(
+                    M,
+                    c * n0 + i,
+                    c * n0 + i,
+                    Float64(1 + abs(ints[i % len(ints)]) % 3),
+                )
+                for j in range(n0):
+                    fset(K, c * n0 + i, c * n0 + j, fget(G, i, j))
+        var sigma = Float64(s) / 4 - 0.3
+        var lam = eigh_generalized(K, M).values.copy()
+        for i in range(lam.size):
+            assume(abs(lam.unsafe_get(i) - sigma) > 1e-3)
+        var nev = 1 + nev_pick % n
+        # 2 nev + 1 and up, as the default: smaller bases converge, but
+        # linearly with the ratio of neighboring |theta|, which can need
+        # thousands of restarts
+        var ncv = min(n, 2 * nev + 1 + extra)
+        var eig = eigsh(_csr(K), _csr(M), nev, sigma=sigma, ncv=ncv)
+        var want = List[Float64]()
+        for i in range(lam.size):
+            want.append(abs(lam.unsafe_get(i) - sigma))
+        sort(want)
+        var got = List[Float64]()
+        for i in range(nev):
+            got.append(abs(eig.values.unsafe_get(i) - sigma))
+        sort(got)
+        for i in range(nev):
+            if not (abs(got[i] - want[i]) <= 1e-9 * (1 + want[i])):
+                fail(
+                    String(
+                        "distance ",
+                        i,
+                        ": ",
+                        got[i],
+                        " vs ",
+                        want[i],
+                        " (n ",
+                        n,
+                        ", nev ",
+                        nev,
+                        ", ncv ",
+                        ncv,
+                        ")",
+                    )
+                )
+        # tol = 1e-12 bounds the residual relative to K - sigma M, so the
+        # backward error grows with a shift far from the spectrum
+        var eta = eig.residuals(_csr(K), _csr(M))
+        for i in range(nev):
+            if not (eta.unsafe_get(i) < 4e-12 * (1 + abs(sigma))):
+                fail(String("backward error ", eta.unsafe_get(i)))
+
+    given(
+        lists(integers(-5, 5), min_size=1, max_size=20),
+        integers(2, 6),
+        integers(1, 4),
+        integers(0, 30),
+        integers(0, 6),
+        integers(-4, 60),
+        prop,
+        quick(),
+    )
 
 
 def test_float32_arrays_round_trip() raises:

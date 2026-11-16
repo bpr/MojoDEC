@@ -132,7 +132,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/combinatorial.mojo` | `math/combinatorial.py`, `math/parity.py` |
 | `mojodec/routines/innerproduct.mojo` | `fem/innerproduct.py` |
 | `mojodec/routines/mesh_generation.mojo` | `mesh/generation.py`, `mesh/subdivision.py` |
-| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range`; `routines/sparse_ldlt.mojo`, `routines/ordering.mojo` — `SparseLDLT`, `SparseCholesky`, `amd_ordering` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
+| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range`; `routines/sparse_ldlt.mojo`, `routines/ordering.mojo` — `SparseLDLT`, `SparseCholesky`, `amd_ordering`; `routines/lanczos.mojo` — `eigsh` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
 | `mojodec/routines/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh`, `EighResult.residuals` | `numpy.linalg` (called by PyDEC) |
 | `mojodec/routines/io/` — `read_array`, `write_array`, `read_mesh`, `write_mesh`, `loadtxt` | `io/arrayio.py`, `io/meshio.py` |
 | `mojodec/routines/io/vtk.mojo` — `write_vtu`, `write_vtu_cubes`, `VTKField` | (new) |
@@ -429,7 +429,8 @@ the published mathematics:
   stderr about meshes of 50,000 elements or more that need it
   (`warn=False` silences it).
 - **The Sphere example**, a check of the Hodge-Laplacian spectrum against
-  the spherical harmonics, for 0-, 1-, and 2-forms.
+  the spherical harmonics, for 0-, 1-, and 2-forms, by `eigsh`
+  (`--subdivisions 6`: 40,962 vertices in 11 s).
 - **The Neighborhoods and Neighborhoods3D examples**, which draw stars,
   links, and boundaries on a grid of the square and on a tetrahedral solid
   torus, and check their topology.
@@ -492,6 +493,13 @@ the published mathematics:
   saddle points factor without pivoting; optional sign-aware dynamic
   regularization with iterative refinement; inertia. 128 ms to factor the
   2D Laplacian with 90,601 unknowns, where Jacobi-CG takes 924 iterations.
+- **Sparse eigensolver** (`eigsh(K, M, nev, sigma=s)`): the `nev`
+  eigenpairs of `K x = lambda M x` nearest `s` by shift-invert Lanczos in
+  the `M` inner product, thick restarts, `K - s M` factored once by
+  `SparseLDLT`. Converged pairs are locked and their complement searched
+  again, so every copy of a multiple eigenvalue is found; `deflate=d0`
+  keeps the gradients out of curl-curl spectra. 20 eigenpairs of a
+  cavity with 119,600 edges in 1.1 s, backward error 4e-16.
 - **Kuhn grids and flat tori** (`kuhn_grid`, `flat_torus`) in any
   dimension: each box cell split into d! simplices, and the periodic
   version embedded in R^(2d) so that it is exactly the flat torus (Betti
@@ -537,7 +545,7 @@ the published mathematics:
   relative change of `K` and `M` that would make it exact: scale-free, so
   one threshold (a modest multiple of n times 2.2e-16) serves every
   problem. It takes sparse or typed operators, so the check costs n
-  sparse products. Sphere and ResonantCavity report it (5e-15, 7e-15).
+  sparse products. Sphere and ResonantCavity report it (1e-15, 7e-15).
 
 ## Differences from PyDEC
 
@@ -699,7 +707,7 @@ from your own program.
 | HeatConduction | mesh and boundary pieces from a Gmsh file; the piecewise-linear temperature through two materials to 7e-15, and the heat in through the hot edge equals the heat out through the cold one and the exact 25/26 (not from PyDEC) |
 | ResonantCavity | eigenvalues 1, 1, 2, 4, 4, 5, 5, 8, 9, 9, 10, 10, 13, 13, … (the exact m²+n²); largest backward error 7e-15 |
 | CavityWaves | resonances 0.9986, 0.9986, 2.987, 3.977, 3.977, 6.93, 6.93, 8.88 times (4π/3)² (the exact m²+mn+n² of the equilateral triangle); leapfrog from the lowest mode follows cos(ω_dt t) to 7e-12 over five periods, staggered energy constant to 2e-15 (not from PyDEC) |
-| Sphere | Hodge-Laplacian spectra near n(n+1) for 0-, 1-, and 2-forms; the 1-form spectrum is the 0- and 2-form spectra merged (to 3e-12); Gauss-Bonnet exact; Gaussian and mean curvature 1.02 and 1.0001; largest backward error of any eigenpair 5e-15 (not from PyDEC) |
+| Sphere | Hodge-Laplacian spectra near n(n+1) for 0-, 1-, and 2-forms (the lowest 16, by `eigsh`); the 1-form spectrum is the 0- and 2-form spectra merged (to 1e-14); Gauss-Bonnet exact; Gaussian and mean curvature 1.02 and 1.0001; largest backward error of any eigenpair 1.4e-15 (not from PyDEC) |
 | Neighborhoods | interior links are hexagons (χ = 0), boundary links paths (χ = 1); Bd(Cl(St(v))) = Lk(v); every ring boundary has χ = 0; the square's boundary has 4n edges and an empty boundary (not from PyDEC) |
 | Neighborhoods3D | interior vertex links are spheres (χ = 2), boundary links disks (χ = 1); growing rings are balls (χ = 1) until they meet themselves around the hole (one pinched step), then the solid torus (χ = 0) bounded by a torus; χ(Bd R) = 2 χ(R) whenever Bd R is a surface (not from PyDEC) |
 | MakeMesh | writes a mesh and reads it back; matches `ExpectedOutput/` |

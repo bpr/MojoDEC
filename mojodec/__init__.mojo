@@ -131,6 +131,7 @@ from mojodec.routines.linalg import (
 from mojodec.routines.dense import (
     EighResult,
 )
+from mojodec.routines.lanczos import eigsh
 from mojodec.routines.ordering import amd_ordering
 from mojodec.routines.sparse_ldlt import (
     FillOrdering,

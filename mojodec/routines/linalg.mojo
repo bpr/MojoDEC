@@ -1504,8 +1504,9 @@ struct TypedEighResult[n: Int, k: Int, primal: Bool](Movable, Sized):
         var m = self.values.size
         if i < 0 or i >= m:
             raise Error("TypedEighResult.mode: index out of range")
-        var v = real_vector(m)
-        for r in range(m):
+        var rows = self.vectors.size // m  # n x m: all pairs, or a few
+        var v = real_vector(rows)
+        for r in range(rows):
             v.unsafe_set(r, self.vectors.unsafe_get(r * m + i))
         return TypedCochain[Self.n, Self.k, Self.primal](self.complex, v^)
 

@@ -267,6 +267,18 @@ plan). Key design points that span several files:
   `eigenvalue_range` runs 10 CG steps on `probe_vector(n, 3)` for the
   extreme Ritz values (inner bounds). Without the options, every solve is
   bit for bit what it was before them; keep it so.
+  `eigsh(K, M, nev, sigma=)` (`routines/lanczos.mojo`, from the papers:
+  Ericsson–Ruhe, Wu–Simon) factors `K - sigma M` once (`SparseLDLT`)
+  and runs thick-restart Lanczos on `OP = (K - sigma M)^-1 M` in the `M`
+  inner product (basis and `M V` stored, full reorthogonalization twice,
+  `H` dense, Ritz pairs by `dense.eigh`, accepted at `tol |theta|`).
+  `_run` finds the `want` pairs of largest `|theta|` in the complement
+  of a locked set; `eigsh` runs it once for `nev`, then repeatedly with
+  the found pairs locked (`_PROBE = 4`) and swaps in anything nearer
+  sigma (`_merge`), because single-vector Lanczos misses copies of
+  multiple eigenvalues (the icosphere did). `deflate=G` projects every
+  vector `M`-orthogonally off `range(G)` with `SparseCholesky(G^T M G)`.
+  Eigenvectors come back `n x nev`; `residuals` and `mode` take `n x m`.
   `EighResult.residuals(K, M)` (and `TypedEighResult`'s) gives each
   pair's normwise backward error with norms from 30 power steps (lower
   bounds, so the errors err high); dense arrays are wrapped in a private
