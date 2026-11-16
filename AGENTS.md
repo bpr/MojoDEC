@@ -289,6 +289,10 @@ plan). Key design points that span several files:
   pressures need the step to agree to 1e-14. `perm=` replaces the
   ordering; `cholesky_nonzeros(A, perm)` runs only the symbolic phase
   (`_PermutedLower`, `_etree_and_counts`, shared with the factor).
+  `TypedSparseLDLT`, `TypedSparseCholesky` (`MatrixOp`) and
+  `BlockSparseLDLT` (`BlockOp`, assembled by `to_csr`) wrap them,
+  `comptime assert` that each output kind is the dual of its input kind,
+  and refuse cochains from another complex at `solve`.
   `SparseCholesky` wraps it
   with no refinement, requires positive pivots, and is a
   `Preconditioner`. Serial. `spsolve(..., method=DirectMethod.SPARSE_LDLT)`

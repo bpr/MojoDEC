@@ -137,6 +137,9 @@ from mojodec.routines.sparse_ldlt import (
     Inertia,
     SparseCholesky,
     SparseLDLT,
+    TypedSparseCholesky,
+    TypedSparseLDLT,
+    BlockSparseLDLT,
     cholesky_nonzeros,
 )
 from mojodec.routines.time import (

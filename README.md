@@ -377,7 +377,9 @@ the published mathematics:
   solves it with some unknowns given (Dirichlet data, a pinned pressure),
   dropping the equations on the same cells, which needs each equation to be
   of the dual kind of its unknown; `method=DirectMethod.SPARSE_LDLT`
-  factors a symmetric system sparsely. DarcyFlow's mixed system:
+  factors a symmetric system sparsely, and `BlockSparseLDLT(A)` factors
+  it once for many solves (`TypedSparseLDLT`, `TypedSparseCholesky` for
+  a `MatrixOp`). DarcyFlow's mixed system:
 
   ```mojo
   var d1 = tc.d[1, PRIMAL]()

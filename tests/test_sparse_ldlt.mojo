@@ -7,7 +7,15 @@ from std.testing import (
 )
 
 from mojodec import (
+    DUAL,
+    PRIMAL,
+    BlockOp,
+    BlockSparseLDLT,
+    CochainPair,
     FillOrdering,
+    TypedComplex,
+    TypedSparseCholesky,
+    TypedSparseLDLT,
     SimplicialComplex,
     SparseCholesky,
     SparseLDLT,
@@ -293,6 +301,65 @@ def test_symbolic_count_and_given_permutation() raises:
         _ = cholesky_nonzeros(I3, _ints([0, 1, 1]))
     with assert_raises(contains="perm is not a permutation (entry 0)"):
         _ = SparseLDLT(I3, perm=_ints([3, 1, 0]))
+
+
+def test_typed_factorizations() raises:
+    var tc = TypedComplex[2](kuhn_grid([6, 5]))
+    var d0 = tc.d[0, PRIMAL]()
+    var W0 = whitney_innerproduct[0](tc)
+    var W1 = whitney_innerproduct[1](tc)
+    # stiffness plus mass on 0-forms: primal 0 -> dual 2
+    var K = d0.T() @ W1 @ d0 + W0
+    var f = W0 @ tc.cochain[0, PRIMAL]()
+    for i in range(len(f)):
+        f[i] = Float64(i % 5) - 2.0
+    var C = TypedSparseCholesky(K)
+    var u = C.solve(f)  # TypedCochain[2, 0, PRIMAL]
+    var dense = spsolve(K, f)
+    for i in range(len(u)):
+        assert_almost_equal(u[i], dense[i], atol=1e-12, rtol=0)
+    # LDL^T of the indefinite K - s W0: inertia counts eigenvalues below s
+    var L = TypedSparseLDLT(K - W0 * 30.0)
+    var lam = eigh_generalized(K.mat.todense(), W0.mat.todense()).values.copy()
+    var below = 0
+    for i in range(lam.size):
+        if lam.unsafe_get(i) < 30.0:
+            below += 1
+    assert_equal(L.inertia().negative, below)
+    assert_true(L.factor_nonzeros() > K.mat.nrows)
+    var x = L.solve(f)
+    var r = (K - W0 * 30.0) @ x
+    for i in range(len(r)):
+        assert_almost_equal(r[i], f[i], atol=1e-11, rtol=0)
+    # the mixed Darcy saddle point with the Whitney mass, factored once:
+    # [[-W1, d1^T], [d1, 0]], fluxes primal 1, pressures dual 0
+    var d1 = tc.d[1, PRIMAL]()
+    var A = BlockOp(W1 * -1.0, d1.T(), d1, tc.zero[0, DUAL, 2, PRIMAL]())
+    var F = BlockSparseLDLT(A)
+    var m = tc.num_cells[1, PRIMAL]()
+    var c = tc.num_cells[2, PRIMAL]()
+    assert_equal(F.inertia().negative, m)
+    assert_equal(F.inertia().positive, c)
+    for seed in range(2):
+        var g = tc.cochain[1, DUAL]()
+        var h = tc.cochain[2, PRIMAL]()
+        for i in range(len(g)):
+            g[i] = Float64((i * 3 + seed) % 7) - 3.0
+        for i in range(len(h)):
+            h[i] = Float64((i + seed) % 4) - 1.5
+        var b = CochainPair(g^, h^)
+        var y = F.solve(b)  # CochainPair[2, 1, PRIMAL, 0, DUAL]
+        var e = (y - spsolve(A, b)).stacked()
+        for i in range(e.size):
+            assert_almost_equal(e.unsafe_get(i), 0.0, atol=1e-11, rtol=0)
+    # cochains from another complex are refused
+    var other = TypedComplex[2](kuhn_grid([6, 5]))
+    with assert_raises(contains="TypedSparseCholesky.solve: b is on a"):
+        _ = C.solve(other.cochain[2, DUAL]())
+    with assert_raises(contains="BlockSparseLDLT.solve: b is on a"):
+        _ = F.solve(
+            CochainPair(other.cochain[1, DUAL](), other.cochain[2, PRIMAL]())
+        )
 
 
 def _ints(xs: List[Int]) -> List[Int]:

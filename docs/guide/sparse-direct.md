@@ -212,6 +212,32 @@ cg(K, b, M=C)              # an exact preconditioner: one iteration
 BlockDiagonal(SparseCholesky(A1), SparseCholesky(A2))
 ```
 
+### Typed
+
+`TypedSparseLDLT(A)` and `TypedSparseCholesky(A)` factor a typed
+`MatrixOp`, and `BlockSparseLDLT(A)` a `BlockOp`; their `solve` takes
+cochains of the operator's output kind and gives cochains of its input
+kind:
+
+```mojo
+var K = d0.T() @ whitney_innerproduct[1](tc) @ d0 + whitney_innerproduct[0](tc)
+var C = TypedSparseCholesky(K)           # primal 0 -> dual n
+var u = C.solve(f)                       # f: dual n, u: primal 0
+
+var A = BlockOp(W1 * -1.0, d1.T(), d1, tc.zero[0, DUAL, 2, PRIMAL]())
+var F = BlockSparseLDLT(A)               # factored once
+var x = F.solve(b)                       # CochainPair of flux and pressure
+print(F.inertia())                       # (triangles, edges)
+```
+
+A symmetric operator built from the complex ($B^T S B$, a mass, a
+saddle point of them) takes each kind to its dual kind, primal
+$k$-cochains to dual $(n-k)$-cochains or the reverse, and each block
+system's equations are of the dual kind of their unknowns. Anything else
+does not compile. A cochain from another complex is refused at the
+solve. For one solve with some unknowns given, as in DarcyFlow, use
+`spsolve(..., fixed_first=, fixed_second=, method=DirectMethod.SPARSE_LDLT)`.
+
 `SparseCholesky` is a `Preconditioner`, so it can be a block of
 `BlockDiagonal`: the Arnold–Falk–Winther preconditioner of the mixed
 Hodge Laplacian (see [Linear solvers](linear-solvers.md)) with sparse
@@ -250,6 +276,9 @@ instead of dense exact blocks.
     $K - s M$ count the eigenvalues below $s$;
   - `test_symbolic_count_and_given_permutation`: `cholesky_nonzeros`
     against the factor, `perm=`, and its errors;
+  - `test_typed_factorizations`: the three typed wrappers against
+    `spsolve`, inertia of a shifted typed Laplacian and of the Darcy
+    block system, and cochains from another complex refused;
   - `test_errors`.
 - `tests/test_properties_robust.mojo`:
   `test_sparse_cholesky_matches_dense_solves` and
