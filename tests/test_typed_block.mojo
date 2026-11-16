@@ -12,6 +12,7 @@ from mojodec import (
     BlockOp,
     CochainPair,
     CSRMatrix,
+    DirectMethod,
     MatrixOp,
     TypedComplex,
     minres,
@@ -87,20 +88,33 @@ def test_solve_with_fixed_unknowns() raises:
     var pinned = tc.subset[0, DUAL]([0])
     var known = _pair(tc, 3)
     var b = CochainPair(tc.cochain[1, DUAL](), tc.cochain[2, PRIMAL]())
-    var x = spsolve(
+    var dense = spsolve(
         A, b, values=known, fixed_first=boundary, fixed_second=pinned
     )
-    # the given unknowns are kept
-    for i in boundary.indices():
-        assert_equal(x.first[i], known.first[i])
-    assert_equal(x.second[0], known.second[0])
-    # the other equations hold
-    var r = A @ x - b
-    for i in range(len(r.first)):
-        if i not in boundary:
-            assert_almost_equal(r.first[i], 0.0, atol=1e-13, rtol=0)
-    for i in range(1, len(r.second)):
-        assert_almost_equal(r.second[i], 0.0, atol=1e-13, rtol=0)
+    for method in [DirectMethod.DENSE_LU, DirectMethod.SPARSE_LDLT]:
+        var x = spsolve(
+            A,
+            b,
+            values=known,
+            fixed_first=boundary,
+            fixed_second=pinned,
+            method=method,
+        )
+        # the given unknowns are kept
+        for i in boundary.indices():
+            assert_equal(x.first[i], known.first[i])
+        assert_equal(x.second[0], known.second[0])
+        # the other equations hold
+        var r = A @ x - b
+        for i in range(len(r.first)):
+            if i not in boundary:
+                assert_almost_equal(r.first[i], 0.0, atol=1e-13, rtol=0)
+        for i in range(1, len(r.second)):
+            assert_almost_equal(r.second[i], 0.0, atol=1e-13, rtol=0)
+        # the sparse saddle-point factorization agrees with the dense LU
+        var e = (x - dense).stacked()
+        for i in range(e.size):
+            assert_almost_equal(e.unsafe_get(i), 0.0, atol=1e-12, rtol=0)
 
 
 def test_solve_whole_system() raises:
@@ -118,10 +132,22 @@ def test_solve_whole_system() raises:
     )
     var x0 = _pair(tc, 5)
     var b = A @ x0
-    var x = spsolve(A, b)
-    var e = (x - x0).stacked()
-    for i in range(e.size):
-        assert_almost_equal(e.unsafe_get(i), 0.0, atol=5e-13, rtol=0)
+    for method in [DirectMethod.DENSE_LU, DirectMethod.SPARSE_LDLT]:
+        var x = spsolve(A, b, method=method)
+        var e = (x - x0).stacked()
+        for i in range(e.size):
+            assert_almost_equal(e.unsafe_get(i), 0.0, atol=5e-13, rtol=0)
+    # SPARSE_LDLT needs a symmetric matrix
+    var B = BlockOp(
+        tc.star[1, PRIMAL]().to_matrix_op(),
+        d1.T() * 2.0,
+        d1,
+        tc.dual_diagonal[0, DUAL](
+            List[Float64](length=N2, fill=-1.0)
+        ).to_matrix_op(),
+    )
+    with assert_raises(contains="not symmetric"):
+        _ = spsolve(B, b, method=DirectMethod.SPARSE_LDLT)
 
 
 def test_minres_on_blocks() raises:

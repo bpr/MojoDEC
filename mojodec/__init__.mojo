@@ -125,6 +125,7 @@ from mojodec.routines.linalg import (
     eigh_generalized,
     SolveResult,
     StopReason,
+    DirectMethod,
     TypedEighResult,
 )
 from mojodec.routines.dense import (

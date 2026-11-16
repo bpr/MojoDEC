@@ -283,9 +283,13 @@ plan). Key design points that span several files:
   elimination tree and column counts, then each row of `L` by `_ereach`
   (stack order is a valid topological order); `D[j]` is stored in place
   of `L`'s unit diagonal. Dynamic regularization (`signs`,
-  `regularization`) as faer's, then iterative refinement in `solve`
-  against a stored copy of `A`. `SparseCholesky` wraps it, requires
-  positive pivots, and is a `Preconditioner`. Serial.
+  `regularization`) as faer's. Every `solve` takes `refinement_steps`
+  (default 1) of iterative refinement against a stored copy of `A`: the
+  unpivoted indefinite factor is not backward stable, and DarcyFlow's
+  pressures need the step to agree to 1e-14. `SparseCholesky` wraps it
+  with no refinement, requires positive pivots, and is a
+  `Preconditioner`. Serial. `spsolve(..., method=DirectMethod.SPARSE_LDLT)`
+  (CSR, `MatrixOp`, `BlockOp`, fixed cells) uses it; DarcyFlow does.
 - **Kuhn grids and flat tori** (`routines/mesh_generation.mojo`):
   `kuhn_grid(dims[, lengths])` cuts each cell into d! simplices (one per
   axis permutation, odd ones with the last two vertices swapped);
@@ -537,5 +541,7 @@ exactly; the other tests' meshes run serially.
   ResonantCavity, and CavityWaves use the typed layer. HeatConduction imposes Dirichlet rows
   with `exclude_subset(fixed.dual())` plus `tc.dual_diagonal[...]`
   restricted to the same cells; DarcyFlow solves the mixed `BlockOp` with
-  `spsolve(..., values=, fixed_first=, fixed_second=)`, which reproduces
-  PyDEC's elimination bit for bit.
+  `spsolve(..., values=, fixed_first=, fixed_second=,
+  method=DirectMethod.SPARSE_LDLT)`: PyDEC's elimination (the same rows
+  and columns dropped, the same right-hand side), then the reduced saddle
+  point factored sparsely with one refinement step (pressures to 4e-16).

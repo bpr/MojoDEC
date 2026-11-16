@@ -130,25 +130,54 @@ Morton order (`reorder_vertices`) is spatially coherent.
 
 ## Regularization and refinement
 
+Without pivoting, an indefinite factorization is not backward stable:
+eliminating the first block of a saddle point can make the Schur
+complement's entries much larger than $A$'s, and rounding grows with
+them. So every `solve` ends with iterative refinement against $A$
+itself,
+
+$$
+x \leftarrow x + F^{-1} (b - A x) ,
+$$
+
+`refinement_steps` times (default 1). One step in working precision
+restores a componentwise backward error of a few ulps when the factor
+is not too unstable (Skeel, 1980), for the price of a product with $A$
+and a second pair of triangular solves. On DarcyFlow it takes the
+largest pressure error from $2.2 \cdot 10^{-14}$ to $4.4 \cdot 10^{-16}$
+(the dense pivoted LU gives $7.8 \cdot 10^{-15}$). `SparseCholesky` sets
+it to 0: positive definite factorizations have no growth, and the
+preconditioner stays a single linear map.
+
 For an indefinite matrix whose order cannot avoid small pivots, pass the
 expected sign of each pivot and a regularization $\delta$:
 
 ```mojo
-var F = SparseLDLT(A, signs=signs, regularization=1e-10)
+var F = SparseLDLT(A, signs=signs, regularization=1e-10, refinement_steps=3)
 ```
 
 A pivot $d_k$ of the wrong sign, or with $|d_k| \le \delta$, becomes
 $\pm\delta$ (dynamic regularization, as interior-point solvers use). The
-factor is then that of a nearby matrix $A + E$, and each `solve` takes
-`refinement_steps` (default 2) steps of iterative refinement against $A$
-itself:
+factor is then that of a nearby matrix $A + E$, and the refinement steps
+correct for $E$ as well; take 2 or 3. `F.num_regularized` counts the
+replaced pivots. Without `signs`, a small pivot keeps its sign.
 
-$$
-x \leftarrow x + F^{-1} (b - A x) .
-$$
+### Through `spsolve`
 
-`F.num_regularized` counts the replaced pivots; without them no
-refinement is done. Without `signs`, a small pivot keeps its sign.
+`spsolve` takes `method=DirectMethod.SPARSE_LDLT` on a `CSRMatrix`, a
+`MatrixOp`, and a `BlockOp` (with or without fixed cells, whose reduced
+matrix keeps the same rows as columns and so stays symmetric). DarcyFlow
+solves its mixed system that way:
+
+```mojo
+var solution = spsolve(
+    A, zero, values=known, fixed_first=boundary, fixed_second=pinned,
+    method=DirectMethod.SPARSE_LDLT,
+)
+```
+
+The default, `DirectMethod.DENSE_LU`, is the dense pivoted LU, for any
+non-singular matrix of a few thousand unknowns.
 
 ## The API
 
@@ -158,7 +187,7 @@ var F = SparseLDLT(
     ordering=FillOrdering.AMD,           # or .NATURAL
     signs=None,                          # +-1 per row, for regularization
     regularization=0,                    # delta; 0 turns it off
-    refinement_steps=2,
+    refinement_steps=1,                  # per solve; 0 for bare solves
 )
 F.solve(b)                # A x = b
 F.apply_into(b, x)        # the same, as a LinearOperator
@@ -218,6 +247,8 @@ instead of dense exact blocks.
 
 - P. R. Amestoy, T. A. Davis, I. S. Duff, "An approximate minimum degree
   ordering algorithm", SIAM J. Matrix Anal. Appl. 17(4), 886–905, 1996.
+- R. D. Skeel, "Iterative refinement implies numerical stability for
+  Gaussian elimination", Math. Comp. 35(151), 817–832, 1980.
 - J. W. H. Liu, "The role of elimination trees in sparse factorization",
   SIAM J. Matrix Anal. Appl. 11(1), 134–172, 1990.
 - T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006,

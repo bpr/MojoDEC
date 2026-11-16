@@ -22,6 +22,7 @@ from mojodec import (
     PRIMAL,
     BlockOp,
     CochainPair,
+    DirectMethod,
     TypedComplex,
     VTKField,
     loadtxt,
@@ -95,7 +96,9 @@ def main() raises:
 
     # the pressure at the right-most triangle circumcenter is taken as known
     # (0); the fluxes are known on the boundary edges. spsolve drops the
-    # equations on those cells and moves the known values to the right side
+    # equations on those cells and moves the known values to the right side.
+    # The reduced system is a symmetric saddle point: SPARSE_LDLT orders
+    # the triangles (zero diagonal) last and factors it without pivoting
     var rightmost = 0
     for i in range(N2):
         if fget(sc[2].circumcenter, i, 0) > fget(
@@ -107,7 +110,12 @@ def main() raises:
     var known = CochainPair(boundary_flux^, tc.cochain[0, DUAL]())
     var zero = CochainPair(tc.cochain[1, DUAL](), tc.cochain[2, PRIMAL]())
     var solution = spsolve(
-        A, zero, values=known, fixed_first=boundary, fixed_second=pinned
+        A,
+        zero,
+        values=known,
+        fixed_first=boundary,
+        fixed_second=pinned,
+        method=DirectMethod.SPARSE_LDLT,
     )
     ref fluxes = solution.first  # TypedCochain[2, 1, PRIMAL]
     ref pressures = solution.second  # TypedCochain[2, 0, DUAL]

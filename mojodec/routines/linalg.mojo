@@ -67,6 +67,7 @@ from mojodec.core.utils import (
 )
 from mojodec.routines import dense
 from mojodec.routines.dense import EighResult
+from mojodec.routines.sparse_ldlt import SparseLDLT
 
 
 struct StopReason(Equatable, ImplicitlyCopyable, Writable):
@@ -115,6 +116,56 @@ struct StopReason(Equatable, ImplicitlyCopyable, Writable):
             writer.write("iteration limit reached")
         else:
             writer.write("breakdown")
+
+
+struct DirectMethod(Equatable, ImplicitlyCopyable, Writable):
+    """How `spsolve` factors its matrix.
+
+    ```mojo
+    var x = spsolve(A, b, method=DirectMethod.SPARSE_LDLT)
+    ```
+    """
+
+    var _code: UInt8
+
+    comptime DENSE_LU = DirectMethod(0)
+    """A dense copy with partial pivoting: any non-singular matrix, but
+    `O(n^2)` memory and `O(n^3)` work (a few thousand unknowns)."""
+    comptime SPARSE_LDLT = DirectMethod(1)
+    """`SparseLDLT` with the AMD ordering: symmetric matrices only (both
+    triangles stored), no pivoting. Saddle points factor because their
+    zero-diagonal rows are ordered last; see the guide's Sparse direct
+    page."""
+
+    def __init__(out self, code: UInt8):
+        """A method from its code; use the named members instead.
+
+        Args:
+            code: 0 or 1.
+        """
+        self._code = code
+
+    def __eq__(self, other: Self) -> Bool:
+        """Whether two methods are the same.
+
+        Args:
+            other: The method to compare with.
+
+        Returns:
+            True if they are equal.
+        """
+        return self._code == other._code
+
+    def write_to(self, mut writer: Some[Writer]):
+        """Write the method's name.
+
+        Args:
+            writer: The destination.
+        """
+        if self == Self.DENSE_LU:
+            writer.write("dense LU")
+        else:
+            writer.write("sparse LDL^T")
 
 
 struct SolveResult[X: Movable & Deinitable = RealArray](Movable):
@@ -1266,25 +1317,37 @@ def lsqr(
     return SolveResult(x^, StopReason.MAX_ITER, it, phibar, arnorm)
 
 
-def spsolve(A: CSRMatrix, b: RealArray) raises -> RealArray:
+def spsolve(
+    A: CSRMatrix,
+    b: RealArray,
+    *,
+    method: DirectMethod = DirectMethod.DENSE_LU,
+) raises -> RealArray:
     """Solve the square non-singular system `A x = b` directly.
 
-    Factors a dense copy of `A` with partial pivoting, so it suits the
-    moderate sizes of the examples (a few thousand unknowns).
+    By default factors a dense copy of `A` with partial pivoting, so it
+    suits the moderate sizes of the examples (a few thousand unknowns).
+    `method=DirectMethod.SPARSE_LDLT` factors a symmetric `A` sparsely
+    instead (`SparseLDLT`), for large systems; the solution then agrees
+    with the dense one to the conditioning, not bit for bit.
 
     Args:
         A: An `n x n` non-singular matrix.
         b: The length-`n` right-hand side.
+        method: `DirectMethod.DENSE_LU` or `DirectMethod.SPARSE_LDLT`.
 
     Returns:
         The length-`n` solution `x`.
 
     Raises:
         If `A` is not square, `b` does not have length `n`, or `A` is
-            singular.
+            singular; with `SPARSE_LDLT`, also if `A` is not symmetric or
+            a pivot of its ordering is zero.
     """
     if A.nrows != A.ncols or b.size != A.nrows:
         raise Error("spsolve: dimension mismatch")
+    if method == DirectMethod.SPARSE_LDLT:
+        return SparseLDLT(A).solve(b)
     return dense.solve(A.todense(), b)
 
 
@@ -1933,6 +1996,8 @@ def spsolve[
 ](
     A: MatrixOp[n, in_k, in_primal, out_k, out_primal],
     b: TypedCochain[n, out_k, out_primal],
+    *,
+    method: DirectMethod = DirectMethod.DENSE_LU,
 ) raises -> TypedCochain[n, in_k, in_primal]:
     """Solve `A x = b` on cochains directly; see the untyped overload.
 
@@ -1946,6 +2011,7 @@ def spsolve[
     Args:
         A: A non-singular operator with as many output as input cells.
         b: The right-hand side, of `A`'s output kind.
+        method: `DirectMethod.DENSE_LU` or `DirectMethod.SPARSE_LDLT`.
 
     Returns:
         The solution, of `A`'s input kind.
@@ -1955,7 +2021,9 @@ def spsolve[
         `A` is singular.
     """
     _typed_complex(A.complex, b.complex, "spsolve")
-    return TypedCochain[n, in_k, in_primal](b.complex, spsolve(A.mat, b.v))
+    return TypedCochain[n, in_k, in_primal](
+        b.complex, spsolve(A.mat, b.v, method=method)
+    )
 
 
 def eigh_generalized[
@@ -2070,6 +2138,8 @@ def spsolve[
 ](
     A: BlockOp[n, in1_k, in1_p, in2_k, in2_p, out1_k, out1_p, out2_k, out2_p],
     b: CochainPair[n, out1_k, out1_p, out2_k, out2_p],
+    *,
+    method: DirectMethod = DirectMethod.DENSE_LU,
 ) raises -> CochainPair[n, in1_k, in1_p, in2_k, in2_p]:
     """Solve the block system `A x = b` directly; see the untyped overload.
 
@@ -2088,6 +2158,7 @@ def spsolve[
         A: A non-singular block operator with as many equations as
             unknowns.
         b: The right-hand side, of `A`'s output kinds.
+        method: `DirectMethod.DENSE_LU` or `DirectMethod.SPARSE_LDLT`.
 
     Returns:
         The unknowns, of `A`'s input kinds.
@@ -2098,7 +2169,7 @@ def spsolve[
     """
     var complex = b.first.complex
     _typed_complex(A.complex, complex, "spsolve")
-    var x = spsolve(A.to_csr(), b.stacked())
+    var x = spsolve(A.to_csr(), b.stacked(), method=method)
     return _split[n, in1_k, in1_p, in2_k, in2_p](x, A.a11.mat.ncols, complex)
 
 
@@ -2119,6 +2190,7 @@ def spsolve[
     values: CochainPair[n, in1_k, in1_p, in2_k, in2_p],
     fixed_first: TypedSubset[n, in1_k, in1_p],
     fixed_second: TypedSubset[n, in2_k, in2_p],
+    method: DirectMethod = DirectMethod.DENSE_LU,
 ) raises -> CochainPair[n, in1_k, in1_p, in2_k, in2_p]:
     """Solve the block system `A x = b` with some unknowns given.
 
@@ -2155,6 +2227,10 @@ def spsolve[
         values: The unknowns, read only on the fixed cells.
         fixed_first: The cells where the first unknown is given.
         fixed_second: The cells where the second unknown is given.
+        method: How to factor the reduced system: `DirectMethod.DENSE_LU`
+            or, for a symmetric `A` (a mixed formulation), the sparse
+            `DirectMethod.SPARSE_LDLT`; the reduced matrix keeps the same
+            rows as columns, so it stays symmetric.
 
     Returns:
         The unknowns: `values` on the fixed cells, the solution elsewhere.
@@ -2191,7 +2267,7 @@ def spsolve[
     var rf = real_vector(len(free))
     for i in range(len(free)):
         rf.unsafe_set(i, r.unsafe_get(free[i]))
-    var u = spsolve(M.select(free, free), rf)
+    var u = spsolve(M.select(free, free), rf, method=method)
     for i in range(len(free)):
         x.unsafe_set(free[i], u.unsafe_get(i))
     return _split[n, in1_k, in1_p, in2_k, in2_p](x, n1, complex)

@@ -200,6 +200,10 @@ def test_ldlt_solves_saddle_points_without_pivoting() raises:
         var inertia = F.inertia()
         assert_equal(inertia.negative, m)
         assert_equal(inertia.positive, c)
+        # the default refinement step leaves a smaller residual than
+        # the bare triangular solves
+        var bare = SparseLDLT(A, refinement_steps=0)
+        assert_true(_residual(A, x, b) <= _residual(A, bare.solve(b), b))
         # not positive definite
         with assert_raises(contains="not positive definite"):
             _ = SparseCholesky(A)

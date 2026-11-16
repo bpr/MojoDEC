@@ -281,8 +281,9 @@ The whole `BlockOp` must be symmetric: $a_{11}$ and $a_{22}$ symmetric,
 and $a_{21} = a_{12}^T$. Scaling one off-diagonal block breaks that, and
 `minres` raises. The DarcyFlow example prescribes some unknowns (boundary
 fluxes, one pressure). That reduced system is solved by the
-`spsolve(..., values=, fixed_first=, fixed_second=)` overload; `minres` has
-no such overload yet.
+`spsolve(..., values=, fixed_first=, fixed_second=)` overload, with
+`method=DirectMethod.SPARSE_LDLT` (see [Sparse direct](sparse-direct.md));
+`minres` has no such overload yet.
 
 ### Preconditioned MINRES
 

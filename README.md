@@ -376,7 +376,8 @@ the published mathematics:
   and column. `spsolve(A, b, values=..., fixed_first=..., fixed_second=...)`
   solves it with some unknowns given (Dirichlet data, a pinned pressure),
   dropping the equations on the same cells, which needs each equation to be
-  of the dual kind of its unknown. DarcyFlow's mixed system:
+  of the dual kind of its unknown; `method=DirectMethod.SPARSE_LDLT`
+  factors a symmetric system sparsely. DarcyFlow's mixed system:
 
   ```mojo
   var d1 = tc.d[1, PRIMAL]()
