@@ -72,6 +72,14 @@ from mojodec.routines.time import (
     _Guess,
 )
 from mojodec.routines.amg import Relaxation, SmoothedAggregation
+from mojodec.routines.gmg import (
+    GeometricMultigrid,
+    PatchSmoother,
+    refinement_hierarchy,
+)
+from mojodec.routines.innerproduct import whitney_innerproduct
+from mojodec.routines.mesh_generation import kuhn_grid
+from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.routines.lanczos import eigsh
 from mojodec.routines.ordering import amd_ordering
 from mojodec.routines.sparse_ldlt import (
@@ -1028,6 +1036,89 @@ def test_amg_cycle_is_a_valid_preconditioner() raises:
         integers(1, 8),
         prop,
         quick(),
+    )
+
+
+def test_geometric_multigrid_is_a_valid_preconditioner() raises:
+    """On refinements of small random Kuhn grids in 2D and 3D, for any
+    degree, mass weight, boundary condition, and smoother, the V-cycle is
+    symmetric and positive definite, and CG with it reaches the direct
+    solution."""
+
+    def prop(
+        three: Bool,
+        cells: List[Int],
+        k_pick: Int,
+        weight: Int,
+        dirichlet: Bool,
+        additive: Bool,
+    ) raises:
+        var n = 3 if three else 2
+        var dims = List[Int]()
+        for i in range(n):
+            dims.append(1 + cells[i % len(cells)] % (2 if three else 3))
+        var refs = 1 if three else 2
+        var h = refinement_hierarchy(SimplicialComplex(kuhn_grid(dims)), refs)
+        ref sc = h[refs - 1].fine
+        var k = k_pick % (n + 1)
+        var alpha = [0.01, 1.0, 100.0][weight % 3]
+        var A = whitney_innerproduct(sc, k) * alpha
+        if k < n:
+            A = (
+                A
+                + sc[k].d.transpose()
+                @ whitney_innerproduct(sc, k + 1)
+                @ sc[k].d
+            )
+        if dirichlet:
+            var boundary = sc.boundary_cells()[k].copy()
+            var free = List[Int]()
+            for i in range(sc[k].num_simplices):
+                if i not in boundary:
+                    free.append(i)
+            # the coarsest level needs a free k-simplex too
+            var coarse_boundary = h[0].coarse.boundary_cells()[k].copy()
+            var coarse_free = 0
+            for i in range(h[0].coarse[k].num_simplices):
+                if i not in coarse_boundary:
+                    coarse_free += 1
+            assume(coarse_free > 0)
+            A = A.select(free, free)
+        var sm = (
+            PatchSmoother.ADDITIVE if additive else PatchSmoother.MULTIPLICATIVE
+        )
+        var mg = GeometricMultigrid(A, h, k, dirichlet=dirichlet, smoother=sm)
+        var m = A.nrows
+        var x = real_vector(m)
+        var y = real_vector(m)
+        for i in range(m):
+            x.unsafe_set(i, Float64((i * 7) % 5) - 2.0)
+            y.unsafe_set(i, Float64((i * 3) % 7) - 3.0)
+        var Bx = real_vector(m)
+        var By = real_vector(m)
+        mg.apply_into(x, Bx)
+        mg.apply_into(y, By)
+        var a = _dot(y, Bx)
+        var c = _dot(x, By)
+        var scale = sqrt(_dot(x, Bx) * _dot(y, By)) + 1e-300
+        if not (abs(a - c) <= 1e-10 * scale):
+            fail(String("not symmetric: ", a, " vs ", c))
+        if not (_dot(x, Bx) > 0):
+            fail(String("not positive: ", _dot(x, Bx)))
+        var res = cg(A, x, M=mg, rtol=1e-11, maxiter=300)
+        if not res.converged():
+            fail(String("cg stopped: ", res.stop, " (k ", k, ")"))
+        _close(res^.take_x(), SparseCholesky(A).solve(x), 1e-7, "gmg-cg")
+
+    given(
+        booleans(),
+        lists(integers(0, 5), min_size=1, max_size=3),
+        integers(0, 3),
+        integers(0, 2),
+        booleans(),
+        booleans(),
+        prop,
+        Settings(max_examples=40, deadline=None),
     )
 
 

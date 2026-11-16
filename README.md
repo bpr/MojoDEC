@@ -132,7 +132,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/combinatorial.mojo` | `math/combinatorial.py`, `math/parity.py` |
 | `mojodec/routines/innerproduct.mojo` | `fem/innerproduct.py` |
 | `mojodec/routines/mesh_generation.mojo` | `mesh/generation.py`, `mesh/subdivision.py` |
-| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range`; `routines/sparse_ldlt.mojo`, `routines/ordering.mojo` — `SparseLDLT`, `SparseCholesky`, `amd_ordering`; `routines/lanczos.mojo` — `eigsh`; `routines/amg.mojo` — `SmoothedAggregation` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
+| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range`; `routines/sparse_ldlt.mojo`, `routines/ordering.mojo` — `SparseLDLT`, `SparseCholesky`, `amd_ordering`; `routines/lanczos.mojo` — `eigsh`; `routines/amg.mojo` — `SmoothedAggregation`; `routines/gmg.mojo` — `GeometricMultigrid`, `refinement_hierarchy` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
 | `mojodec/routines/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh`, `EighResult.residuals` | `numpy.linalg` (called by PyDEC) |
 | `mojodec/routines/io/` — `read_array`, `write_array`, `read_mesh`, `write_mesh`, `loadtxt` | `io/arrayio.py`, `io/meshio.py` |
 | `mojodec/routines/io/vtk.mojo` — `write_vtu`, `write_vtu_cubes`, `VTKField` | (new) |
@@ -500,6 +500,14 @@ the published mathematics:
   sparse Cholesky on the coarsest level. CG takes 9–10 iterations from
   4k to 355k unknowns: a graded plate with 355,385 unknowns in 238 ms,
   where Jacobi-CG takes 732 iterations and 1.03 s.
+- **Geometric multigrid for k-forms** (`GeometricMultigrid(A, h, k)`):
+  a V-cycle on a `refine` hierarchy with exact Whitney prolongations and
+  the Arnold–Falk–Winther vertex-star smoother (multiplicative or
+  additive), for `alpha M_k + d^T M d` of every degree. CG takes 7–10
+  iterations at every size where Jacobi's count doubles per refinement
+  (2D H(curl), 49,408 unknowns: 9 iterations, 86 ms, against 2766 and
+  517 ms); as the blocks of the mixed Hodge Laplacian's preconditioner,
+  MINRES stays at 26–30 iterations up to 66k unknowns.
 - **Sparse eigensolver** (`eigsh(K, M, nev, sigma=s)`): the `nev`
   eigenpairs of `K x = lambda M x` nearest `s` by shift-invert Lanczos in
   the `M` inner product, thick restarts, `K - s M` factored once by

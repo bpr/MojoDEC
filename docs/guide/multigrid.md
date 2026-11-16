@@ -150,10 +150,12 @@ var res = cg(K, b, M=SmoothedAggregation(K), nullspace=NullSpace.constants(n))
   constructor raises otherwise); an indefinite or saddle-point matrix
   needs a block preconditioner with AMG on the definite blocks.
 - **Scalar problems.** The tentative prolongation reproduces constants,
-  the near-kernel of 0-form Laplacians. For $k$-form Laplacians with
+  the near-kernel of 0-form Laplacians. For $k$-form operators with
   $k \ge 1$, whose near-kernel is the large range of $d$, plain SA
-  converges slowly: that needs auxiliary-space methods (AMS/ADS) or
-  geometric multigrid with a patch smoother.
+  degrades: 134 to 975 iterations on $M_1 + d^T M_2 d$ from 800 to
+  49,408 unknowns. On refined meshes use `GeometricMultigrid` (see
+  [Geometric multigrid](geometric-multigrid.md)); otherwise that needs
+  auxiliary-space methods (AMS/ADS).
 - **Numbering.** Aggregation follows the row order. A random numbering
   gives scattered aggregates and a worse hierarchy; `reorder_vertices`.
 - **Small matrices.** At or below `coarse_size` the "hierarchy" is one

@@ -326,6 +326,18 @@ plan). Key design points that span several files:
   regularized `SparseLDLT` if singular. V-cycle from zero: Chebyshev on
   `[0.1, 1.1] lambda` (Saad 12.1) or forward/backward Gauss-Seidel.
   Residuals by loops (`_residual`), not NuMojo's `-`.
+- **Geometric multigrid** (`routines/gmg.mojo`, from the papers):
+  `GeometricMultigrid(A, hierarchy, k)` takes the finest operator and a
+  `List[Refinement]` (`refinement_hierarchy`), checks the chain
+  (`coarse.is_same(previous.fine)`), and builds levels finest first:
+  `P = prolongation(k)` (`select`ed to interior simplices with
+  `dirichlet`), `R = P^T`, `A_c = R @ (A @ P)`; coarsest by
+  `SparseCholesky`. `_Patches`: per vertex, the free k-simplices
+  containing it (counting sort, so each patch is sorted), with the dense
+  Cholesky of `A` on them stored row-major. Multiplicative smoothing
+  visits vertices forward before the coarse correction and backward
+  after (symmetric cycle); additive sums all patches from one residual,
+  damped by `1/(k+2)`. Serial.
 - **Kuhn grids and flat tori** (`routines/mesh_generation.mojo`):
   `kuhn_grid(dims[, lengths])` cuts each cell into d! simplices (one per
   axis permutation, odd ones with the last two vertices swapped);

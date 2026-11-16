@@ -342,8 +342,10 @@ for sparse matrices, practical in 2D at a hundred thousand unknowns. It shows wh
 ideal preconditioner achieves. A scalable one replaces each exact inverse
 by something spectrally equivalent at linear cost, which for the $H(\mathrm{curl})$
 and $H(\mathrm{div})$ blocks means multigrid with smoothers that respect
-the kernel of $d$ (Hiptmair; Arnold, Falk, and Winther). MojoDEC does not
-have that yet.
+the kernel of $d$ (Hiptmair; Arnold, Falk, and Winther). On refined
+meshes, `GeometricMultigrid` is that (see
+[Geometric multigrid](geometric-multigrid.md)): with a V-cycle per block,
+MINRES takes 26 to 30 iterations from 289 to 66,049 unknowns.
 
 Diagonal approximations do not help. They miss the $d^T M d$ part, which
 dominates as $h \to 0$. An inner iterative solve is no substitute for the

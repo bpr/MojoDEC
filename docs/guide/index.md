@@ -49,6 +49,11 @@ how to use it, and what can go wrong.
   V-cycle preconditioner built from the matrix alone (amgcl's aggregation
   and smoothed prolongation, Chebyshev or Gauss–Seidel smoothing), with
   CG iterations that stay near 10 as meshes grow.
+- **[Geometric multigrid](geometric-multigrid.md)**: `GeometricMultigrid`
+  on a `refine` hierarchy, with Arnold–Falk–Winther's vertex-star
+  smoother, for $H(\mathrm{grad})$, $H(\mathrm{curl})$, and
+  $H(\mathrm{div})$ operators of every degree, and as the scalable block
+  of the mixed Hodge Laplacian's preconditioner.
 - **[Eigenproblems](eigenproblems.md)**: the symmetric-definite problem
   `K x = lambda M x`, how `eigh_generalized` reduces it, a few eigenpairs
   of large problems by shift-invert Lanczos (`eigsh`, with locking for

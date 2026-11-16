@@ -222,7 +222,7 @@ and `reorder_vertices` fixes it. See
 
 ## Verification
 
-- **Unit and property tests:** `pixi run test` runs 37 test files. The
+- **Unit and property tests:** `pixi run test` runs 38 test files. The
   property tests cover rigid motions, relabeling, thin and far-away
   simplices, and corrupted files.
 - **Examples:** the examples are regression checks against PyDEC.
