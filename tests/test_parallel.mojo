@@ -670,7 +670,8 @@ def test_parallel_supernodal_matches_serial() raises:
 
 def test_parallel_block_solves_match_serial() raises:
     # many right-hand sides: blocks of columns on separate threads, the
-    # same bits as on one
+    # same bits as on one, and each column (refinement residuals included)
+    # the single solve's
     var A = _laplacian_3d(12, 0)
     var n = A.nrows
     var m = 40
@@ -679,9 +680,16 @@ def test_parallel_block_solves_match_serial() raises:
         for i in range(n):
             fset(B, i, c, Float64((i * 7 + c * 13) % 11) - 5.0)
     for layout in [FactorLayout.SIMPLICIAL, FactorLayout.SUPERNODAL]:
-        var F = SparseLDLT(A, layout=layout)
+        var F = SparseLDLT(A, layout=layout, refinement_steps=2)
         _ = setenv("MOJODEC_NUM_THREADS", "1")
         var want = F.solve(B)
+        for c in range(0, m, 13):
+            var b = real_vector(n)
+            for i in range(n):
+                b.unsafe_set(i, fget(B, i, c))
+            var x = F.solve(b)
+            for i in range(n):
+                assert_equal(x.unsafe_get(i), fget(want, i, c))
         for threads in ["3", ""]:
             if threads:
                 _ = setenv("MOJODEC_NUM_THREADS", threads)

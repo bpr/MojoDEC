@@ -554,22 +554,6 @@ struct SparseLDLT(LinearOperator, Movable):
                     s -= self._Lx[p] * y[unsafe_offset=self._Li[p]]
                 y[unsafe_offset=j] = s
 
-    def _solve_all_columns(self, mut Y: List[Float64], m: Int):
-        """`_solve_columns` on all `m` columns of `Y`, split into blocks of
-        columns across the physical cores when the work is large enough
-        (`MOJODEC_NUM_THREADS` caps them). The bits do not depend on the
-        split."""
-        var Yp = Y.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-        var stored = self.stored_entries()
-        if m < 2 or Float64(stored) * Float64(m) < _PARALLEL_SOLVE_WORK:
-            self._solve_columns(Yp, 0, m)
-            return
-
-        def columns(chunk: Int, lo: Int, hi: Int) {self, Yp}:
-            self._solve_columns(Yp, lo, hi)
-
-        parallel_ranges(m, 2, columns, memory_bound=True)
-
     def solve(self, b: RealArray) raises -> RealArray:
         """Solve `A x = b`, or `A X = B` for an `n x m` array `B`.
 
@@ -578,8 +562,9 @@ struct SparseLDLT(LinearOperator, Movable):
         factorization and, with regularized pivots, the perturbation.
 
         With several right-hand sides, each block of `L` is read once for
-        all of them, and blocks of columns run on separate cores; column
-        `c` of `X` is `solve(B[:, c])` bit for bit.
+        all of them, and blocks of columns run on separate cores, their
+        refinement residuals included; column `c` of `X` is
+        `solve(B[:, c])` bit for bit.
 
         Args:
             b: The length-`n` right-hand side, or an `n x m` array of `m`
@@ -605,7 +590,10 @@ struct SparseLDLT(LinearOperator, Movable):
         return x^
 
     def _solve_many(self, B: RealArray) raises -> RealArray:
-        """`solve` for an `n x m` `B`."""
+        """`solve` for an `n x m` `B`: `_solve_block` on all `m` columns,
+        split into blocks of columns across the physical cores when the
+        work is large enough (`MOJODEC_NUM_THREADS` caps them). The bits do
+        not depend on the split."""
         var n = self.n
         var m = cols_of(B)
         if rows_of(B) != n:
@@ -615,32 +603,86 @@ struct SparseLDLT(LinearOperator, Movable):
         if not B.flags.C_CONTIGUOUS:
             raise Error("SparseLDLT.solve: B is not C-contiguous")
         var X = real_array(n, m)
-        var Y = List[Float64](length=n * m, fill=0)  # by columns, permuted
-        for c in range(m):
+        if n == 0 or m == 0:
+            return X^
+        # by columns: the permuted right-hand side or correction, and x
+        var Y = List[Float64](unsafe_uninit_length=n * m)
+        var Xc = List[Float64](unsafe_uninit_length=n * m)
+        var Yp = Y.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        var Xp = Xc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        var Bp = B.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()
+        var Op = X.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        var work = Float64(self.stored_entries()) + Float64(
+            self.refinement_steps
+        ) * Float64(self.stored_entries() + self._A.nnz())
+        if m < 2 or work * Float64(m) < _PARALLEL_SOLVE_WORK:
+            self._solve_block(Bp, Op, Xp, Yp, m, 0, m)
+        else:
+
+            def columns(chunk: Int, lo: Int, hi: Int) {self, Bp, Op, Xp, Yp, m}:
+                self._solve_block(Bp, Op, Xp, Yp, m, lo, hi)
+
+            parallel_ranges(m, 2, columns, memory_bound=True)
+        _ = Y^
+        _ = Xc^
+        return X^
+
+    def _solve_block(
+        self,
+        B: Pointer[Float64, ImmUntrackedOrigin],
+        X: Pointer[Float64, MutUntrackedOrigin],
+        Xc: Pointer[Float64, MutUntrackedOrigin],
+        Y: Pointer[Float64, MutUntrackedOrigin],
+        m: Int,
+        c_lo: Int,
+        c_hi: Int,
+    ):
+        """Columns `c_lo..c_hi` of `X = A^-1 B`, `B` and `X` C-contiguous
+        `n x m`; `Xc` and `Y` are `n x m` scratch by columns. Each column
+        gets `apply_into`'s operations in its order: the solve, then per
+        refinement step the residual `b - A x` (as `CSRMatrix.matvec_into`
+        sums it), the solve, and `x += dx`."""
+        var n = self.n
+        var ip = self._A.indptr.unsafe_ptr()
+        var ix = self._A.indices.unsafe_ptr()
+        var dv = self._A.data.unsafe_ptr()
+        for c in range(c_lo, c_hi):
+            var y = Y.unsafe_offset(c * n)
             for k in range(n):
-                Y[c * n + k] = fget(B, self.perm[k], c)
-        self._solve_all_columns(Y, m)
-        for c in range(m):
+                y[unsafe_offset=k] = B[unsafe_offset=self.perm[k] * m + c]
+        self._solve_columns(Y, c_lo, c_hi)
+        for c in range(c_lo, c_hi):
+            var y = Y.unsafe_offset(c * n)
+            var x = Xc.unsafe_offset(c * n)
             for k in range(n):
-                fset(X, self.perm[k], c, Y[c * n + k])
-        # refinement, column by column as `apply_into` does it
-        var x = real_vector(n)
-        var r = real_vector(n)
+                x[unsafe_offset=self.perm[k]] = y[unsafe_offset=k]
         for _ in range(self.refinement_steps):
-            for c in range(m):
+            for c in range(c_lo, c_hi):
+                var y = Y.unsafe_offset(c * n)
+                var x = Xc.unsafe_offset(c * n)
                 for i in range(n):
-                    x.unsafe_set(i, fget(X, i, c))
-                self._A.apply_into(x, r)
-                for i in range(n):
-                    r.unsafe_set(i, fget(B, i, c) - r.unsafe_get(i))
-                for k in range(n):
-                    Y[c * n + k] = r.unsafe_get(self.perm[k])
-            self._solve_all_columns(Y, m)
-            for c in range(m):
+                    var s: Float64 = 0
+                    for p in range(
+                        ip[unsafe_offset=i], ip[unsafe_offset=i + 1]
+                    ):
+                        s += (
+                            dv[unsafe_offset=p]
+                            * x[unsafe_offset=ix[unsafe_offset=p]]
+                        )
+                    y[unsafe_offset=self._perm_inv[i]] = (
+                        B[unsafe_offset=i * m + c] - s
+                    )
+            self._solve_columns(Y, c_lo, c_hi)
+            for c in range(c_lo, c_hi):
+                var y = Y.unsafe_offset(c * n)
+                var x = Xc.unsafe_offset(c * n)
                 for k in range(n):
                     var i = self.perm[k]
-                    fset(X, i, c, fget(X, i, c) + Y[c * n + k])
-        return X^
+                    x[unsafe_offset=i] = x[unsafe_offset=i] + y[unsafe_offset=k]
+        for c in range(c_lo, c_hi):
+            var x = Xc.unsafe_offset(c * n)
+            for i in range(n):
+                X[unsafe_offset=i * m + c] = x[unsafe_offset=i]
 
     def apply_into(self, x: RealArray, mut y: RealArray) raises:
         """`y = A^-1 x`, as `solve`.

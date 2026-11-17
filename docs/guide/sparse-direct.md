@@ -329,8 +329,9 @@ column still does dominate.
 
 Uses: many load cases on one mesh, a block of probe vectors, the columns
 of a basis to project (`deflate=` in `eigsh` has `G` with a few columns).
-With refinement, each column's residual is one product with $A$, column
-by column.
+With refinement, each column's residual $b - A x$ is one product with
+$A$, computed on the same core as that column's solves, in the order
+`A @ x` sums it.
 
 ## The API
 
