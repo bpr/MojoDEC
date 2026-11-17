@@ -150,6 +150,80 @@ def _sub_rows(
             o[unsafe_offset=c * o_stride + r] -= acc
 
 
+def _sub_dots(
+    res: Pointer[mut=True, Float64, ...],
+    mb: Int,
+    a: Pointer[Float64, ...],
+    a_stride: Int,
+    b: Pointer[Float64, ...],
+    b_stride: Int,
+    deg_v: Int,
+    nc: Int,
+):
+    """`res[j * mb + c] = sum_r A[r, j] B[r, c]` over the first `deg_v`
+    rows (a multiple of `_W`), `A` and `B` column-major (`A[r, j]` at
+    `a[j * a_stride + r]`, `B[r, c]` at `b[c * b_stride + r]`), for `nc`
+    columns of `A` and `mb` of `B`.
+
+    Each entry is `_W` lanes of fused multiply-adds down the rows, then
+    `reduce_add`, whatever the tiling: tiles of two columns of `A` by two
+    of `B` share each load, and the odd ones are done alone."""
+    var j = 0
+    while j + 2 <= nc:
+        var a0 = a.unsafe_offset(j * a_stride)
+        var a1 = a.unsafe_offset((j + 1) * a_stride)
+        var c = 0
+        while c + 2 <= mb:
+            var b0 = b.unsafe_offset(c * b_stride)
+            var b1 = b.unsafe_offset((c + 1) * b_stride)
+            comptime V = SIMD[DType.float64, _W]
+            var s00 = V(0)
+            var s01 = V(0)
+            var s10 = V(0)
+            var s11 = V(0)
+            var r = 0
+            while r < deg_v:
+                var av0 = a0.unsafe_load[width=_W](r)
+                var av1 = a1.unsafe_load[width=_W](r)
+                var bv0 = b0.unsafe_load[width=_W](r)
+                var bv1 = b1.unsafe_load[width=_W](r)
+                s00 = av0.fma(bv0, s00)
+                s01 = av0.fma(bv1, s01)
+                s10 = av1.fma(bv0, s10)
+                s11 = av1.fma(bv1, s11)
+                r += _W
+            res[unsafe_offset=j * mb + c] = s00.reduce_add()
+            res[unsafe_offset=j * mb + c + 1] = s01.reduce_add()
+            res[unsafe_offset=(j + 1) * mb + c] = s10.reduce_add()
+            res[unsafe_offset=(j + 1) * mb + c + 1] = s11.reduce_add()
+            c += 2
+        if c < mb:
+            var bc = b.unsafe_offset(c * b_stride)
+            res[unsafe_offset=j * mb + c] = _dot_lanes(a0, bc, deg_v)
+            res[unsafe_offset=(j + 1) * mb + c] = _dot_lanes(a1, bc, deg_v)
+        j += 2
+    if j < nc:
+        var aj = a.unsafe_offset(j * a_stride)
+        for c in range(mb):
+            res[unsafe_offset=j * mb + c] = _dot_lanes(
+                aj, b.unsafe_offset(c * b_stride), deg_v
+            )
+
+
+@always_inline
+def _dot_lanes(
+    a: Pointer[Float64, ...], b: Pointer[Float64, ...], deg_v: Int
+) -> Float64:
+    """One entry of `_sub_dots`."""
+    comptime V = SIMD[DType.float64, _W]
+    var s = V(0)
+    var r = 0
+    while r < deg_v:
+        s = a.unsafe_load[width=_W](r).fma(b.unsafe_load[width=_W](r), s)
+        r += _W
+    return s.reduce_add()
+
+
 def etree_postorder(etree: List[Int]) -> List[Int]:
     """A postorder of a forest: every node after its descendants, each
     subtree contiguous, children in increasing order.
@@ -434,20 +508,32 @@ struct _Supernodal(Movable):
 
     def solve_columns(self, Y: _FloatPtr, c_lo: Int, c_hi: Int):
         """`Y[:, c] = (L D L^T)^-1 Y[:, c]` for the columns `c_lo..c_hi` of
-        a column-major `n`-row `Y`, in the permuted numbering. Supernode by
-        supernode, each block applied to every column while it is in
-        cache; per supernode and column, the rows below its triangle are
-        gathered once into a dense vector, so the inner loops run down
-        contiguous columns. Each column gets the same operations as when
-        solved alone."""
+        a column-major `n`-row `Y`, in the permuted numbering.
+
+        Supernode by supernode, each block is applied to all the columns
+        while it is in cache. The rows below a supernode's triangle are
+        gathered once per column into a dense block, and the products with
+        them are matrix products: `_sub_product` (register tiles of rows by
+        columns of `Y`) on the way down, `_sub_dots` (pairs of columns of
+        `L` by pairs of columns of `Y`) on the way up. Each entry is the
+        same chain of fused multiply-adds whatever the number of columns,
+        so a column gets the same bits as when solved alone."""
         var ns = len(self.begin) - 1
         var n = self.n
+        var mb = c_hi - c_lo
+        if mb <= 0:
+            return
         var vp = self.vals.unsafe_ptr()
         var maxdeg = 0
+        var maxnc = 0
         for s in range(ns):
             maxdeg = max(maxdeg, self.row_ptr[s + 1] - self.row_ptr[s])
-        var buf = List[Float64](length=maxdeg, fill=0)
+            maxnc = max(maxnc, self.begin[s + 1] - self.begin[s])
+        var buf = List[Float64](length=maxdeg * mb, fill=0)
+        var wbuf = List[Float64](length=maxnc * mb, fill=0)
         var bp = buf.unsafe_ptr()
+        var wp = wbuf.unsafe_ptr()
+        var Y0 = Y.unsafe_offset(c_lo * n)
         comptime V = SIMD[DType.float64, _W]
         for s in range(ns):  # L
             var s0 = self.begin[s]
@@ -456,10 +542,8 @@ struct _Supernodal(Movable):
             var deg = self.row_ptr[s + 1] - rp
             var nr = nc + deg
             var base = self.val_ptr[s]
-            for cy in range(c_lo, c_hi):
-                var yp = Y.unsafe_offset(cy * n)
-                for r in range(deg):
-                    bp[unsafe_offset=r] = 0
+            for cy in range(mb):  # the triangle, column by column
+                var yp = Y0.unsafe_offset(cy * n)
                 for j in range(nc):
                     var xj = yp[unsafe_offset=s0 + j]
                     if xj == 0:
@@ -476,29 +560,36 @@ struct _Supernodal(Movable):
                         )
                         i += _W
                     while i < nc:
-                        yp[unsafe_offset=s0 + i] -= (
-                            vp[unsafe_offset=col + i] * xj
-                        )
+                        yp[unsafe_offset=s0 + i] = vp[
+                            unsafe_offset=col + i
+                        ].fma(-xj, yp[unsafe_offset=s0 + i])
                         i += 1
-                    var c = col + nc
-                    var r = 0
-                    while r + _W <= deg:
-                        bp.unsafe_store(
-                            r,
-                            vp.unsafe_load[width=_W](c + r).fma(
-                                xv, bp.unsafe_load[width=_W](r)
-                            ),
-                        )
-                        r += _W
-                    while r < deg:
-                        bp[unsafe_offset=r] = vp[unsafe_offset=c + r].fma(
-                            -xj, bp[unsafe_offset=r]
-                        )
-                        r += 1
+            if deg == 0:
+                continue
+            for t in range(nc):  # W = Y[s0:s0+nc, :], row-major
+                for cy in range(mb):
+                    wp[unsafe_offset=t * mb + cy] = Y0[
+                        unsafe_offset=cy * n + s0 + t
+                    ]
+            self._gather(Y0, n, bp, rp, deg, mb)
+            _sub_product(
+                bp,
+                deg,
+                vp.unsafe_offset(base + nc),
+                nr,
+                wp,
+                nc,
+                deg,
+                mb,
+                top=mb,
+            )
+            for cy in range(mb):
+                var yp = Y0.unsafe_offset(cy * n)
+                var b = bp.unsafe_offset(cy * deg)
                 for r in range(deg):
-                    yp[unsafe_offset=self.rows[rp + r]] += bp[unsafe_offset=r]
-        for cy in range(c_lo, c_hi):  # D
-            var yp = Y.unsafe_offset(cy * n)
+                    yp[unsafe_offset=self.rows[rp + r]] = b[unsafe_offset=r]
+        for cy in range(mb):  # D
+            var yp = Y0.unsafe_offset(cy * n)
             for k in range(n):
                 yp[unsafe_offset=k] = (
                     yp[unsafe_offset=k] / vp[unsafe_offset=self.diag_at[k]]
@@ -510,24 +601,24 @@ struct _Supernodal(Movable):
             var deg = self.row_ptr[s + 1] - rp
             var nr = nc + deg
             var base = self.val_ptr[s]
-            for cy in range(c_lo, c_hi):
-                var yp = Y.unsafe_offset(cy * n)
-                for r in range(deg):
-                    bp[unsafe_offset=r] = yp[unsafe_offset=self.rows[rp + r]]
+            var deg_v = deg - deg % _W
+            self._gather(Y0, n, bp, rp, deg, mb)
+            _sub_dots(
+                wp, mb, vp.unsafe_offset(base + nc), nr, bp, deg, deg_v, nc
+            )
+            for cy in range(mb):  # the rest, and the triangle
+                var yp = Y0.unsafe_offset(cy * n)
+                var b = bp.unsafe_offset(cy * deg)
                 for j in range(nc - 1, -1, -1):
                     var col = base + j * nr
                     var c = col + nc
-                    var accv = V(0)
-                    var r = 0
-                    while r + _W <= deg:
-                        accv = vp.unsafe_load[width=_W](c + r).fma(
-                            bp.unsafe_load[width=_W](r), accv
+                    var acc = (
+                        yp[unsafe_offset=s0 + j] - wp[unsafe_offset=j * mb + cy]
+                    )
+                    for r in range(deg_v, deg):
+                        acc = vp[unsafe_offset=c + r].fma(
+                            -b[unsafe_offset=r], acc
                         )
-                        r += _W
-                    var acc = yp[unsafe_offset=s0 + j] - accv.reduce_add()
-                    while r < deg:
-                        acc -= vp[unsafe_offset=c + r] * bp[unsafe_offset=r]
-                        r += 1
                     var i = j + 1
                     var tv = V(0)
                     while i + _W <= nc:
@@ -537,11 +628,30 @@ struct _Supernodal(Movable):
                         i += _W
                     acc -= tv.reduce_add()
                     while i < nc:
-                        acc -= (
-                            vp[unsafe_offset=col + i] * yp[unsafe_offset=s0 + i]
+                        acc = vp[unsafe_offset=col + i].fma(
+                            -yp[unsafe_offset=s0 + i], acc
                         )
                         i += 1
                     yp[unsafe_offset=s0 + j] = acc
+        _ = buf^
+        _ = wbuf^
+
+    def _gather(
+        self,
+        Y0: _FloatPtr,
+        n: Int,
+        bp: Pointer[mut=True, Float64, ...],
+        rp: Int,
+        deg: Int,
+        mb: Int,
+    ):
+        """`bp[c * deg + r] = Y0[c * n + rows[rp + r]]`: the rows below a
+        supernode's triangle, by columns."""
+        for cy in range(mb):
+            var yp = Y0.unsafe_offset(cy * n)
+            var b = bp.unsafe_offset(cy * deg)
+            for r in range(deg):
+                b[unsafe_offset=r] = yp[unsafe_offset=self.rows[rp + r]]
 
     def num_supernodes(self) -> Int:
         """The number of supernodes."""

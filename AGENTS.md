@@ -357,7 +357,16 @@ plan). Key design points that span several files:
   applied to every column in turn; `_solve_factored` is its one-column
   case), scatters, and per refinement step the residuals (the loop of
   `CSRMatrix.matvec_into`, same sums), the solve, and `x += dx`; so
-  column c is the single solve bit for bit. Above `_PARALLEL_SOLVE_WORK`
+  column c is the single solve bit for bit. The supernodal
+  `solve_columns` gathers each supernode's rows below its triangle for
+  all the block's columns (`_gather`, deg x mb by columns) and multiplies
+  as matrices: `_sub_product` (the factor's kernel, `W` = the
+  supernode's solved rows, row-major) going down, `_sub_dots` (2 x 2
+  tiles of `L` columns by `Y` columns, `_W` lanes then `reduce_add`,
+  odd ones by `_dot_lanes`) going up; the triangles stay column by
+  column. Every entry's chain is fixed whatever `mb` or tile, so keep
+  explicit `fma`s there (contraction differs between tile and tail
+  code). Above `_PARALLEL_SOLVE_WORK`
   ((stored + steps (stored + nnz A)) x m = 4e6) the blocks go to the
   physical cores in one `parallel_ranges` call. 30^3, m = 64, no
   refinement: 344 ms as single solves, 156 ms one thread, 41 ms on 8. The typed wrappers overload `solve` on a `List` of

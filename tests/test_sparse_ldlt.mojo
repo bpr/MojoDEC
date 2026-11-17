@@ -548,7 +548,7 @@ def test_multiple_right_hand_sides() raises:
     for t in range(len(mats)):
         ref A = mats[t]
         var n = A.nrows
-        for m in [1, 3, 9]:
+        for m in [1, 2, 3, 5, 9]:
             var B = real_array(n, m)
             for c in range(m):
                 var b = probe_vector(n, UInt64(c + 1))

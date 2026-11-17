@@ -310,7 +310,11 @@ columns one by one streams the whole factor through memory $m$ times:
 122 MB per solve for the 30³ grid, more than the cache holds. The block
 solve applies each block of $L$ (or each column, if simplicial) to every
 right-hand side while it is in cache, and splits the columns into blocks
-for the physical cores. Each column gets exactly the operations of a
+for the physical cores. In a supernodal factor, the rows below each
+supernode's triangle are gathered for all the right-hand sides at once,
+and the products with them are small matrix products, tiled in registers
+like the factorization's, so each value of $L$ loaded serves several
+right-hand sides. Each column gets exactly the operations of a
 single-vector solve, refinement included, so column $c$ of the result is
 `F.solve(B[:, c])` bit for bit, and the thread count does not change it.
 
