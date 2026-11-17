@@ -132,7 +132,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/routines/combinatorial.mojo` | `math/combinatorial.py`, `math/parity.py` |
 | `mojodec/routines/innerproduct.mojo` | `fem/innerproduct.py` |
 | `mojodec/routines/mesh_generation.mojo` | `mesh/generation.py`, `mesh/subdivision.py` |
-| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range`; `routines/sparse_ldlt.mojo`, `routines/ordering.mojo` — `SparseLDLT`, `SparseCholesky`, `amd_ordering`; `routines/lanczos.mojo` — `eigsh`; `routines/amg.mojo` — `SmoothedAggregation`; `routines/gmg.mojo` — `GeometricMultigrid`, `refinement_hierarchy` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
+| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range`; `routines/sparse_ldlt.mojo`, `routines/supernodal.mojo`, `routines/ordering.mojo` — `SparseLDLT`, `SparseCholesky`, `FactorLayout`, `amd_ordering`; `routines/lanczos.mojo` — `eigsh`; `routines/amg.mojo` — `SmoothedAggregation`; `routines/gmg.mojo` — `GeometricMultigrid`, `refinement_hierarchy` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
 | `mojodec/routines/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh`, `EighResult.residuals` | `numpy.linalg` (called by PyDEC) |
 | `mojodec/routines/io/` — `read_array`, `write_array`, `read_mesh`, `write_mesh`, `loadtxt` | `io/arrayio.py`, `io/meshio.py` |
 | `mojodec/routines/io/vtk.mojo` — `write_vtu`, `write_vtu_cubes`, `VTKField` | (new) |
@@ -491,8 +491,11 @@ the published mathematics:
   ordering, ported from faer (MIT, its AMD from SuiteSparse's, BSD-3).
   Rows with a zero diagonal are ordered last, so mixed formulations'
   saddle points factor without pivoting; optional sign-aware dynamic
-  regularization with iterative refinement; inertia. 128 ms to factor the
-  2D Laplacian with 90,601 unknowns, where Jacobi-CG takes 924 iterations.
+  regularization with iterative refinement; inertia. Simplicial or
+  supernodal (dense blocks of columns, register-tiled kernels), chosen
+  from the symbolic flop count: 37 ms to factor the 2D Laplacian with
+  90,601 unknowns, where Jacobi-CG takes 924 iterations, and 322 ms for
+  a 30³ grid (simplicial: 2.15 s).
 - **Algebraic multigrid** (`SmoothedAggregation(A)`): a V-cycle
   preconditioner for SPD matrices, built from the matrix alone, with
   amgcl's aggregation and smoothed prolongation (MIT; equal to amgcl's

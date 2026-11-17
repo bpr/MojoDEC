@@ -356,9 +356,10 @@ def test_typed_implicit_schemes() raises:
         _ = TypedImplicitMidpoint(W1, other.star[2, PRIMAL](), K, 0.1)
 
 
-def test_auto_factors_in_2d_and_iterates_in_3d() raises:
-    # AUTO factors when nnz(L) <= 8 nnz(S): the 2D heat equation's L is
-    # ~3x S, the 3D one's ~9x from 16^3 cells. The choice is reported
+def test_auto_factors_small_fill_and_iterates_on_large() raises:
+    # AUTO factors when nnz(L) <= 24 nnz(S): the 2D heat equation's L is
+    # ~3x S, the 3D one's ~10x at 16^3 cells and ~30x at 32^3. The choice
+    # is reported
     var sc2 = SimplicialComplex(kuhn_grid([24, 24]))
     var M = whitney_innerproduct(sc2, 0)
     var K = sc2[0].d.transpose() @ whitney_innerproduct(sc2, 1) @ sc2[0].d
@@ -376,13 +377,15 @@ def test_auto_factors_in_2d_and_iterates_in_3d() raises:
     it.step(v, steps=3)
     for i in range(u.size):
         assert_almost_equal(u.unsafe_get(i), v.unsafe_get(i), atol=1e-9, rtol=0)
-    # 3D: the fill is counted, and too large to factor
-    var sc3 = SimplicialComplex(kuhn_grid([16, 16, 16]))
-    var K3 = sc3[0].d.transpose() @ sc3[0].d + CSRMatrix.identity(
-        sc3[0].num_simplices
-    )
-    var three = CrankNicolson(CSRMatrix.identity(K3.nrows), K3, 0.01)
-    assert_true(three.solver == StepSolver.CG, String(three.solver))
+    # 3D: the fill is counted; factored at 16^3, too large at 32^3
+    for cells in [16, 32]:
+        var sc3 = SimplicialComplex(kuhn_grid([cells, cells, cells]))
+        var K3 = sc3[0].d.transpose() @ sc3[0].d + CSRMatrix.identity(
+            sc3[0].num_simplices
+        )
+        var three = CrankNicolson(CSRMatrix.identity(K3.nrows), K3, 0.01)
+        var want = StepSolver.CHOLESKY if cells == 16 else StepSolver.CG
+        assert_true(three.solver == want, String(cells, ": ", three.solver))
 
 
 def test_invalid_implicit_schemes() raises:

@@ -43,8 +43,8 @@ how to use it, and what can go wrong.
 - **[Sparse direct solvers](sparse-direct.md)**: `SparseCholesky` and
   `SparseLDLT` (`P A P^T = L D L^T`), the AMD ordering and why it puts
   zero diagonals last (saddle points factor without pivoting), the
-  elimination tree, regularization with refinement, inertia, and when a
-  direct solve beats CG.
+  elimination tree, supernodes, regularization with refinement, inertia,
+  and when a direct solve beats CG.
 - **[Algebraic multigrid](multigrid.md)**: `SmoothedAggregation`, a
   V-cycle preconditioner built from the matrix alone (amgcl's aggregation
   and smoothed prolongation, Chebyshev or Gauss–Seidel smoothing), with

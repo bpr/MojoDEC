@@ -82,10 +82,13 @@ from mojodec.routines.mesh_generation import kuhn_grid
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.routines.lanczos import eigsh
 from mojodec.routines.ordering import amd_ordering
+from mojodec.routines.supernodal import etree_postorder
 from mojodec.routines.sparse_ldlt import (
+    FactorLayout,
     FillOrdering,
     SparseCholesky,
     SparseLDLT,
+    cholesky_nonzeros,
 )
 from mojodec.core.diagonal import DiagonalOperator
 
@@ -833,21 +836,32 @@ def test_implicit_steppers_match_dense_steps() raises:
 
 
 def test_sparse_cholesky_matches_dense_solves() raises:
-    """For SPD A (n <= 12), SparseCholesky with AMD and with the natural
-    order solves A x = b as the dense solver does; all pivots positive."""
+    """For SPD A (n <= 40), SparseCholesky with AMD and with the natural
+    order, simplicial and supernodal, solves A x = b as the dense solver
+    does; all pivots positive, the same fill in both layouts."""
 
     def prop(ints: List[Int], n: Int) raises:
         var D = _graph(n, ints, True)
         var A = _csr(D)
         var b = _vector(n, ints, 1)
         var exact = dense.solve(D, b)
-        for which in range(2):
+        for which in range(4):
             var F = SparseCholesky(
-                A, FillOrdering.AMD if which == 0 else FillOrdering.NATURAL
+                A,
+                FillOrdering.AMD if which % 2 == 0 else FillOrdering.NATURAL,
+                layout=(
+                    FactorLayout.SIMPLICIAL if which
+                    < 2 else FactorLayout.SUPERNODAL
+                ),
             )
             _close(F.solve(b), exact, 1e-10, "cholesky")
             if F.factor.inertia().positive != n:
                 fail("a pivot is not positive")
+            var nnz = cholesky_nonzeros(A, F.factor.perm)
+            if F.factor.factor_nonzeros() != nnz:
+                fail(
+                    String("nnz(L) ", F.factor.factor_nonzeros(), " not ", nnz)
+                )
         var p = amd_ordering(A)
         var seen = List[Bool](length=n, fill=False)
         for k in range(n):
@@ -856,8 +870,55 @@ def test_sparse_cholesky_matches_dense_solves() raises:
             seen[p[k]] = True
 
     given(
-        lists(integers(-5, 5), min_size=1, max_size=40),
-        integers(1, 12),
+        lists(integers(-5, 5), min_size=1, max_size=120),
+        integers(1, 40),
+        prop,
+        quick(),
+    )
+
+
+def test_etree_postorder_is_a_postorder() raises:
+    """For a random forest (each node's parent drawn from all labels, cycles
+    broken), `etree_postorder` lists every node once, each after all its
+    descendants, and each subtree as one contiguous run."""
+
+    def prop(ints: List[Int], n: Int) raises:
+        var parent = List[Int](length=n, fill=-1)
+        for j in range(n):
+            var p = abs(ints[j % len(ints)]) % (n + 1) - 1  # -1: a root
+            # accept p unless it would close a cycle
+            var q = p
+            while q != -1 and q != j:
+                q = parent[q]
+            if q == -1:
+                parent[j] = p
+        var post = etree_postorder(parent)
+        if len(post) != n:
+            fail(String(len(post), " nodes for ", n))
+        var at = List[Int](length=n, fill=-1)
+        for k in range(n):
+            if at[post[k]] != -1:
+                fail("a node twice")
+            at[post[k]] = k
+        # subtree sizes; subtree of j is post[at[j] - size + 1 .. at[j]]
+        var size = List[Int](length=n, fill=1)
+        for k in range(n):
+            var j = post[k]
+            if parent[j] != -1:
+                if at[j] > at[parent[j]]:
+                    fail("a node after its parent")
+                size[parent[j]] += size[j]
+        for j in range(n):
+            for k in range(at[j] - size[j] + 1, at[j] + 1):
+                var q = post[k]
+                while q != -1 and q != j:
+                    q = parent[q]
+                if q != j:
+                    fail("a subtree is not contiguous")
+
+    given(
+        lists(integers(-50, 50), min_size=1, max_size=60),
+        integers(0, 40),
         prop,
         quick(),
     )
@@ -865,7 +926,8 @@ def test_sparse_cholesky_matches_dense_solves() raises:
 
 def test_sparse_ldlt_solves_saddle_points() raises:
     """For [[-M, B^T], [B, 0]] with M SPD (m <= 10) and B (c x m, c <= m) of
-    full rank, in either block order, SparseLDLT with AMD needs no
+    full rank, in either block order, SparseLDLT with AMD (simplicial or
+    supernodal, by the parity of the first integer) needs no
     regularization, puts the constraints last, solves as the dense solver
     does, and finds m negative and c positive pivots."""
 
@@ -891,7 +953,13 @@ def test_sparse_ldlt_solves_saddle_points() raises:
                 fset(Ad, om + j, oc + i, x)
         var A = _csr(Ad)
         var b = _vector(N, ints, 2)
-        var F = SparseLDLT(A)
+        var F = SparseLDLT(
+            A,
+            layout=(
+                FactorLayout.SUPERNODAL if ints[0] % 2
+                == 0 else FactorLayout.SIMPLICIAL
+            ),
+        )
         if F.num_regularized != 0:
             fail("regularized")
         _close(F.solve(b), dense.solve(Ad, b), 1e-9, "saddle point")

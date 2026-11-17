@@ -12,6 +12,7 @@ from mojodec import (
     BlockOp,
     BlockSparseLDLT,
     CochainPair,
+    FactorLayout,
     FillOrdering,
     TypedComplex,
     TypedSparseCholesky,
@@ -28,6 +29,7 @@ from mojodec import (
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.utils import RealArray, norm2, probe_vector, real_vector
 from mojodec.routines.linalg import eigh_generalized, spsolve
+from mojodec.routines.supernodal import etree_postorder
 
 
 def _laplacian(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:
@@ -301,6 +303,110 @@ def test_symbolic_count_and_given_permutation() raises:
         _ = cholesky_nonzeros(I3, _ints([0, 1, 1]))
     with assert_raises(contains="perm is not a permutation (entry 0)"):
         _ = SparseLDLT(I3, perm=_ints([3, 1, 0]))
+
+
+def test_supernodal_agrees_with_simplicial() raises:
+    # the same L D L^T in dense blocks: every degree in 2D and 3D, the
+    # Darcy saddle point in both block orders, and an indefinite shifted
+    # Laplacian; same fill, same inertia, the same solution
+    var mats = List[CSRMatrix]()
+    var grids = List[List[Int]]()
+    grids.append([9, 8])
+    grids.append([4, 4, 3])
+    for ref dims in grids:
+        var sc = SimplicialComplex(kuhn_grid(dims))
+        for k in range(sc.complex_dimension() + 1):
+            mats.append(_laplacian(sc, k))
+    var sc = SimplicialComplex(kuhn_grid([7, 6]))
+    var M1 = whitney_innerproduct(sc, 1)
+    mats.append(_saddle(M1, sc[1].d, False))
+    mats.append(_saddle(M1, sc[1].d, True))
+    var K = sc[0].d.transpose() @ M1 @ sc[0].d
+    mats.append(K - whitney_innerproduct(sc, 0) * 20.0)
+    for ref A in mats:
+        var b = probe_vector(A.nrows, 4)
+        var S = SparseLDLT(A, layout=FactorLayout.SIMPLICIAL)
+        var N = SparseLDLT(A, layout=FactorLayout.SUPERNODAL)
+        assert_true(S.layout == FactorLayout.SIMPLICIAL)
+        assert_true(N.layout == FactorLayout.SUPERNODAL)
+        assert_equal(S.num_supernodes(), 0)
+        # (a diagonal matrix, the top-degree mass, has one per column)
+        assert_true(0 < N.num_supernodes() and N.num_supernodes() <= A.nrows)
+        assert_equal(N.factor_nonzeros(), S.factor_nonzeros())
+        assert_true(N.stored_entries() >= N.factor_nonzeros())
+        assert_equal(N.inertia().negative, S.inertia().negative)
+        assert_equal(N.num_regularized, 0)
+        var x = N.solve(b)
+        assert_true(_residual(A, x, b) < 1e-13)
+        assert_true(_max_diff(x, S.solve(b)) < 1e-11 * (1 + norm2(x)))
+        # the postordered permutation is still a permutation
+        var seen = List[Bool](length=A.nrows, fill=False)
+        for k in range(A.nrows):
+            assert_true(not seen[N.perm[k]])
+            seen[N.perm[k]] = True
+    # an exact preconditioner, as the simplicial one
+    var A = _laplacian(SimplicialComplex(kuhn_grid([5, 5, 5])), 1)
+    var C = SparseCholesky(A, layout=FactorLayout.SUPERNODAL)
+    var b = probe_vector(A.nrows, 2)
+    var res = cg(A, b, M=C, rtol=1e-12)
+    assert_true(res.converged() and res.iterations <= 2)
+    # AUTO: simplicial for a 2D grid's few flops per entry, supernodal
+    # for a 3D grid's many
+    assert_true(
+        SparseLDLT(_laplacian(SimplicialComplex(kuhn_grid([8, 8])), 0)).layout
+        == FactorLayout.SIMPLICIAL
+    )
+    assert_true(SparseLDLT(A).layout == FactorLayout.SUPERNODAL)
+
+
+def test_supernodal_regularization_and_errors() raises:
+    # the constraints-first saddle point in the natural order (postordered,
+    # which keeps the constraints' zero pivots early): refused, or
+    # regularized as by the simplicial factor
+    var sc = SimplicialComplex(kuhn_grid([6, 6]))
+    var M = whitney_innerproduct(sc, 1)
+    var m = M.nrows
+    var c = sc[2].num_simplices
+    var Z = _saddle(M, sc[1].d, True)
+    with assert_raises(contains="is 0.0; the matrix is singular"):
+        _ = SparseLDLT(
+            Z, ordering=FillOrdering.NATURAL, layout=FactorLayout.SUPERNODAL
+        )
+    var signs = List[Int]()
+    for _ in range(c):
+        signs.append(1)
+    for _ in range(m):
+        signs.append(-1)
+    var b = probe_vector(m + c, 5)
+    var F = SparseLDLT(
+        Z,
+        ordering=FillOrdering.NATURAL,
+        signs=signs^,
+        regularization=1e-10,
+        refinement_steps=3,
+        layout=FactorLayout.SUPERNODAL,
+    )
+    assert_true(F.num_regularized > 0)
+    assert_true(_residual(Z, F.solve(b), b) < 1e-10)
+    # not positive definite
+    with assert_raises(contains="not positive definite"):
+        _ = SparseCholesky(Z, layout=FactorLayout.SUPERNODAL)
+    # the empty matrix
+    var E = SparseLDLT(CSRMatrix(0, 0), layout=FactorLayout.SUPERNODAL)
+    assert_equal(E.solve(real_vector(0)).size, 0)
+
+
+def test_etree_postorder() raises:
+    # a forest: 5 has children 3 and 4, 4 has 0 and 2, 2 has 1; 6 has 7
+    # (a parent need not have a larger label). Children in increasing
+    # order, each node after its subtree
+    var etree: List[Int] = [4, 2, 4, 5, 5, -1, -1, 6]
+    var post = etree_postorder(etree)
+    var want: List[Int] = [3, 0, 1, 2, 4, 5, 7, 6]
+    assert_equal(len(post), len(want))
+    for k in range(len(want)):
+        assert_equal(post[k], want[k])
+    assert_equal(len(etree_postorder(List[Int]())), 0)
 
 
 def test_typed_factorizations() raises:

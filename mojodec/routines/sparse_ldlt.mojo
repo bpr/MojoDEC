@@ -23,11 +23,14 @@ AMD does. `SparseCholesky(A)` is the same factorization for symmetric
 positive definite `A`, refusing any other; it is a `Preconditioner`, an
 exact inverse.
 
-The factorization is simplicial: one column of `L` at a time, which suits
-2D meshes and moderate 3D ones. Each row `k` of `L` is the solution of a
-sparse triangular system whose pattern, the "reach" of row `k` of `A` in
-the elimination tree, is found first, so the work is proportional to the
-flops, not to `n^2`.
+Two layouts of `L` (`FactorLayout`). Simplicial: one column at a time,
+each row `k` of `L` the solution of a sparse triangular system whose
+pattern, the "reach" of row `k` of `A` in the elimination tree, is found
+first, so the work is proportional to the flops; it suits 2D meshes.
+Supernodal: columns with the same pattern below a dense triangle stored
+as one dense block and factored by dense kernels; it suits 3D meshes,
+where the factor fills in. `FactorLayout.AUTO` picks by the flops per
+entry of `L`, from the symbolic analysis.
 """
 
 from std.math import isfinite, sqrt
@@ -39,9 +42,62 @@ from mojodec.core.typed import MatrixOp, TypedCochain
 from mojodec.core.typed_block import BlockOp, CochainPair
 from mojodec.core.utils import RealArray, real_vector
 from mojodec.routines.ordering import amd_ordering
+from mojodec.routines.supernodal import _Supernodal, etree_postorder
 
 
 comptime _NONE = -1
+comptime _SUPERNODAL_RATIO = 20.0
+"""`FactorLayout.AUTO` goes supernodal above this many flops per entry of
+`L` (faer's rule, with faer's 40 lowered to where MojoDEC's kernels
+measured even: simplicial was 1.3x faster at 10, the two tied at 12-16,
+supernodal was 1.5x faster at 21 and 2x at 35)."""
+
+
+struct FactorLayout(Equatable, ImplicitlyCopyable, Writable):
+    """How `SparseLDLT` stores and computes `L`."""
+
+    var _code: UInt8
+
+    comptime AUTO = FactorLayout(0)
+    """Supernodal when the symbolic analysis counts more than 20 flops
+    per entry of `L` (3D meshes, 2D ones past a few thousand vertices),
+    simplicial otherwise."""
+    comptime SIMPLICIAL = FactorLayout(1)
+    """One sparse column at a time (up-looking)."""
+    comptime SUPERNODAL = FactorLayout(2)
+    """Dense blocks of columns sharing a pattern (left-looking)."""
+
+    def __init__(out self, code: UInt8):
+        """A layout from its code; use the named members instead.
+
+        Args:
+            code: 0, 1, or 2.
+        """
+        self._code = code
+
+    def __eq__(self, other: Self) -> Bool:
+        """Whether two layouts are the same.
+
+        Args:
+            other: The other layout.
+
+        Returns:
+            True if they are equal.
+        """
+        return self._code == other._code
+
+    def write_to(self, mut writer: Some[Writer]):
+        """Write the layout's name.
+
+        Args:
+            writer: The destination.
+        """
+        if self._code == 0:
+            writer.write("auto")
+        elif self._code == 1:
+            writer.write("simplicial")
+        else:
+            writer.write("supernodal")
 
 
 struct FillOrdering(Equatable, ImplicitlyCopyable, Writable):
@@ -153,6 +209,10 @@ struct SparseLDLT(LinearOperator, Movable):
     """Pivots replaced by the regularization (0 without one)."""
     var refinement_steps: Int
     """Steps of iterative refinement each solve takes."""
+    var layout: FactorLayout
+    """The layout used: `SIMPLICIAL` or `SUPERNODAL`, never `AUTO`."""
+    var _nnz: Int
+    var _super: Optional[_Supernodal]
     var _perm_inv: List[Int]
     var _Lp: List[Int]
     var _Li: List[Int]
@@ -170,6 +230,7 @@ struct SparseLDLT(LinearOperator, Movable):
         signs: Optional[List[Int]] = None,
         regularization: Float64 = 0,
         refinement_steps: Int = 1,
+        layout: FactorLayout = FactorLayout.AUTO,
     ) raises:
         """Factor `A`.
 
@@ -178,7 +239,9 @@ struct SparseLDLT(LinearOperator, Movable):
             ordering: The fill-reducing permutation.
             perm: A permutation to use instead of `ordering` (row
                 `perm[k]` of `A` becomes row `k`), such as one
-                `amd_ordering(A)` already computed.
+                `amd_ordering(A)` already computed. The supernodal layout
+                relabels it by a postorder of the elimination tree, which
+                keeps the fill; `self.perm` is the ordering used.
             signs: The expected sign (`+1` or `-1`) of each pivot, by row
                 of `A`, for the regularization; e.g. `-1` on a mass block
                 and `+1` on a constraint block, or the reverse. Without it
@@ -190,6 +253,7 @@ struct SparseLDLT(LinearOperator, Movable):
             refinement_steps: Iterative refinement steps per solve; 0
                 for the bare triangular solves. With a regularization,
                 2 or 3.
+            layout: Simplicial or supernodal `L`, or `AUTO` to choose.
 
         Raises:
             If `A` is not square or not symmetric (an entry differs from
@@ -234,13 +298,63 @@ struct SparseLDLT(LinearOperator, Movable):
         self._perm_inv = _inverse_permutation(self.perm, n, "SparseLDLT")
         self._A = A.copy()
         var C = _PermutedLower(A, self._perm_inv)
-        ref Cp = C.Cp
-        ref Ci = C.Ci
-        ref Cx = C.Cx
         var etree = List[Int](length=n, fill=_NONE)
         var counts = List[Int](length=n, fill=1)
         var visited = List[Int](length=n, fill=_NONE)
-        _etree_and_counts(Cp, Ci, etree, counts, visited)
+        _etree_and_counts(C.Cp, C.Ci, etree, counts, visited)
+        self._nnz = 0
+        var flops: Float64 = 0
+        for j in range(n):
+            self._nnz += counts[j]
+            var c = Float64(counts[j])
+            flops += c + c * (c + 1) / 2
+        self.layout = layout
+        if layout == FactorLayout.AUTO:
+            if flops > _SUPERNODAL_RATIO * Float64(max(self._nnz, 1)):
+                self.layout = FactorLayout.SUPERNODAL
+            else:
+                self.layout = FactorLayout.SIMPLICIAL
+        self._super = None
+        if self.layout == FactorLayout.SUPERNODAL:
+            self._Lp = List[Int]()
+            self._Li = List[Int]()
+            self._Lx = List[Float64]()
+            var post = etree_postorder(etree)
+            var identity = True
+            for k in range(n):
+                if post[k] != k:
+                    identity = False
+                    break
+            if not identity:
+                var p2 = List[Int](capacity=n)
+                for k in range(n):
+                    p2.append(self.perm[post[k]])
+                self.perm = p2^
+                self._perm_inv = _inverse_permutation(
+                    self.perm, n, "SparseLDLT"
+                )
+                var C2 = _PermutedLower(A, self._perm_inv)
+                for j in range(n):
+                    etree[j] = _NONE
+                    counts[j] = 1
+                _etree_and_counts(C2.Cp, C2.Ci, etree, counts, visited)
+                C = C2^
+            var S = _Supernodal(
+                C.Cp,
+                C.Ci,
+                C.Cx,
+                etree,
+                counts,
+                self.perm,
+                signs,
+                regularization,
+            )
+            self.num_regularized = S.num_regularized
+            self._super = S^
+            return
+        ref Cp = C.Cp
+        ref Ci = C.Ci
+        ref Cx = C.Cx
         self._Lp = List[Int](length=n + 1, fill=0)
         for j in range(n):
             self._Lp[j + 1] = self._Lp[j] + counts[j]
@@ -328,7 +442,37 @@ struct SparseLDLT(LinearOperator, Movable):
         Returns:
             `nnz(L)`.
         """
-        return self._Lp[self.n]
+        return self._nnz
+
+    def num_supernodes(self) -> Int:
+        """The supernodes of a supernodal factor: blocks of columns of `L`
+        stored dense; 0 for a simplicial one.
+
+        Returns:
+            The number of blocks.
+        """
+        if self._super:
+            return self._super.value().num_supernodes()
+        return 0
+
+    def stored_entries(self) -> Int:
+        """The values the factor stores: `factor_nonzeros()` for a
+        simplicial one; for a supernodal one, its dense blocks, the zeros
+        above each block's diagonal and those that relaxed merging adds
+        included.
+
+        Returns:
+            The number of stored values.
+        """
+        if self._super:
+            return self._super.value().stored_entries()
+        return len(self._Lx)
+
+    def _pivot(self, k: Int) -> Float64:
+        """`D[k]`."""
+        if self._super:
+            return self._super.value().pivot(k)
+        return self._Lx[self._Lp[k]]
 
     def inertia(self) -> Inertia:
         """The numbers of positive and negative eigenvalues of `A`, or of the
@@ -339,7 +483,7 @@ struct SparseLDLT(LinearOperator, Movable):
         """
         var pos = 0
         for j in range(self.n):
-            if self._Lx[self._Lp[j]] > 0:
+            if self._pivot(j) > 0:
                 pos += 1
         return Inertia(pos, self.n - pos)
 
@@ -348,6 +492,11 @@ struct SparseLDLT(LinearOperator, Movable):
         var y = List[Float64](length=n, fill=0)
         for k in range(n):
             y[k] = b.unsafe_get(self.perm[k])
+        if self._super:
+            self._super.value().solve_in_place(y)
+            for k in range(n):
+                out.unsafe_set(self.perm[k], y[k])
+            return
         for j in range(n):  # L y = P b
             var yj = y[j]
             if yj != 0:
@@ -443,6 +592,7 @@ struct SparseCholesky(Movable, Preconditioner):
         ordering: FillOrdering = FillOrdering.AMD,
         *,
         perm: Optional[List[Int]] = None,
+        layout: FactorLayout = FactorLayout.AUTO,
     ) raises:
         """Factor `A`.
 
@@ -451,6 +601,7 @@ struct SparseCholesky(Movable, Preconditioner):
             ordering: The fill-reducing permutation.
             perm: A permutation to use instead of `ordering`, as
                 `SparseLDLT` takes it.
+            layout: Simplicial or supernodal `L`, or `AUTO` to choose.
 
         Raises:
             If `A` is not square or not symmetric, or a pivot is not
@@ -459,11 +610,11 @@ struct SparseCholesky(Movable, Preconditioner):
         # positive definite: no growth, so the bare solves are backward
         # stable, and the preconditioner stays one linear map
         self.factor = SparseLDLT(
-            A, ordering=ordering, perm=perm, refinement_steps=0
+            A, ordering=ordering, perm=perm, refinement_steps=0, layout=layout
         )
         ref F = self.factor
         for k in range(F.n):
-            var d = F._Lx[F._Lp[k]]
+            var d = F._pivot(k)
             if not d > 0:
                 raise Error(
                     String(
@@ -745,6 +896,7 @@ struct TypedSparseLDLT[
         signs: Optional[List[Int]] = None,
         regularization: Float64 = 0,
         refinement_steps: Int = 1,
+        layout: FactorLayout = FactorLayout.AUTO,
     ) raises:
         """Factor `A`; the options are `SparseLDLT`'s.
 
@@ -755,6 +907,7 @@ struct TypedSparseLDLT[
             signs: The expected sign of each pivot, by cell.
             regularization: The `delta` of dynamic regularization.
             refinement_steps: Iterative refinement steps per solve.
+            layout: Simplicial or supernodal `L`, or `AUTO` to choose.
 
         Raises:
             As `SparseLDLT`.
@@ -770,6 +923,7 @@ struct TypedSparseLDLT[
             signs=signs,
             regularization=regularization,
             refinement_steps=refinement_steps,
+            layout=layout,
         )
         self.complex = A.complex
 
@@ -843,6 +997,7 @@ struct TypedSparseCholesky[
         ordering: FillOrdering = FillOrdering.AMD,
         *,
         perm: Optional[List[Int]] = None,
+        layout: FactorLayout = FactorLayout.AUTO,
     ) raises:
         """Factor `A`.
 
@@ -851,6 +1006,7 @@ struct TypedSparseCholesky[
                 dual kind.
             ordering: The fill-reducing permutation.
             perm: A permutation to use instead of `ordering`.
+            layout: Simplicial or supernodal `L`, or `AUTO` to choose.
 
         Raises:
             As `SparseCholesky`.
@@ -859,7 +1015,7 @@ struct TypedSparseCholesky[
             Self.out_k == Self.n - Self.in_k
             and Self.out_primal == (not Self.in_primal)
         ), "TypedSparseCholesky: A must map a kind to its dual kind"
-        self.factor = SparseCholesky(A.mat, ordering, perm=perm)
+        self.factor = SparseCholesky(A.mat, ordering, perm=perm, layout=layout)
         self.complex = A.complex
 
     def solve(
@@ -943,6 +1099,7 @@ struct BlockSparseLDLT[
         signs: Optional[List[Int]] = None,
         regularization: Float64 = 0,
         refinement_steps: Int = 1,
+        layout: FactorLayout = FactorLayout.AUTO,
     ) raises:
         """Assemble and factor `A`; the options are `SparseLDLT`'s.
 
@@ -952,6 +1109,7 @@ struct BlockSparseLDLT[
             signs: The expected sign of each pivot, by stacked unknown.
             regularization: The `delta` of dynamic regularization.
             refinement_steps: Iterative refinement steps per solve.
+            layout: Simplicial or supernodal `L`, or `AUTO` to choose.
 
         Raises:
             As `SparseLDLT`.
@@ -971,6 +1129,7 @@ struct BlockSparseLDLT[
             signs=signs,
             regularization=regularization,
             refinement_steps=refinement_steps,
+            layout=layout,
         )
         self.complex = A.complex
         self._n1 = A.a11.mat.ncols

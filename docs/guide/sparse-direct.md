@@ -16,8 +16,9 @@ print(F.inertia())               # (positive, negative) eigenvalue counts
 ```
 
 The code is a port of [faer](https://codeberg.org/sarah-quinones/faer)'s
-AMD ordering and simplicial Cholesky (MIT; faer's AMD translates
-SuiteSparse's, BSD-3; both notices are in `NOTICE`).
+AMD ordering and its simplicial and supernodal Cholesky (MIT; faer's AMD
+translates SuiteSparse's, BSD-3; both notices are in `NOTICE`); the dense
+kernels of the supernodal factorization are MojoDEC's own.
 
 ## When to use it
 
@@ -32,18 +33,20 @@ SuiteSparse's, BSD-3; both notices are in `NOTICE`).
 The factorization pays off when the conditioning is bad, when one matrix
 is solved many times (time stepping, inverse iteration), and for
 saddle points. Measured on Kuhn grids, one thread, release build, for the
-0-form stiffness plus $10^{-3}$ times the identity, to $10^{-10}$:
+0-form stiffness plus $10^{-3}$ times the identity, to $10^{-10}$
+(factor times without AMD; [Supernodes](#supernodes) below):
 
-| mesh | unknowns | nnz(L) | AMD | AMD + factor | solve | Jacobi-CG |
-|---|---|---|---|---|---|---|
-| 300 × 300 | 90,601 | 3.6 M | 18 ms | 128 ms | 4 ms | 249 ms, 924 iterations |
-| 30 × 30 × 30 | 29,791 | 11.9 M | 12 ms | 2.3 s | 15 ms | 40 ms, 230 iterations |
+| mesh | unknowns | nnz(L) | AMD | factor: simplicial | supernodal | solve | Jacobi-CG |
+|---|---|---|---|---|---|---|---|
+| 300 × 300 | 90,601 | 3.6 M | 18 ms | 112 ms | 37 ms | 1.8 ms | 249 ms, 924 iterations |
+| 30 × 30 × 30 | 29,791 | 11.9 M | 12 ms | 2.15 s | 322 ms | 6.3 ms | 40 ms, 230 iterations |
 
 In 2D the factorization wins even for one solve. In 3D the factor fills
 in: $O(n^{4/3})$ entries and $O(n^2)$ work for nested-dissection-like
-orderings, against $O(n \log n)$ and $O(n^{3/2})$ in 2D. That is where a
-supernodal factorization (dense kernels on blocks of columns) or
-multigrid comes in; neither is in MojoDEC yet.
+orderings, against $O(n \log n)$ and $O(n^{3/2})$ in 2D. There it pays
+when one matrix is solved many times (a 30³ factor is repaid after about
+eight CG solves), and multigrid (`SmoothedAggregation`,
+`GeometricMultigrid`) is the alternative for one solve.
 
 ## The factorization
 
@@ -82,6 +85,65 @@ positive definite $A$ that cannot happen: every $d_k > 0$ (they are
 ratios of leading principal minors of $P A P^T$). For indefinite $A$ it
 depends on the order.
 
+## Supernodes
+
+In the column-by-column factorization each entry of $L$ costs an indexed
+load and store, so the arithmetic never reaches the processor's vector
+units. But columns of $L$ come in runs with the same pattern: when $j+1$
+is $j$'s only child in the elimination tree and column $j$'s pattern is
+column $j+1$'s plus $j+1$ itself, the two columns are one dense
+trapezoid. A maximal run is a (fundamental) **supernode** (Liu, Ng, and
+Peyton, 1993), and $L$ is stored as one dense column-major block per
+supernode: its triangle, with $D$ on the diagonal, then the rows of its
+shared pattern.
+
+**Relaxed supernodes.** A 3D Kuhn grid's fundamental supernodes are
+mostly one or two columns wide. Merging a supernode with its parent in
+the tree stores some zeros explicitly but makes bigger blocks
+(Ashcraft and Grimes, 1989). In a postorder of the tree, a supernode's
+last child comes just before it; the child is merged in when the merged
+block's fraction of explicit zeros is at most 1.0 (up to 4 columns), 0.8
+(16), 0.1 (48), or 0.05 (any size), faer's defaults. The factor
+relabels the columns by that postorder first (`etree_postorder`), which
+leaves the fill unchanged; `F.perm` is the relabeled ordering.
+`stored_entries()` counts the blocks, zeros included: 15.2 M for the 30³
+grid's 11.9 M entries of $L$.
+
+**Left-looking factorization** (Ng and Peyton, 1993). For each
+supernode, in order: scatter its columns of $P A P^T$ into its block;
+subtract the update $L_b D_d L_m^T$ of each descendant $d$ whose pattern
+meets its columns ($L_m$ are $d$'s rows inside the supernode, $L_b$ its
+rows from there on), computed as a dense product and scattered by row;
+then factor the dense block in place, by panels of 32 columns, each first
+updated by all the columns before it in one product. The products run
+in register tiles of 8 rows by 4 columns: per step, one vector load and
+four fused multiply-adds. The solves gather each supernode's rows once,
+so their inner loops run down contiguous columns too.
+
+**Which to use.** `layout=FactorLayout.AUTO` (the default) counts the
+flops, $\sum_j (c_j + c_j(c_j+1)/2)$ over the column counts, and goes
+supernodal above 20 flops per entry of $L$ (faer's rule, with its 40
+lowered to where MojoDEC's kernels measured even). Measured, one thread
+(factor times without AMD, then solve):
+
+| matrix | unknowns | flops / nnz(L) | simplicial | supernodal |
+|---|---|---|---|---|
+| path (1D) | 100,000 | 2.5 | 3.2 ms, 0.67 ms | 5.6 ms, 1.3 ms |
+| 2D grid 20 × 20 | 441 | 10 | 0.07 ms | 0.10 ms |
+| 2D Whitney 1-forms, 40 × 40 | 4,880 | 15 | 0.82 ms | 0.81 ms |
+| 2D grid 60 × 60 | 3,721 | 21 | 1.37 ms | 0.89 ms |
+| 2D 1-form mass, 100 × 100 | 30,200 | 35 | 12.0 ms | 5.9 ms |
+| 2D grid 300 × 300 | 90,601 | 73 | 112 ms, 4.7 ms | 37 ms, 1.8 ms |
+| 3D grid 20³ | 9,261 | 227 | 150 ms, 2.3 ms | 28 ms, 0.49 ms |
+| 3D 1-forms 12³ | 13,428 | 306 | 304 ms, 3.7 ms | 55 ms, 0.77 ms |
+| 3D grid 30³ | 29,791 | 550 | 2.15 s, 16.6 ms | 322 ms, 6.3 ms |
+| Darcy saddle point, 20 × 20 | 2,040 | 258 | 45 ms | 6.6 ms |
+
+The supernodal factor is 3 to 7 times faster on 3D meshes and 2D ones
+past a few thousand vertices, and its solves 2 to 4 times. Both layouts
+compute the same factorization; they round differently, so solutions
+agree to rounding, not bit for bit.
+
 ## Orderings
 
 The fill of $L$ depends entirely on $P$. `FillOrdering.AMD` (the default)
@@ -108,8 +170,8 @@ permutation, such as one `amd_ordering` already computed.
 elimination tree, before any arithmetic: the factor's memory and, with
 it, whether factoring is worth it. The implicit time steppers' default
 (`StepSolver.AUTO`, see [Time stepping](time-stepping.md)) factors when
-it is at most 8 times $\operatorname{nnz}(A)$, which holds on 2D meshes
-and not on 3D ones.
+it is at most 24 times $\operatorname{nnz}(A)$, which holds on 2D meshes
+and on 3D ones up to about 30³ vertices.
 
 ### Saddle points: zero diagonals last
 
@@ -132,9 +194,14 @@ degree. Then `SparseLDLT(A)` factors a saddle point with no pivoting and
 no regularization, and its inertia is ($c$ positive, $m$ negative), with
 $c$ constraints and $m$ unknowns in the first block.
 
-The price is that the constraint block is not reordered for fill. Its
-rows are numbered as the input numbers them, which for cells of a mesh in
-Morton order (`reorder_vertices`) is spatially coherent.
+The price is that the constraint block is not reordered for fill: it
+is eliminated last, as a dense Schur complement of $c^2/2$ entries. That
+is fine for DarcyFlow (a few hundred triangles; 20 × 20 Kuhn cells,
+2,040 unknowns, give 400,000 entries of $L$ and factor in 7 ms), and
+hopeless past some ten thousand constraints (150 × 150 cells: $10^9$
+entries). Its rows are numbered as the input numbers them, which for
+cells of a mesh in Morton order (`reorder_vertices`) is spatially
+coherent.
 
 ## Regularization and refinement
 
@@ -197,12 +264,16 @@ var F = SparseLDLT(
     signs=None,                          # +-1 per row, for regularization
     regularization=0,                    # delta; 0 turns it off
     refinement_steps=1,                  # per solve; 0 for bare solves
+    layout=FactorLayout.AUTO,            # or .SIMPLICIAL, .SUPERNODAL
 )
 F.solve(b)                # A x = b
 F.apply_into(b, x)        # the same, as a LinearOperator
 F.inertia()               # Inertia(positive, negative)
 F.factor_nonzeros()       # nnz(L), its diagonal included
-F.perm                    # the ordering
+F.layout                  # the layout used: SIMPLICIAL or SUPERNODAL
+F.num_supernodes()        # dense blocks (0 if simplicial)
+F.stored_entries()        # values stored, explicit zeros included
+F.perm                    # the ordering (postordered if supernodal)
 F.num_regularized
 
 cholesky_nonzeros(A, amd_ordering(A))  # nnz(L) before factoring
@@ -256,8 +327,11 @@ instead of dense exact blocks.
 - **Explicit zeros.** A stored zero on the diagonal counts as a zero
   diagonal, and the row is ordered last.
 - **3D fill.** The factor of a 3D problem grows fast (11.9 M entries for
-  30³ vertices: 190 MB of values and indices). Watch `factor_nonzeros()`.
-- **Serial.** The factorization runs on one thread.
+  30³ vertices; the supernodal blocks store 15.2 M values, 122 MB, and
+  few indices). Watch `factor_nonzeros()` and `stored_entries()`.
+- **Serial.** Both factorizations run on one thread.
+- **Saddle points past ~10⁴ constraints.** The constraint block is
+  factored as a dense Schur complement (see above).
 
 ## Tests to read
 
@@ -276,14 +350,20 @@ instead of dense exact blocks.
     $K - s M$ count the eigenvalues below $s$;
   - `test_symbolic_count_and_given_permutation`: `cholesky_nonzeros`
     against the factor, `perm=`, and its errors;
+  - `test_supernodal_agrees_with_simplicial`: every degree in 2D and 3D,
+    Darcy in both block orders, an indefinite shifted Laplacian: the
+    same fill and inertia, solutions to rounding, and `AUTO`'s choice;
+  - `test_supernodal_regularization_and_errors`; `test_etree_postorder`;
   - `test_typed_factorizations`: the three typed wrappers against
     `spsolve`, inertia of a shifted typed Laplacian and of the Darcy
     block system, and cochains from another complex refused;
   - `test_errors`.
 - `tests/test_properties_robust.mojo`:
-  `test_sparse_cholesky_matches_dense_solves` and
+  `test_sparse_cholesky_matches_dense_solves` (both orderings, both
+  layouts, `nnz(L)` against `cholesky_nonzeros`),
   `test_sparse_ldlt_solves_saddle_points` (random saddle points in either
-  block order).
+  block order, either layout), and
+  `test_etree_postorder_is_a_postorder` (random forests).
 
 ## References
 
@@ -295,4 +375,13 @@ instead of dense exact blocks.
   SIAM J. Matrix Anal. Appl. 11(1), 134–172, 1990.
 - T. A. Davis, *Direct Methods for Sparse Linear Systems*, SIAM, 2006,
   chapters 4 (Cholesky) and 7 (orderings).
-- faer, `sparse::linalg::amd` and `sparse::linalg::cholesky::simplicial`.
+- J. W. H. Liu, E. G. Ng, B. W. Peyton, "On finding supernodes for
+  sparse matrix computations", SIAM J. Matrix Anal. Appl. 14(1),
+  242–252, 1993.
+- C. Ashcraft, R. Grimes, "The influence of relaxed supernode partitions
+  on the multifrontal method", ACM Trans. Math. Softw. 15(4), 291–309,
+  1989.
+- E. G. Ng, B. W. Peyton, "Block sparse Cholesky algorithms on advanced
+  uniprocessor computers", SIAM J. Sci. Comput. 14(5), 1034–1056, 1993.
+- faer, `sparse::linalg::amd` and `sparse::linalg::cholesky::simplicial`
+  and `::supernodal`.

@@ -140,6 +140,7 @@ from mojodec.routines.gmg import (
 from mojodec.routines.lanczos import eigsh
 from mojodec.routines.ordering import amd_ordering
 from mojodec.routines.sparse_ldlt import (
+    FactorLayout,
     FillOrdering,
     Inertia,
     SparseCholesky,

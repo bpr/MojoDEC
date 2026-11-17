@@ -216,8 +216,9 @@ and `reorder_vertices` fixes it. See
   volume.
 - **Solvers:** `routines/dense.mojo` and `routines/linalg.mojo` provide
   pivoted LU, Householder `eigh`, and Krylov methods;
-  `routines/sparse_ldlt.mojo` and `routines/ordering.mojo` the sparse
-  LDL^T and Cholesky factorizations with AMD (ported from faer). NuMojo's
+  `routines/sparse_ldlt.mojo`, `routines/supernodal.mojo`, and
+  `routines/ordering.mojo` the sparse LDL^T and Cholesky factorizations
+  (simplicial or supernodal) with AMD (ported from faer). NuMojo's
   unpivoted `solve` and Jacobi `eigh` are not used.
 
 ## Verification

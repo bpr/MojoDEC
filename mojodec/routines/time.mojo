@@ -381,10 +381,12 @@ struct StepSolver(Equatable, ImplicitlyCopyable, Writable):
     comptime AUTO = StepSolver(2)
     """`CHOLESKY` when the factor stays small, `CG` otherwise: the AMD
     ordering and the elimination tree count `nnz(L)` without arithmetic,
-    and the step matrix is factored when `nnz(L) <= 8 nnz(S)`
+    and the step matrix is factored when `nnz(L) <= 24 nnz(S)`
     (`_FACTOR_FILL`). On Kuhn grids that is every 2D mesh measured
-    (ratios 2.4 to 5.7, up to 256 x 256) and no 3D one (9 to 28, from
-    16^3), where factoring cost 1.0x to 7x CG's 100 steps."""
+    (ratios 2.4 to 5.7, up to 256 x 256) and 3D ones up to about 30^3
+    (ratios 9.1 at 16^3, 22.8 at 28^3): with the supernodal factor, 100
+    Crank-Nicolson steps took 19 ms against CG's 44 at 16^3 and 306
+    against 391 at 28^3, but 848 against 651 at 32^3 (ratio 28)."""
     comptime CHOLESKY = StepSolver(0)
     """Factor the step matrix once (`SparseCholesky`, AMD ordering) and
     take two triangular solves per step: exact to rounding, and the
@@ -427,7 +429,7 @@ struct StepSolver(Equatable, ImplicitlyCopyable, Writable):
             writer.write("auto")
 
 
-comptime _FACTOR_FILL = 8
+comptime _FACTOR_FILL = 24
 """`StepSolver.AUTO` factors when `nnz(L) <= _FACTOR_FILL nnz(S)`."""
 
 

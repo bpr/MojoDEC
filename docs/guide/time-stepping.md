@@ -349,7 +349,7 @@ how:
 - `StepSolver.AUTO`, the default, decides from the fill: it computes the
   AMD ordering and counts $\operatorname{nnz}(L)$ from the elimination
   tree (`cholesky_nonzeros`, no arithmetic), and factors when
-  $\operatorname{nnz}(L) \le 8 \operatorname{nnz}(S)$. The stepper's
+  $\operatorname{nnz}(L) \le 24 \operatorname{nnz}(S)$. The stepper's
   `solver` field then says which it chose.
 
 Measured on Kuhn grids, one thread, release build, $\Delta t = 0.01$,
@@ -358,22 +358,28 @@ the Whitney mass on the interior edges:
 
 | | unknowns | nnz(L) / nnz(S) | CG | factor + steps |
 |---|---|---|---|---|
-| heat, 32 × 32 | 961 | 2.4 | 10.6 ms | 0.6 + 2.0 ms |
-| heat, 128 × 128 | 16,129 | 4.4 | 592 ms | 15 + 58 ms |
-| heat, 256 × 256 | 65,025 | 5.7 | 4.75 s | 93 + 297 ms |
-| Maxwell, 32 × 32 | 3,008 | 2.4 | 16.9 ms | 1.2 + 5.1 ms |
-| Maxwell, 128 × 128 | 48,896 | 3.5 | 769 ms | 26 + 114 ms |
-| Maxwell, 256 × 256 | 196,096 | 3.9 | 5.20 s | 149 + 589 ms |
-| heat, 16³ | 3,375 | 9.1 | 46 ms | 21 + 47 ms |
-| heat, 24³ | 12,167 | 18.5 | 230 ms | 343 + 350 ms |
-| heat, 32³ | 29,791 | 28.0 | 653 ms | 2.37 + 2.27 s |
+| heat, 32 × 32 | 961 | 2.4 | 10.9 ms | 0.6 + 2.3 ms |
+| heat, 128 × 128 | 16,129 | 4.4 | 580 ms | 10 + 32 ms |
+| heat, 256 × 256 | 65,025 | 5.7 | 4.91 s | 45 + 153 ms |
+| Maxwell, 32 × 32 | 3,008 | 2.4 | 17.5 ms | 1.2 + 5.7 ms |
+| Maxwell, 128 × 128 | 48,896 | 3.5 | 774 ms | 19 + 81 ms |
+| Maxwell, 256 × 256 | 196,096 | 3.9 | 5.17 s | 92 + 368 ms |
+| heat, 16³ | 3,375 | 9.1 | 44 ms | 7 + 12 ms |
+| heat, 20³ | 6,859 | 13.6 | 108 ms | 22 + 36 ms |
+| heat, 24³ | 12,167 | 18.5 | 204 ms | 68 + 81 ms |
+| heat, 28³ | 19,683 | 22.8 | 391 ms | 139 + 167 ms |
+| heat, 32³ | 29,791 | 28.0 | 651 ms | 352 + 496 ms |
 
-In 2D the factor is 6–16 times faster over 100 steps, and its setup is
-repaid within a few steps. In 3D the fill grows like $n^{4/3}$ and
-a triangular solve costs more than a CG solve from a good guess
-(the step matrix is well conditioned for small $\Delta t$), so `AUTO`
-keeps CG there. Large $\Delta t$ makes $S$ worse conditioned and moves
-the balance toward factoring; pass `solver=StepSolver.CHOLESKY` then.
+The factorizations are supernodal where `FactorLayout.AUTO` picks it (the
+larger 2D grids and every 3D one; see
+[Sparse direct solvers](sparse-direct.md#supernodes)). In 2D the factor
+is 15–32 times faster over 100 steps, and its setup is repaid within a
+few steps. In 3D the fill grows like $n^{4/3}$: factoring still wins at
+28³ (fill ratio 22.8), and from 32³ (ratio 28) a CG solve from a
+good guess is cheaper than the triangular solves plus the setup, since
+the step matrix is well conditioned for small $\Delta t$. Large
+$\Delta t$ makes $S$ worse conditioned and moves the balance toward
+factoring; pass `solver=StepSolver.CHOLESKY` then.
 
 **Starting guesses.** With `StepSolver.CG`, each solve starts from
 Fischer's guess: the point
@@ -446,8 +452,9 @@ with `select(free, free)`. Nonzero Dirichlet data enters as a source.
 - `test_implicit_steppers_match_dense_steps`: both schemes, factored and
   with CG, against dense steps over up to 30 steps, at small and large
   $\Delta t$, with the midpoint energy conserved;
-- `test_auto_factors_in_2d_and_iterates_in_3d` (in `test_time.mojo`):
-  the choice on a 2D and a 3D grid, and factored steps against CG's;
+- `test_auto_factors_small_fill_and_iterates_on_large` (in
+  `test_time.mojo`): the choice on a 2D grid and a small and a large 3D
+  one, and factored steps against CG's;
 - `test_fischer_guess_is_never_worse_than_zero`: the guess's error in the
   $S$ norm against the zero start, for any sequence of right-hand sides.
 
