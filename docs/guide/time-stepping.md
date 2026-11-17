@@ -352,8 +352,8 @@ how:
   $\operatorname{nnz}(L) \le 24 \operatorname{nnz}(S)$. The stepper's
   `solver` field then says which it chose.
 
-Measured on Kuhn grids, one thread, release build, $\Delta t = 0.01$,
-100 steps; heat is P1 on the interior vertices with a source, Maxwell
+Measured on Kuhn grids, release build, $\Delta t = 0.01$, 100 steps,
+one thread except the 3D factorizations (8 cores); heat is P1 on the interior vertices with a source, Maxwell
 the Whitney mass on the interior edges:
 
 | | unknowns | nnz(L) / nnz(S) | CG | factor + steps |
@@ -364,20 +364,23 @@ the Whitney mass on the interior edges:
 | Maxwell, 32 × 32 | 3,008 | 2.4 | 17.5 ms | 1.2 + 5.7 ms |
 | Maxwell, 128 × 128 | 48,896 | 3.5 | 774 ms | 19 + 81 ms |
 | Maxwell, 256 × 256 | 196,096 | 3.9 | 5.17 s | 92 + 368 ms |
-| heat, 16³ | 3,375 | 9.1 | 44 ms | 7 + 12 ms |
-| heat, 20³ | 6,859 | 13.6 | 108 ms | 22 + 36 ms |
-| heat, 24³ | 12,167 | 18.5 | 204 ms | 68 + 81 ms |
-| heat, 28³ | 19,683 | 22.8 | 391 ms | 139 + 167 ms |
-| heat, 32³ | 29,791 | 28.0 | 651 ms | 352 + 496 ms |
+| heat, 16³ | 3,375 | 9.1 | 41 ms | 5 + 13 ms |
+| heat, 20³ | 6,859 | 13.6 | 101 ms | 11 + 37 ms |
+| heat, 24³ | 12,167 | 18.5 | 210 ms | 26 + 83 ms |
+| heat, 28³ | 19,683 | 22.8 | 392 ms | 55 + 174 ms |
+| heat, 32³ | 29,791 | 28.0 | 650 ms | 100 + 525 ms |
+| heat, 36³ | 42,875 | | 975 ms | 198 + 1070 ms |
 
 The factorizations are supernodal where `FactorLayout.AUTO` picks it (the
 larger 2D grids and every 3D one; see
 [Sparse direct solvers](sparse-direct.md#supernodes)). In 2D the factor
 is 15–32 times faster over 100 steps, and its setup is repaid within a
 few steps. In 3D the fill grows like $n^{4/3}$: factoring still wins at
-28³ (fill ratio 22.8), and from 32³ (ratio 28) a CG solve from a
-good guess is cheaper than the triangular solves plus the setup, since
-the step matrix is well conditioned for small $\Delta t$. Large
+28³ (fill ratio 22.8), the two tie at 32³ (ratio 28), and past that a CG
+solve from a good guess is cheaper than the triangular solves, which
+run on one thread, since the step matrix is well conditioned for small
+$\Delta t$. (The factor runs on every core: on one thread the 32³
+setup is 352 ms and CG wins there.) Large
 $\Delta t$ makes $S$ worse conditioned and moves the balance toward
 factoring; pass `solver=StepSolver.CHOLESKY` then.
 

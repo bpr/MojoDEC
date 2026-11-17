@@ -120,6 +120,48 @@ in register tiles of 8 rows by 4 columns: per step, one vector load and
 four fused multiply-adds. The solves gather each supernode's rows once,
 so their inner loops run down contiguous columns too.
 
+**Threads.** The supernodal factorization runs on every physical core
+(`MOJODEC_NUM_THREADS` caps them; below about $5 \times 10^6$
+multiply-adds it stays serial). Supernodes in disjoint subtrees of the
+supernode tree touch disjoint blocks, so the tree is cut from the roots
+down until its subtrees are small next to a thread's share (Geist and
+Ng, 1989), and each subtree is one task. That alone does little in 3D:
+under AMD the separators at the top of the tree are large dense blocks,
+and they hold about 97% of the work of the 30³ grid. So each large
+supernode above the subtrees is split too: its updates into windows of
+columns (each window applies every descendant's update to its own
+columns), then, per panel, a task for the diagonal block and tasks of 64
+rows below it. A panel's diagonal task waits only for the block of rows
+holding its own rows, so the next panel starts while the rows of this
+one finish.
+
+All of it is one list of tasks, each after the tasks it needs. Threads
+take tasks in list order from a shared atomic counter and wait until a
+task's predecessors are done; the predecessors come earlier in the list,
+so they are already held by running threads, and the waiting cannot
+deadlock. The whole factorization is one parallel call: a call per panel
+costs about 225 µs, which on the 30³ grid came to 50 ms. Each entry of
+the factor gets the same operations in the same order as on one thread,
+so the factor is the same bit for bit whatever the number of threads. A
+failed pivot stops every thread, and the factorization reruns serially
+to report the pivot a serial run would.
+
+Measured on an 8-core AMD Ryzen 7 9800X3D (factor times with
+`MOJODEC_NUM_THREADS`, AMD computed beforehand, the symbolic analysis
+included):
+
+| matrix | 1 thread | 2 | 4 | 8 |
+|---|---|---|---|---|
+| 2D grid 300 × 300 | 34 ms | 24 ms | 19 ms | 18 ms |
+| 3D grid 20³ | 27 ms | 17 ms | 13 ms | 11 ms |
+| 3D 1-forms 12³ | 52 ms | 33 ms | 23 ms | 18 ms |
+| 3D grid 30³ | 311 ms | 182 ms | 109 ms | 73 ms |
+| 3D grid 40³ | 2.30 s | 1.24 s | 712 ms | 453 ms |
+
+The serial part grows more slowly than the dense blocks, so the speedup
+rises with the size: 1.9 times on 8 cores for the 2D grid, 4.3 for 30³,
+5.1 for 40³.
+
 **Which to use.** `layout=FactorLayout.AUTO` (the default) counts the
 flops, $\sum_j (c_j + c_j(c_j+1)/2)$ over the column counts, and goes
 supernodal above 20 flops per entry of $L$ (faer's rule, with its 40
@@ -329,7 +371,11 @@ instead of dense exact blocks.
 - **3D fill.** The factor of a 3D problem grows fast (11.9 M entries for
   30³ vertices; the supernodal blocks store 15.2 M values, 122 MB, and
   few indices). Watch `factor_nonzeros()` and `stored_entries()`.
-- **Serial.** Both factorizations run on one thread.
+- **Threads.** Only the supernodal numeric factorization is parallel.
+  The simplicial factor, the solves, AMD, and the symbolic analysis
+  (elimination tree and column counts, 13 ms of the 30³ grid's 75) run
+  on one thread. Hyperthreads are left out: waiting threads spin, and on
+  a core's second hardware thread they slowed the working one.
 - **Saddle points past ~10⁴ constraints.** The constraint block is
   factored as a dense Schur complement (see above).
 
@@ -364,6 +410,13 @@ instead of dense exact blocks.
   `test_sparse_ldlt_solves_saddle_points` (random saddle points in either
   block order, either layout), and
   `test_etree_postorder_is_a_postorder` (random forests).
+- `tests/test_parallel.mojo`:
+  - `test_parallel_supernodal_matches_serial`: the factor's every value
+    on 2, 3, and 8 threads and all cores equal to one thread's, for 3D
+    0- and 1-form Laplacians, a 2D grid, and a regularized saddle point;
+  - `test_parallel_supernodal_failures_match_serial`: a pivot overflowing
+    in the root supernode, and zero pivots in two separate subtrees,
+    report the serial error.
 
 ## References
 
@@ -383,5 +436,7 @@ instead of dense exact blocks.
   1989.
 - E. G. Ng, B. W. Peyton, "Block sparse Cholesky algorithms on advanced
   uniprocessor computers", SIAM J. Sci. Comput. 14(5), 1034–1056, 1993.
+- G. A. Geist, E. G. Ng, "Task scheduling for parallel sparse Cholesky
+  factorization", Int. J. Parallel Programming 18(4), 291–314, 1989.
 - faer, `sparse::linalg::amd` and `sparse::linalg::cholesky::simplicial`
   and `::supernodal`.

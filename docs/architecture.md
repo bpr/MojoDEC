@@ -189,6 +189,14 @@ add into shared entries get this by ownership. Each chunk owns a block
 of outputs, such as matrix rows or dual volumes by first vertex, and
 sums into them in the serial order.
 
+The supernodal factorization is the one parallel computation that is
+not a loop over chunks: its tasks (subtrees, column windows, panels)
+depend on each other, so threads claim them in order from an atomic
+counter and wait for each one's predecessors, within a single
+`parallel_ranges` call. Each entry still gets the serial operations in
+the serial order, so the factor is the same bit for bit too
+([Sparse direct solvers](guide/sparse-direct.md#supernodes)).
+
 - **Testing:** `tests/test_parallel.mojo` compares each parallel path
   with the serial one exactly.
 - **Optimizations:** every change on the [performance](guide/performance.md)
@@ -218,7 +226,8 @@ and `reorder_vertices` fixes it. See
   pivoted LU, Householder `eigh`, and Krylov methods;
   `routines/sparse_ldlt.mojo`, `routines/supernodal.mojo`, and
   `routines/ordering.mojo` the sparse LDL^T and Cholesky factorizations
-  (simplicial or supernodal) with AMD (ported from faer). NuMojo's
+  (simplicial or supernodal, the supernodal factor parallel as one task
+  graph) with AMD (ported from faer). NuMojo's
   unpivoted `solve` and Jacobi `eigh` are not used.
 
 ## Verification

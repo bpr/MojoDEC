@@ -312,7 +312,8 @@ plan). Key design points that span several files:
   and refuse cochains from another complex at `solve`.
   `SparseCholesky` wraps it
   with no refinement, requires positive pivots, and is a
-  `Preconditioner`. Serial. `spsolve(..., method=DirectMethod.SPARSE_LDLT)`
+  `Preconditioner`. Simplicial factors and all solves are serial.
+  `spsolve(..., method=DirectMethod.SPARSE_LDLT)`
   (CSR, `MatrixOp`, `BlockOp`, fixed cells) uses it; DarcyFlow does.
   `layout=FactorLayout.AUTO` goes supernodal above 20 flops per entry
   of `L` (`_SUPERNODAL_RATIO`, measured break-even; faer uses 40): the
@@ -321,14 +322,40 @@ plan). Key design points that span several files:
   supernode before it in the postorder under faer's relaxation
   thresholds, finds patterns as faer's `ereach_super`, and factors
   left-looking: per supernode, scatter `C`, subtract each descendant's
-  `L_b D L_m^T` (`_update`: a dense product into scratch, scattered by
-  `rmap`), then `_factor_block` (panels of 32 columns, each updated by
-  one product, then left-looking inside). `_sub_product` is the one
-  kernel: register tiles of 8 rows x 4 columns, lower trapezoid only.
-  The aliasing of a block with itself needs
-  `unsafe_ptr().unsafe_origin_cast[MutAnyOrigin]()`. Solves gather each
-  supernode's rows once. 3-7x faster factors in 3D, 2-4x faster
-  solves; results differ from simplicial in the last bits.
+  `L_b D L_m^T` (`_Frame.update`: a dense product into scratch,
+  scattered by `rmap`), then the dense block by panels of 32 columns
+  (`panel_update`: the columns before the panel in one product;
+  `factor_diagonal`: the panel's diagonal block, left-looking, with the
+  pivot rule; `panel_eliminate`: the rows below it). `_sub_product` is
+  the one kernel: register tiles of 8 rows x 4 columns, lower trapezoid
+  (`top` offsets the diagonal for blocks of rows below it). The numeric
+  phase is a task list (`_Tasks`) run in one `parallel_ranges` call on
+  the physical cores, above `_PARALLEL_WORK` (5e6 multiply-adds; serial
+  below): Geist-Ng subtrees (heaviest first), then each supernode above
+  them as one task, or, past `_SPLIT_WORK`, column windows (each applies
+  every descendant's update to its columns), then per panel a diagonal
+  task and `_ROW_BLOCK` (64) row tasks; a panel's diagonal task waits
+  only for the row block holding its rows (and the panel two back,
+  whose coefficient buffer it reuses). Threads claim tasks from an
+  atomic counter in list order and spin on each one's pending count
+  (`Atomic[Int64]` statics on untracked pointers); predecessors come
+  first, so a waiting task's predecessors are held by running threads
+  and it cannot deadlock. A call per panel instead cost 225 us each, 50
+  ms at 30^3. In 3D under AMD the subtrees hold ~3% of the work: the
+  split supernodes are what scale. Bits equal serial at every thread
+  count (row and column splits keep each entry's operations and order);
+  check a change with `test_parallel_supernodal_matches_serial`. A failed
+  pivot sets a flag every thread polls, then the whole factorization
+  reruns serially so the error is serial's (first in supernode order).
+  `vals` is allocated uninitialized and each task zeroes the block or
+  columns it assembles (parallel first touch). The frame's pointers are
+  untracked: keep the lists they point into alive (`_ = x^`) past the
+  parallel call. Solves gather each supernode's rows once and are serial.
+  3-7x faster factors than simplicial in 3D on one thread, about 4x more
+  on 8 cores; results differ from simplicial in the last bits. The
+  supernodal path relabels `etree` and `counts` by the postorder instead
+  of recomputing them (an equivalent ordering); `_etree_and_counts` is
+  O(nnz(L)) and serial (13 ms at 30^3).
 - **Algebraic multigrid** (`routines/amg.mojo`): `SmoothedAggregation`
   ports amgcl's `plain_aggregates` (`_aggregates`: strong when
   `a_ij^2 > eps^2 a_ii a_jj`, eps halved per level, one serial greedy
@@ -416,7 +443,8 @@ plan). Key design points that span several files:
   (`cholesky_nonzeros`, symbolic only) and factors `S` once
   (`SparseCholesky`, reusing the permutation) when it is at most
   `_FACTOR_FILL = 24` times `nnz(S)` (Kuhn grids: 2D 2.4-5.7, 3D 16^3
-  9.1, 28^3 22.8, 32^3 28; break-even about 26 with the supernodal factor),
+  9.1, 28^3 22.8, 32^3 28; break-even about 28 with the parallel supernodal
+  factor on 8 cores, 26 on one),
   recording the choice in `.solver`; `CHOLESKY` and `CG`
   force one. CG solves each step with Jacobi-PCG for the increment (the tolerance is relative to the change,
   not the state), started from Fischer's guess (`_Guess`: an
@@ -483,7 +511,8 @@ work (POSIX threads cost 20–50 µs), so thresholds are set where the serial
 loop takes a few hundred µs: matvec at `PARALLEL_NNZ` (1M stored entries),
 circumcenters and primal volumes at 50k simplices, `whitney_innerproduct`
 at 4096 top simplices (element loop and row assembly), dual volumes at
-4096 top simplices. `MOJODEC_NUM_THREADS=k` caps the chunks at k (1 runs
+4096 top simplices, the supernodal factor at 5e6 multiply-adds (one call
+for the whole factorization). `MOJODEC_NUM_THREADS=k` caps the chunks at k (1 runs
 everything serially, for single-threaded benchmarks). Bodies must not
 raise: record failures per chunk and raise afterwards. Keep a hot serial loop out of a function that also
 holds the parallel branch (`CSRMatrix._matvec_parallel` is separate): in

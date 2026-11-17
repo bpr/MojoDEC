@@ -333,12 +333,20 @@ struct SparseLDLT(LinearOperator, Movable):
                 self._perm_inv = _inverse_permutation(
                     self.perm, n, "SparseLDLT"
                 )
-                var C2 = _PermutedLower(A, self._perm_inv)
-                for j in range(n):
-                    etree[j] = _NONE
-                    counts[j] = 1
-                _etree_and_counts(C2.Cp, C2.Ci, etree, counts, visited)
-                C = C2^
+                C = _PermutedLower(A, self._perm_inv)
+                # a postorder is an equivalent ordering: the same tree and
+                # column counts, relabeled (ancestors keep larger labels)
+                var label = List[Int](length=n, fill=0)
+                for k in range(n):
+                    label[post[k]] = k
+                var etree2 = List[Int](length=n, fill=_NONE)
+                var counts2 = List[Int](length=n, fill=0)
+                for k in range(n):
+                    var p = etree[post[k]]
+                    etree2[k] = label[p] if p != _NONE else _NONE
+                    counts2[k] = counts[post[k]]
+                etree = etree2^
+                counts = counts2^
             var S = _Supernodal(
                 C.Cp,
                 C.Ci,

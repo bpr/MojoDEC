@@ -13,7 +13,10 @@ import numojo as nm
 from numojo.prelude import *
 from mojodec import (
     CSRMatrix,
+    FactorLayout,
     SimplicialComplex,
+    SparseLDLT,
+    amd_ordering,
     SimplicialMesh,
     kuhn_grid,
     morton_keys,
@@ -576,6 +579,145 @@ def test_large_matvec() raises:
         for k in range(A.indptr[i], A.indptr[i + 1]):
             s += A.data[k] * x.unsafe_get(A.indices[k])
         assert_equal(y.unsafe_get(i), s)
+
+
+# -- supernodal LDL^T: subtrees and pieces of large supernodes as tasks
+
+
+def _laplacian_3d(N: Int, k: Int) raises -> CSRMatrix:
+    var sc = SimplicialComplex(kuhn_grid([N, N, N]))
+    return whitney_innerproduct(sc, k) + (
+        sc[k].d.transpose() @ whitney_innerproduct(sc, k + 1) @ sc[k].d
+    )
+
+
+def _supernodal_values(
+    A: CSRMatrix, perm: List[Int], signs: List[Int], threads: String
+) raises -> List[Float64]:
+    """The factor's blocks, then its number of regularized pivots."""
+    if threads:
+        _ = setenv("MOJODEC_NUM_THREADS", threads)
+    var s: Optional[List[Int]] = None
+    if len(signs) > 0:
+        s = signs.copy()
+    var F = SparseLDLT(
+        A,
+        perm=perm.copy(),
+        signs=s^,
+        regularization=1e-10 if len(signs) > 0 else 0.0,
+        refinement_steps=0,
+        layout=FactorLayout.SUPERNODAL,
+    )
+    _ = unsetenv("MOJODEC_NUM_THREADS")
+    var out = F._super.value().vals.copy()
+    out.append(Float64(F.num_regularized))
+    return out^
+
+
+def _check_supernodal_matches_serial(
+    A: CSRMatrix, signs: List[Int] = List[Int]()
+) raises:
+    var perm = amd_ordering(A)
+    var want = _supernodal_values(A, perm, signs, "1")
+    for threads in ["2", "3", "8", ""]:
+        var got = _supernodal_values(A, perm, signs, threads)
+        assert_equal(len(got), len(want))
+        for i in range(len(want)):
+            # bit for bit: each entry takes the same operations in order
+            assert_equal(got[i], want[i])
+
+
+def test_parallel_supernodal_matches_serial() raises:
+    # past the work at which the factorization goes parallel; 12^3 and the
+    # 1-forms have supernodes split into column windows and row tasks
+    _check_supernodal_matches_serial(_laplacian_3d(12, 0))
+    _check_supernodal_matches_serial(_laplacian_3d(7, 1))
+    var sc = SimplicialComplex(kuhn_grid([90, 90]))
+    _check_supernodal_matches_serial(
+        whitney_innerproduct(sc, 0)
+        + sc[0].d.transpose() @ whitney_innerproduct(sc, 1) @ sc[0].d
+    )
+    # a saddle point [[0, B], [B^T, -M]] with signs and regularization
+    var sc3 = SimplicialComplex(kuhn_grid([6, 6, 6]))
+    var M = whitney_innerproduct(sc3, 1)
+    ref B = sc3[1].d
+    var c = B.nrows
+    var rows = List[Int]()
+    var cols = List[Int]()
+    var vals = List[Float64]()
+    for i in range(M.nrows):
+        for t in range(M.indptr[i], M.indptr[i + 1]):
+            rows.append(c + i)
+            cols.append(c + M.indices[t])
+            vals.append(-M.data[t])
+    for i in range(c):
+        for t in range(B.indptr[i], B.indptr[i + 1]):
+            rows.append(i)
+            cols.append(c + B.indices[t])
+            vals.append(B.data[t])
+            rows.append(c + B.indices[t])
+            cols.append(i)
+            vals.append(B.data[t])
+    var K = CSRMatrix.from_coo(c + M.nrows, c + M.nrows, rows, cols, vals)
+    var signs = List[Int]()
+    for _ in range(c):
+        signs.append(1)
+    for _ in range(M.nrows):
+        signs.append(-1)
+    _check_supernodal_matches_serial(K, signs)
+
+
+def _supernodal_error(A: CSRMatrix, perm: List[Int], threads: String) -> String:
+    if threads:
+        _ = setenv("MOJODEC_NUM_THREADS", threads)
+    var message = String("")
+    try:
+        _ = SparseLDLT(A, perm=perm.copy(), layout=FactorLayout.SUPERNODAL)
+    except e:
+        message = String(e)
+    _ = unsetenv("MOJODEC_NUM_THREADS")
+    return message^
+
+
+def _check_supernodal_error(A: CSRMatrix, perm: List[Int]) raises:
+    var want = _supernodal_error(A, perm, "1")
+    assert_true(want.find("pivot") >= 0, want)
+    for threads in ["2", "8", ""]:
+        assert_equal(_supernodal_error(A, perm, threads), want)
+
+
+def test_parallel_supernodal_failures_match_serial() raises:
+    # a failed pivot stops every thread, and the error is the one the
+    # serial order meets first
+    var A = _laplacian_3d(12, 0)
+    var n = A.nrows
+    var v = n // 2
+    # vertex v's row and column at 1e300, eliminated last: its pivot
+    # overflows to -inf in the root supernode
+    var rows = List[Int]()
+    var cols = List[Int]()
+    var vals = List[Float64]()
+    for i in range(n):
+        for t in range(A.indptr[i], A.indptr[i + 1]):
+            var j = A.indices[t]
+            rows.append(i)
+            cols.append(j)
+            vals.append(1e300 if i == v or j == v else A.data[t])
+    var big = CSRMatrix.from_coo(n, n, rows, cols, vals)
+    var perm = List[Int]()
+    var amd = amd_ordering(A)
+    for k in range(n):
+        if amd[k] != v:
+            perm.append(amd[k])
+    perm.append(v)
+    _check_supernodal_error(big, perm)
+    # two isolated rows without a diagonal: zero pivots in subtrees of
+    # their own
+    for t in range(len(vals)):
+        if rows[t] == v or cols[t] == v:
+            vals[t] = A.data[t]  # from_coo kept the rows in order
+    var Z = CSRMatrix.from_coo(n + 2, n + 2, rows, cols, vals)
+    _check_supernodal_error(Z, amd_ordering(Z))
 
 
 def main() raises:
