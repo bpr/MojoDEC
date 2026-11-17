@@ -152,15 +152,16 @@ included):
 
 | matrix | 1 thread | 2 | 4 | 8 |
 |---|---|---|---|---|
-| 2D grid 300 × 300 | 34 ms | 24 ms | 19 ms | 18 ms |
-| 3D grid 20³ | 27 ms | 17 ms | 13 ms | 11 ms |
-| 3D 1-forms 12³ | 52 ms | 33 ms | 23 ms | 18 ms |
-| 3D grid 30³ | 311 ms | 182 ms | 109 ms | 73 ms |
-| 3D grid 40³ | 2.30 s | 1.24 s | 712 ms | 453 ms |
+| 2D grid 300 × 300 | 33 ms | 23 ms | 18 ms | 16 ms |
+| 3D grid 20³ | 25 ms | 16 ms | 11 ms | 10 ms |
+| 3D 1-forms 12³ | 50 ms | 31 ms | 20 ms | 17 ms |
+| 3D grid 30³ | 300 ms | 169 ms | 97 ms | 64 ms |
+| 3D grid 40³ | 2.24 s | 1.20 s | 663 ms | 432 ms |
 
 The serial part grows more slowly than the dense blocks, so the speedup
-rises with the size: 1.9 times on 8 cores for the 2D grid, 4.3 for 30³,
-5.1 for 40³.
+rises with the size: 2.0 times on 8 cores for the 2D grid, 4.7 for 30³,
+5.2 for 40³ (best of several runs; on a busy machine the 8-thread times
+vary by a third).
 
 **Which to use.** `layout=FactorLayout.AUTO` (the default) counts the
 flops, $\sum_j (c_j + c_j(c_j+1)/2)$ over the column counts, and goes
@@ -210,7 +211,13 @@ permutation, such as one `amd_ordering` already computed.
 
 `cholesky_nonzeros(A, perm)` counts the entries of $L$ from the
 elimination tree, before any arithmetic: the factor's memory and, with
-it, whether factoring is worth it. The implicit time steppers' default
+it, whether factoring is worth it. It costs about as much as reading $A$
+a few times, not $\operatorname{nnz}(L)$: `L[i, j]` is nonzero exactly
+when column $j$ lies in the *row subtree* of $i$, the union of the tree
+paths from the columns of row $i$'s entries up to $i$, and Gilbert, Ng,
+and Peyton (1994) count every column's row subtrees at once from their
+leaves and the least common ancestors of consecutive leaves (2.2 ms for
+the 30³ grid's 11.9 M entries, where walking the paths took 13). The implicit time steppers' default
 (`StepSolver.AUTO`, see [Time stepping](time-stepping.md)) factors when
 it is at most 24 times $\operatorname{nnz}(A)$, which holds on 2D meshes
 and on 3D ones up to about 30³ vertices.
@@ -373,8 +380,8 @@ instead of dense exact blocks.
   few indices). Watch `factor_nonzeros()` and `stored_entries()`.
 - **Threads.** Only the supernodal numeric factorization is parallel.
   The simplicial factor, the solves, AMD, and the symbolic analysis
-  (elimination tree and column counts, 13 ms of the 30³ grid's 75) run
-  on one thread. Hyperthreads are left out: waiting threads spin, and on
+  (elimination tree and column counts, 2 ms for the 30³ grid) run on
+  one thread. Hyperthreads are left out: waiting threads spin, and on
   a core's second hardware thread they slowed the working one.
 - **Saddle points past ~10⁴ constraints.** The constraint block is
   factored as a dense Schur complement (see above).
@@ -409,7 +416,9 @@ instead of dense exact blocks.
   layouts, `nnz(L)` against `cholesky_nonzeros`),
   `test_sparse_ldlt_solves_saddle_points` (random saddle points in either
   block order, either layout), and
-  `test_etree_postorder_is_a_postorder` (random forests).
+  `test_etree_postorder_is_a_postorder` (random forests), and
+  `test_column_counts_match_dense_elimination` (the elimination tree and
+  column counts against symbolic elimination on a dense Boolean matrix).
 - `tests/test_parallel.mojo`:
   - `test_parallel_supernodal_matches_serial`: the factor's every value
     on 2, 3, and 8 threads and all cores equal to one thread's, for 3D
@@ -436,6 +445,9 @@ instead of dense exact blocks.
   1989.
 - E. G. Ng, B. W. Peyton, "Block sparse Cholesky algorithms on advanced
   uniprocessor computers", SIAM J. Sci. Comput. 14(5), 1034–1056, 1993.
+- J. R. Gilbert, E. G. Ng, B. W. Peyton, "An efficient algorithm to
+  compute row and column counts for sparse Cholesky factorization", SIAM
+  J. Matrix Anal. Appl. 15(4), 1075–1091, 1994.
 - G. A. Geist, E. G. Ng, "Task scheduling for parallel sparse Cholesky
   factorization", Int. J. Parallel Programming 18(4), 291–314, 1989.
 - faer, `sparse::linalg::amd` and `sparse::linalg::cholesky::simplicial`

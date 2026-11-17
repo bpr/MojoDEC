@@ -7,7 +7,9 @@
 # from faer's `sparse::linalg::cholesky::simplicial` (faer 0.24, commit
 # 0ecd846, MIT License, Copyright (c) 2026 sarah quiñones el kazdadi); see
 # NOTICE. The algorithms are Liu's elimination tree (SIAM J.
-# Matrix Anal. Appl. 11(1), 1990) and the row-by-row ("up-looking") sparse
+# Matrix Anal. Appl. 11(1), 1990), Gilbert, Ng, and Peyton's column counts
+# ("An efficient algorithm to compute row and column counts for sparse
+# Cholesky factorization", SIAM J. Matrix Anal. Appl. 15(4), 1994), and the row-by-row ("up-looking") sparse
 # Cholesky of Davis, *Direct Methods for Sparse Linear Systems*, ch. 4.
 # ===----------------------------------------------------------------------=== #
 """
@@ -773,25 +775,94 @@ def _etree_and_counts(
     mut counts: List[Int],
     mut visited: List[Int],
 ):
-    """The elimination tree of `C` and the column counts of `L` (each
-    starting at 1, for the diagonal), by walking each row's paths up the
-    tree as far as they are new."""
+    """The elimination tree of `C` and the column counts of `L` (with the
+    diagonal), in time nearly linear in `nnz(C)` rather than `nnz(L)`.
+
+    The tree by Liu's algorithm: each row's entries climb to their roots
+    through ancestors compressed to that row (`visited` holds them). The
+    counts by Gilbert, Ng, and Peyton's: `L[i, j]` is nonzero exactly when
+    `j` is in the row subtree of `i`, the union of the tree paths from the
+    columns of row `i`'s entries up to `i`. Visiting the columns in a
+    postorder, `j` gets +1 for each row subtree it is a leaf of, and the
+    least common ancestor of that leaf and the row's previous leaf gets -1
+    (found with a disjoint-set forest of the visited columns); each child
+    gives its parent -1; summing up the tree then counts, at each `j`, the
+    row subtrees containing it. The leaf and ancestor bookkeeping follows
+    faer's `column_counts_aat`."""
     var n = len(etree)
     for k in range(n):
-        visited[k] = k
+        etree[k] = _NONE
+        visited[k] = _NONE
         for t in range(Cp[k], Cp[k + 1]):
             var i = Ci[t]
-            if i < k:
-                while visited[i] != k:
-                    var nxt: Int
-                    if etree[i] != _NONE:
-                        nxt = etree[i]
-                    else:
-                        etree[i] = k
-                        nxt = k
-                    counts[i] += 1
-                    visited[i] = k
-                    i = nxt
+            while i != _NONE and i < k:
+                var nxt = visited[i]
+                visited[i] = k
+                if nxt == _NONE:
+                    etree[i] = k
+                i = nxt
+    var post = etree_postorder(etree)
+    # the strictly lower entries by columns: rows i > j of column j
+    var Tp = List[Int](length=n + 1, fill=0)
+    for k in range(n):
+        for t in range(Cp[k], Cp[k + 1]):
+            if Ci[t] < k:
+                Tp[Ci[t] + 1] += 1
+    for j in range(n):
+        Tp[j + 1] += Tp[j]
+    var Ti = List[Int](length=Tp[n], fill=0)
+    var at = Tp.copy()
+    for k in range(n):
+        for t in range(Cp[k], Cp[k + 1]):
+            var j = Ci[t]
+            if j < k:
+                Ti[at[j]] = k
+                at[j] += 1
+    # first[j]: the postorder position of j's first descendant
+    var first = List[Int](length=n, fill=_NONE)
+    for k in range(n):
+        var j = post[k]
+        counts[j] = 1 if first[j] == _NONE else 0  # leaves of the tree
+        while j != _NONE and first[j] == _NONE:
+            first[j] = k
+            j = etree[j]
+    var max_first = List[Int](length=n, fill=_NONE)
+    var prev_leaf = List[Int](length=n, fill=_NONE)
+    ref ancestor = visited
+    for i in range(n):
+        ancestor[i] = i
+    for k in range(n):
+        var j = post[k]
+        var p = etree[j]
+        if p != _NONE:
+            counts[p] -= 1
+        for t in range(Tp[j], Tp[j + 1]):
+            var i = Ti[t]
+            # j is a leaf of i's row subtree unless a descendant of j
+            # (first[j] or later in the postorder) already was
+            if first[j] <= max_first[i]:
+                continue
+            max_first[i] = first[j]
+            var jprev = prev_leaf[i]
+            prev_leaf[i] = j
+            counts[j] += 1
+            if jprev == _NONE:
+                continue  # i's first leaf: its subtree is this path so far
+            var lca = jprev
+            while lca != ancestor[lca]:
+                lca = ancestor[lca]
+            var node = jprev
+            while node != lca:
+                var nxt = ancestor[node]
+                ancestor[node] = lca
+                node = nxt
+            counts[lca] -= 1
+        if p != _NONE:
+            ancestor[j] = p
+    for j in range(n):  # children come before their parents
+        var p = etree[j]
+        if p != _NONE:
+            counts[p] += counts[j]
 
 
 def _ereach(

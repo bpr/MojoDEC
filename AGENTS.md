@@ -354,8 +354,13 @@ plan). Key design points that span several files:
   3-7x faster factors than simplicial in 3D on one thread, about 4x more
   on 8 cores; results differ from simplicial in the last bits. The
   supernodal path relabels `etree` and `counts` by the postorder instead
-  of recomputing them (an equivalent ordering); `_etree_and_counts` is
-  O(nnz(L)) and serial (13 ms at 30^3).
+  of recomputing them (an equivalent ordering). `_etree_and_counts` is
+  Liu's elimination tree (ancestors path-compressed, in `visited`) and
+  Gilbert-Ng-Peyton column counts (row-subtree leaves in a postorder,
+  least common ancestors by a disjoint-set forest; bookkeeping as faer's
+  `column_counts_aat`), nearly linear in nnz(C): 2.2 ms at 30^3 where
+  walking every path of L took 13; `test_column_counts_match_dense_elimination`
+  checks it against dense symbolic elimination.
 - **Algebraic multigrid** (`routines/amg.mojo`): `SmoothedAggregation`
   ports amgcl's `plain_aggregates` (`_aggregates`: strong when
   `a_ij^2 > eps^2 a_ii a_jj`, eps halved per level, one serial greedy

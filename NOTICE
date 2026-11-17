@@ -39,8 +39,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 mojodec/routines/ordering.mojo and mojodec/routines/sparse_ldlt.mojo are
 ports of faer (https://codeberg.org/sarah-quinones/faer, commit 0ecd846):
 its sparse::linalg::amd and sparse::linalg::cholesky::simplicial modules,
-and the symbolic analysis and left-looking structure of
-sparse::linalg::cholesky::supernodal (mojodec/routines/supernodal.mojo).
+the symbolic analysis and left-looking structure of
+sparse::linalg::cholesky::supernodal (mojodec/routines/supernodal.mojo),
+and the leaf and ancestor bookkeeping of the column counts in
+sparse::linalg::qr (column_counts_aat).
 faer's license follows, verbatim.
 
 --------------------------------------------------------------------------

@@ -84,6 +84,7 @@ from mojodec.routines.lanczos import eigsh
 from mojodec.routines.ordering import amd_ordering
 from mojodec.routines.supernodal import etree_postorder
 from mojodec.routines.sparse_ldlt import (
+    _etree_and_counts,
     FactorLayout,
     FillOrdering,
     SparseCholesky,
@@ -872,6 +873,62 @@ def test_sparse_cholesky_matches_dense_solves() raises:
     given(
         lists(integers(-5, 5), min_size=1, max_size=120),
         integers(1, 40),
+        prop,
+        quick(),
+    )
+
+
+def test_column_counts_match_dense_elimination() raises:
+    """The elimination tree and column counts of `_etree_and_counts`
+    (Liu's tree, Gilbert-Ng-Peyton counts) equal those of symbolic
+    elimination on a dense Boolean matrix, for random symmetric patterns:
+    `L[k, j]` is nonzero when `C[k, j]` is or `L[k, i]` and `L[j, i]` are
+    for some `i < j`; the parent of `j` is its first row below the
+    diagonal."""
+
+    def prop(ints: List[Int], n: Int) raises:
+        var L = List[Bool](length=n * n, fill=False)  # L[k * n + j], j <= k
+        var t = 0
+        for k in range(n):
+            L[k * n + k] = True
+            for j in range(k):
+                var x = ints[t % len(ints)]
+                t += 1
+                L[k * n + j] = x % 5 == 0  # about 1 in 5 entries
+        # C by rows: the pattern before elimination
+        var Cp = List[Int](length=n + 1, fill=0)
+        var Ci = List[Int]()
+        for k in range(n):
+            for j in range(k + 1):
+                if L[k * n + j]:
+                    Ci.append(j)
+            Cp[k + 1] = len(Ci)
+        for i in range(n):  # eliminate column i
+            for j in range(i + 1, n):
+                if L[j * n + i]:
+                    for k in range(j + 1, n):
+                        if L[k * n + i]:
+                            L[k * n + j] = True
+        var etree = List[Int](length=n, fill=-1)
+        var counts = List[Int](length=n, fill=1)
+        var visited = List[Int](length=n, fill=-1)
+        _etree_and_counts(Cp, Ci, etree, counts, visited)
+        for j in range(n):
+            var parent = -1
+            var count = 0
+            for k in range(n - 1, j - 1, -1):
+                if L[k * n + j]:
+                    count += 1
+                    if k > j:
+                        parent = k
+            if etree[j] != parent:
+                fail(String("parent of ", j, ": ", etree[j], ", not ", parent))
+            if counts[j] != count:
+                fail(String("count of ", j, ": ", counts[j], ", not ", count))
+
+    given(
+        lists(integers(-50, 50), min_size=1, max_size=200),
+        integers(0, 40),
         prop,
         quick(),
     )

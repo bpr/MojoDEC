@@ -494,9 +494,9 @@ the published mathematics:
   regularization with iterative refinement; inertia. Simplicial or
   supernodal (dense blocks of columns, register-tiled kernels), chosen
   from the symbolic flop count: 37 ms to factor the 2D Laplacian with
-  90,601 unknowns, where Jacobi-CG takes 924 iterations, and 311 ms for
+  90,601 unknowns, where Jacobi-CG takes 924 iterations, and 300 ms for
   a 30³ grid on one thread (simplicial: 2.15 s). The supernodal factor
-  runs on every core as one task graph, with the same bits: 73 ms for
+  runs on every core as one task graph, with the same bits: 64 ms for
   the 30³ grid on 8 cores.
 - **Algebraic multigrid** (`SmoothedAggregation(A)`): a V-cycle
   preconditioner for SPD matrices, built from the matrix alone, with
