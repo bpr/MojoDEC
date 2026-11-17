@@ -378,7 +378,15 @@ var A = BlockOp(W1 * -1.0, d1.T(), d1, tc.zero[0, DUAL, 2, PRIMAL]())
 var F = BlockSparseLDLT(A)               # factored once
 var x = F.solve(b)                       # CochainPair of flux and pressure
 print(F.inertia())                       # (triangles, edges)
+
+var us = C.solve(fs)                     # List[TypedCochain] in and out
+var xs = F.solve(bs)                     # List[CochainPair] in and out
 ```
+
+Given a `List` of right-hand sides, each wrapper solves them as one
+block ([Several right-hand sides](#several-right-hand-sides)): the
+results come back in order, each equal bit for bit to solving that
+right-hand side alone.
 
 A symmetric operator built from the complex ($B^T S B$, a mass, a
 saddle point of them) takes each kind to its dual kind, primal
@@ -440,6 +448,8 @@ instead of dense exact blocks.
   - `test_multiple_right_hand_sides`: columns of `solve(B)` against
     single solves, bit for bit, both layouts, a refined saddle point,
     `SparseCholesky`;
+  - `test_typed_multiple_right_hand_sides`: lists of cochains and of
+    pairs, against single typed solves;
   - `test_typed_factorizations`: the three typed wrappers against
     `spsolve`, inertia of a shifted typed Laplacian and of the Darcy
     block system, and cochains from another complex refused;

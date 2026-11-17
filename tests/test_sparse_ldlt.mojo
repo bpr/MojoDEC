@@ -14,6 +14,7 @@ from mojodec import (
     CochainPair,
     FactorLayout,
     FillOrdering,
+    TypedCochain,
     TypedComplex,
     TypedSparseCholesky,
     TypedSparseLDLT,
@@ -474,6 +475,62 @@ def test_typed_factorizations() raises:
         _ = F.solve(
             CochainPair(other.cochain[1, DUAL](), other.cochain[2, PRIMAL]())
         )
+
+
+def test_typed_multiple_right_hand_sides() raises:
+    # a list of cochains solved as one block: each result the single
+    # solve bit for bit, for the three typed wrappers
+    var tc = TypedComplex[2](kuhn_grid([7, 6]))
+    var d0 = tc.d[0, PRIMAL]()
+    var W0 = whitney_innerproduct[0](tc)
+    var W1 = whitney_innerproduct[1](tc)
+    var K = d0.T() @ W1 @ d0 + W0
+    var fs = List[TypedCochain[2, 2, DUAL]]()
+    for seed in range(5):
+        var f = tc.cochain[2, DUAL]()
+        for i in range(len(f)):
+            f[i] = Float64((i * 3 + seed) % 7) - 3.0
+        fs.append(f^)
+    var C = TypedSparseCholesky(K)
+    var L = TypedSparseLDLT(K - W0 * 30.0)
+    var us = C.solve(fs)  # List[TypedCochain[2, 0, PRIMAL]]
+    var xs = L.solve(fs)
+    assert_equal(len(us), 5)
+    assert_equal(len(xs), 5)
+    for c in range(5):
+        var u = C.solve(fs[c])
+        var x = L.solve(fs[c])
+        for i in range(len(u)):
+            assert_equal(us[c][i], u[i])
+            assert_equal(xs[c][i], x[i])
+    assert_equal(len(C.solve(List[TypedCochain[2, 2, DUAL]]())), 0)
+    # the mixed Darcy saddle point
+    var d1 = tc.d[1, PRIMAL]()
+    var A = BlockOp(W1 * -1.0, d1.T(), d1, tc.zero[0, DUAL, 2, PRIMAL]())
+    var F = BlockSparseLDLT(A)
+    var bs = List[CochainPair[2, 1, DUAL, 2, PRIMAL]]()
+    for seed in range(3):
+        var g = tc.cochain[1, DUAL]()
+        var h = tc.cochain[2, PRIMAL]()
+        for i in range(len(g)):
+            g[i] = Float64((i * 3 + seed) % 7) - 3.0
+        for i in range(len(h)):
+            h[i] = Float64((i + seed) % 4) - 1.5
+        bs.append(CochainPair(g^, h^))
+    var ys = F.solve(bs)
+    for c in range(3):
+        var y = F.solve(bs[c])
+        for i in range(len(y.first)):
+            assert_equal(ys[c].first[i], y.first[i])
+        for i in range(len(y.second)):
+            assert_equal(ys[c].second[i], y.second[i])
+    # cochains from another complex are refused
+    var other = TypedComplex[2](kuhn_grid([7, 6]))
+    var mixed = List[TypedCochain[2, 2, DUAL]]()
+    mixed.append(fs[0].copy())
+    mixed.append(other.cochain[2, DUAL]())
+    with assert_raises(contains="TypedSparseCholesky.solve: b is on a"):
+        _ = C.solve(mixed)
 
 
 def _ints(xs: List[Int]) -> List[Int]:

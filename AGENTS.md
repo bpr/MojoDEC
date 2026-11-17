@@ -358,7 +358,9 @@ plan). Key design points that span several files:
   `_PARALLEL_SOLVE_WORK` (stored entries x m = 4e6) column blocks go to
   the physical cores (`_solve_all_columns`). Refinement residuals are
   `_A.apply_into` per column. 30^3, m = 64: 344 ms as single solves, 156
-  ms one thread, 41 ms on 8.
+  ms one thread, 41 ms on 8. The typed wrappers overload `solve` on a `List` of
+  cochains (`BlockSparseLDLT`: of `CochainPair`s), packed into one n x m
+  solve (`_typed_solve_many`, `_columns_of`, `_column`).
   3-7x faster factors than simplicial in 3D on one thread, about 4x more
   on 8 cores; results differ from simplicial in the last bits. The
   supernodal path relabels `etree` and `counts` by the postorder instead

@@ -1031,6 +1031,61 @@ def _same_complex(
         raise Error(String(who, ".solve: b is on a different complex"))
 
 
+def _columns_of(vs: List[RealArray], n: Int, who: String) raises -> RealArray:
+    """The vectors as the columns of an `n x m` array."""
+    var B = real_array(n, len(vs))
+    for c in range(len(vs)):
+        if vs[c].size != n:
+            raise Error(
+                String(
+                    who,
+                    ".solve: right-hand side ",
+                    c,
+                    " has length ",
+                    vs[c].size,
+                    ", not ",
+                    n,
+                )
+            )
+        for i in range(n):
+            fset(B, i, c, vs[c].unsafe_get(i))
+    return B^
+
+
+def _column(X: RealArray, c: Int, lo: Int, hi: Int) raises -> RealArray:
+    """Rows `lo..hi` of column `c` of `X`."""
+    var x = real_vector(hi - lo)
+    for i in range(lo, hi):
+        x.unsafe_set(i - lo, fget(X, i, c))
+    return x^
+
+
+def _typed_solve_many[
+    n: Int, in_k: Int, in_primal: Bool, out_k: Int, out_primal: Bool
+](
+    factor: SparseLDLT,
+    complex: Optional[SimplicialComplex],
+    bs: List[TypedCochain[n, out_k, out_primal]],
+    who: String,
+) raises -> List[TypedCochain[n, in_k, in_primal]]:
+    """`factor.solve` of the cochains as one `n x m` block."""
+    var vs = List[RealArray](capacity=len(bs))
+    for c in range(len(bs)):
+        _same_complex(complex, bs[c].complex, who)
+        vs.append(bs[c].v.copy())
+    var out = List[TypedCochain[n, in_k, in_primal]](capacity=len(bs))
+    if len(bs) == 0:
+        return out^
+    var X = factor.solve(_columns_of(vs, factor.n, who))
+    for c in range(len(bs)):
+        out.append(
+            TypedCochain[n, in_k, in_primal](
+                bs[c].complex, _column(X, c, 0, factor.n)
+            )
+        )
+    return out^
+
+
 struct TypedSparseLDLT[
     n: Int, in_k: Int, in_primal: Bool, out_k: Int, out_primal: Bool
 ](Movable):
@@ -1122,6 +1177,26 @@ struct TypedSparseLDLT[
             b.complex, self.factor.solve(b.v)
         )
 
+    def solve(
+        self, bs: List[TypedCochain[Self.n, Self.out_k, Self.out_primal]]
+    ) raises -> List[TypedCochain[Self.n, Self.in_k, Self.in_primal]]:
+        """Solve `A x = b` for every cochain of `bs` at once, as
+        `SparseLDLT.solve` of an `n x m` array: each block of `L` read once
+        for all of them, each result `solve(bs[c])` bit for bit.
+
+        Args:
+            bs: The right-hand sides, of `A`'s output kind.
+
+        Returns:
+            The solutions, of `A`'s input kind, in the same order.
+
+        Raises:
+            If a cochain is on another complex than `A`.
+        """
+        return _typed_solve_many[
+            Self.n, Self.in_k, Self.in_primal, Self.out_k, Self.out_primal
+        ](self.factor, self.complex, bs, "TypedSparseLDLT")
+
     def inertia(self) -> Inertia:
         """The signs of `A`'s eigenvalues; see `SparseLDLT.inertia`.
 
@@ -1212,6 +1287,26 @@ struct TypedSparseCholesky[
         return TypedCochain[Self.n, Self.in_k, Self.in_primal](
             b.complex, self.factor.solve(b.v)
         )
+
+    def solve(
+        self, bs: List[TypedCochain[Self.n, Self.out_k, Self.out_primal]]
+    ) raises -> List[TypedCochain[Self.n, Self.in_k, Self.in_primal]]:
+        """Solve `A x = b` for every cochain of `bs` at once, as
+        `SparseLDLT.solve` of an `n x m` array: each block of `L` read once
+        for all of them, each result `solve(bs[c])` bit for bit.
+
+        Args:
+            bs: The right-hand sides, of `A`'s output kind.
+
+        Returns:
+            The solutions, of `A`'s input kind, in the same order.
+
+        Raises:
+            If a cochain is on another complex than `A`.
+        """
+        return _typed_solve_many[
+            Self.n, Self.in_k, Self.in_primal, Self.out_k, Self.out_primal
+        ](self.factor.factor, self.complex, bs, "TypedSparseCholesky")
 
 
 struct BlockSparseLDLT[
@@ -1343,6 +1438,55 @@ struct BlockSparseLDLT[
             TypedCochain[Self.n, Self.in1_k, Self.in1_p](complex, first^),
             TypedCochain[Self.n, Self.in2_k, Self.in2_p](complex, second^),
         )
+
+    def solve(
+        self,
+        bs: List[
+            CochainPair[
+                Self.n, Self.out1_k, Self.out1_p, Self.out2_k, Self.out2_p
+            ]
+        ],
+    ) raises -> List[
+        CochainPair[Self.n, Self.in1_k, Self.in1_p, Self.in2_k, Self.in2_p]
+    ]:
+        """Solve `A x = b` for every pair of `bs` at once, as
+        `SparseLDLT.solve` of an `n x m` array: each block of `L` read once
+        for all of them, each result `solve(bs[c])` bit for bit.
+
+        Args:
+            bs: The right-hand sides, of `A`'s output kinds.
+
+        Returns:
+            The unknowns, of `A`'s input kinds, in the same order.
+
+        Raises:
+            If a pair is on another complex than `A`.
+        """
+        var vs = List[RealArray](capacity=len(bs))
+        for c in range(len(bs)):
+            _same_complex(self.complex, bs[c].first.complex, "BlockSparseLDLT")
+            vs.append(bs[c].stacked())
+        var out = List[
+            CochainPair[Self.n, Self.in1_k, Self.in1_p, Self.in2_k, Self.in2_p]
+        ](capacity=len(bs))
+        if len(bs) == 0:
+            return out^
+        var N = self.factor.n
+        var X = self.factor.solve(_columns_of(vs, N, "BlockSparseLDLT"))
+        var n1 = self._n1
+        for c in range(len(bs)):
+            var complex = bs[c].first.complex
+            out.append(
+                CochainPair(
+                    TypedCochain[Self.n, Self.in1_k, Self.in1_p](
+                        complex, _column(X, c, 0, n1)
+                    ),
+                    TypedCochain[Self.n, Self.in2_k, Self.in2_p](
+                        complex, _column(X, c, n1, N)
+                    ),
+                )
+            )
+        return out^
 
     def inertia(self) -> Inertia:
         """The signs of `A`'s eigenvalues: for a saddle point
