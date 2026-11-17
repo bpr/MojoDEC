@@ -350,7 +350,15 @@ plan). Key design points that span several files:
   `vals` is allocated uninitialized and each task zeroes the block or
   columns it assembles (parallel first touch). The frame's pointers are
   untracked: keep the lists they point into alive (`_ = x^`) past the
-  parallel call. Solves gather each supernode's rows once and are serial.
+  parallel call. Solves gather each supernode's rows once. `solve(B)`
+  (n x m) is `_solve_many`: `B` gathered by columns (permuted), then
+  `_solve_columns(Y, c_lo, c_hi)` applies each supernode (or simplicial
+  column) to every column in turn; `_solve_factored` is its one-column
+  case, so column c is the single solve bit for bit. Above
+  `_PARALLEL_SOLVE_WORK` (stored entries x m = 4e6) column blocks go to
+  the physical cores (`_solve_all_columns`). Refinement residuals are
+  `_A.apply_into` per column. 30^3, m = 64: 344 ms as single solves, 156
+  ms one thread, 41 ms on 8.
   3-7x faster factors than simplicial in 3D on one thread, about 4x more
   on 8 cores; results differ from simplicial in the last bits. The
   supernodal path relabels `etree` and `counts` by the postorder instead

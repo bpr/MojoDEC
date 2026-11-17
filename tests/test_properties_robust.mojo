@@ -43,6 +43,8 @@ from mojodec.core.utils import (
     real_array,
     real_array_from_rows,
     real_vector,
+    rows_of,
+    cols_of,
 )
 from mojodec.routines import dense
 from mojodec.routines.io.arrayio import (
@@ -873,6 +875,44 @@ def test_sparse_cholesky_matches_dense_solves() raises:
     given(
         lists(integers(-5, 5), min_size=1, max_size=120),
         integers(1, 40),
+        prop,
+        quick(),
+    )
+
+
+def test_sparse_ldlt_solves_many_right_hand_sides() raises:
+    """For SPD A (n <= 40) and an n x m B (m <= 6), each column of
+    `SparseLDLT.solve(B)`, with either layout and one refinement step, is
+    the single-vector solve of that column bit for bit, and close to the
+    dense solution."""
+
+    def prop(ints: List[Int], n: Int, m: Int) raises:
+        var D = _graph(n, ints, True)
+        var A = _csr(D)
+        var B = real_array(n, m)
+        for c in range(m):
+            var b = _vector(n, ints, c + 1)
+            for i in range(n):
+                fset(B, i, c, b.unsafe_get(i))
+        for layout in [FactorLayout.SIMPLICIAL, FactorLayout.SUPERNODAL]:
+            var F = SparseLDLT(A, layout=layout)
+            var X = F.solve(B)
+            if rows_of(X) != n or cols_of(X) != m:
+                fail("X has the wrong shape")
+            for c in range(m):
+                var b = real_vector(n)
+                for i in range(n):
+                    b.unsafe_set(i, fget(B, i, c))
+                var x = F.solve(b)
+                for i in range(n):
+                    if x.unsafe_get(i) != fget(X, i, c):
+                        fail(String("column ", c, " differs at row ", i))
+                _close(x, dense.solve(D, b), 1e-10, "many")
+
+    given(
+        lists(integers(-5, 5), min_size=1, max_size=120),
+        integers(1, 40),
+        integers(1, 6),
         prop,
         quick(),
     )

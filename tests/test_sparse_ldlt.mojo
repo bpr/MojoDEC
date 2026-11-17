@@ -27,7 +27,15 @@ from mojodec import (
     whitney_innerproduct,
 )
 from mojodec.core.sparse import CSRMatrix
-from mojodec.core.utils import RealArray, norm2, probe_vector, real_vector
+from mojodec.core.utils import (
+    RealArray,
+    fget,
+    fset,
+    norm2,
+    probe_vector,
+    real_array,
+    real_vector,
+)
 from mojodec.routines.linalg import eigh_generalized, spsolve
 from mojodec.routines.supernodal import etree_postorder
 
@@ -472,6 +480,50 @@ def _ints(xs: List[Int]) -> List[Int]:
     return xs.copy()
 
 
+def test_multiple_right_hand_sides() raises:
+    # X = A^-1 B for an n x m B: each column the single-vector solve, bit
+    # for bit, for both layouts, the saddle point with refinement, and
+    # SparseCholesky
+    var sc = SimplicialComplex(kuhn_grid([5, 5, 5]))
+    var mats = List[CSRMatrix]()
+    mats.append(_laplacian(sc, 1))
+    mats.append(_saddle(whitney_innerproduct(sc, 2), sc[2].d, False))
+    for t in range(len(mats)):
+        ref A = mats[t]
+        var n = A.nrows
+        for m in [1, 3, 9]:
+            var B = real_array(n, m)
+            for c in range(m):
+                var b = probe_vector(n, UInt64(c + 1))
+                for i in range(n):
+                    fset(B, i, c, b.unsafe_get(i))
+            for layout in [FactorLayout.SIMPLICIAL, FactorLayout.SUPERNODAL]:
+                var F = SparseLDLT(A, layout=layout)
+                var X = F.solve(B)
+                assert_equal(X.shape[0], n)
+                assert_equal(X.shape[1], m)
+                for c in range(m):
+                    var b = real_vector(n)
+                    for i in range(n):
+                        b.unsafe_set(i, fget(B, i, c))
+                    var x = F.solve(b)
+                    for i in range(n):
+                        assert_equal(fget(X, i, c), x.unsafe_get(i))
+                    assert_true(_residual(A, x, b) < 1e-12)
+    var C = SparseCholesky(mats[0])
+    var B = real_array(mats[0].nrows, 2)
+    for i in range(mats[0].nrows):
+        fset(B, i, 0, 1.0)
+        fset(B, i, 1, Float64(i))
+    var X = C.solve(B)
+    var b1 = real_vector(mats[0].nrows)
+    for i in range(mats[0].nrows):
+        b1.unsafe_set(i, Float64(i))
+    var x1 = C.solve(b1)
+    for i in range(mats[0].nrows):
+        assert_equal(fget(X, i, 1), x1.unsafe_get(i))
+
+
 def test_errors() raises:
     with assert_raises(contains="the matrix is 2 x 3"):
         _ = SparseLDLT(CSRMatrix(2, 3))
@@ -499,9 +551,12 @@ def test_errors() raises:
     var y = real_vector(2)
     with assert_raises(contains="vectors of length 3 and 2 for n = 2"):
         F.apply_into(real_vector(3), y)
+    with assert_raises(contains="B has 3 rows, not 2"):
+        _ = F.solve(real_array(3, 2))
     # the empty matrix factors, and solves the empty system
     var E = SparseLDLT(CSRMatrix(0, 0))
     assert_equal(E.solve(real_vector(0)).size, 0)
+    assert_equal(E.solve(real_array(0, 3)).size, 0)
 
 
 def main() raises:

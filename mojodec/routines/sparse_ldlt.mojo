@@ -42,12 +42,23 @@ from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.typed import MatrixOp, TypedCochain
 from mojodec.core.typed_block import BlockOp, CochainPair
-from mojodec.core.utils import RealArray, real_vector
+from mojodec.core.parallel import parallel_ranges
+from mojodec.core.utils import (
+    RealArray,
+    cols_of,
+    fget,
+    fset,
+    real_array,
+    real_vector,
+    rows_of,
+)
 from mojodec.routines.ordering import amd_ordering
 from mojodec.routines.supernodal import _Supernodal, etree_postorder
 
 
 comptime _NONE = -1
+comptime _PARALLEL_SOLVE_WORK = 4.0e6
+"""Solves of fewer stored entries times right-hand sides run serially."""
 comptime _SUPERNODAL_RATIO = 20.0
 """`FactorLayout.AUTO` goes supernodal above this many flops per entry of
 `L` (faer's rule, with faer's 40 lowered to where MojoDEC's kernels
@@ -498,46 +509,91 @@ struct SparseLDLT(LinearOperator, Movable):
         return Inertia(pos, self.n - pos)
 
     def _solve_factored(self, b: RealArray, mut out: RealArray):
+        """`out = (P^T L D L^T P)^-1 b`: `_solve_columns` with one column."""
         var n = self.n
         var y = List[Float64](length=n, fill=0)
         for k in range(n):
             y[k] = b.unsafe_get(self.perm[k])
-        if self._super:
-            self._super.value().solve_in_place(y)
-            for k in range(n):
-                out.unsafe_set(self.perm[k], y[k])
-            return
-        for j in range(n):  # L y = P b
-            var yj = y[j]
-            if yj != 0:
-                for p in range(self._Lp[j] + 1, self._Lp[j + 1]):
-                    y[self._Li[p]] -= self._Lx[p] * yj
-        for j in range(n):  # D
-            y[j] = y[j] / self._Lx[self._Lp[j]]
-        for j in range(n - 1, -1, -1):  # L^T
-            var s = y[j]
-            for p in range(self._Lp[j] + 1, self._Lp[j + 1]):
-                s -= self._Lx[p] * y[self._Li[p]]
-            y[j] = s
+        self._solve_columns(
+            y.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), 0, 1
+        )
         for k in range(n):
             out.unsafe_set(self.perm[k], y[k])
 
+    def _solve_columns(
+        self, Y: Pointer[Float64, MutUntrackedOrigin], c_lo: Int, c_hi: Int
+    ):
+        """`Y[:, c] = (L D L^T)^-1 Y[:, c]` for columns `c_lo..c_hi` of a
+        column-major `n`-row `Y`, in the permuted numbering. Each column of
+        `L` (or supernode) is applied to every column of `Y` in turn, and
+        each column of `Y` gets the same operations as when solved alone."""
+        if self._super:
+            self._super.value().solve_columns(Y, c_lo, c_hi)
+            return
+        var n = self.n
+        for j in range(n):  # L y = P b
+            var lo = self._Lp[j] + 1
+            var hi = self._Lp[j + 1]
+            for c in range(c_lo, c_hi):
+                var y = Y.unsafe_offset(c * n)
+                var yj = y[unsafe_offset=j]
+                if yj != 0:
+                    for p in range(lo, hi):
+                        y[unsafe_offset=self._Li[p]] -= self._Lx[p] * yj
+        for c in range(c_lo, c_hi):  # D
+            var y = Y.unsafe_offset(c * n)
+            for j in range(n):
+                y[unsafe_offset=j] = y[unsafe_offset=j] / self._Lx[self._Lp[j]]
+        for j in range(n - 1, -1, -1):  # L^T
+            var lo = self._Lp[j] + 1
+            var hi = self._Lp[j + 1]
+            for c in range(c_lo, c_hi):
+                var y = Y.unsafe_offset(c * n)
+                var s = y[unsafe_offset=j]
+                for p in range(lo, hi):
+                    s -= self._Lx[p] * y[unsafe_offset=self._Li[p]]
+                y[unsafe_offset=j] = s
+
+    def _solve_all_columns(self, mut Y: List[Float64], m: Int):
+        """`_solve_columns` on all `m` columns of `Y`, split into blocks of
+        columns across the physical cores when the work is large enough
+        (`MOJODEC_NUM_THREADS` caps them). The bits do not depend on the
+        split."""
+        var Yp = Y.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        var stored = self.stored_entries()
+        if m < 2 or Float64(stored) * Float64(m) < _PARALLEL_SOLVE_WORK:
+            self._solve_columns(Yp, 0, m)
+            return
+
+        def columns(chunk: Int, lo: Int, hi: Int) {self, Yp}:
+            self._solve_columns(Yp, lo, hi)
+
+        parallel_ranges(m, 2, columns, memory_bound=True)
+
     def solve(self, b: RealArray) raises -> RealArray:
-        """Solve `A x = b`.
+        """Solve `A x = b`, or `A X = B` for an `n x m` array `B`.
 
         After the triangular solves, `refinement_steps` steps of
         `x += F^-1 (b - A x)` correct the rounding of an unpivoted
         factorization and, with regularized pivots, the perturbation.
 
+        With several right-hand sides, each block of `L` is read once for
+        all of them, and blocks of columns run on separate cores; column
+        `c` of `X` is `solve(B[:, c])` bit for bit.
+
         Args:
-            b: The length-`n` right-hand side.
+            b: The length-`n` right-hand side, or an `n x m` array of `m`
+                right-hand sides (C-contiguous).
 
         Returns:
-            `x`.
+            `x`, of `b`'s shape.
 
         Raises:
-            If `b` does not have length `n`.
+            If `b` does not have `n` entries (or rows), or is a non-
+            contiguous 2-D array.
         """
+        if b.ndim == 2:
+            return self._solve_many(b)
         if b.size != self.n:
             raise Error(
                 String(
@@ -547,6 +603,44 @@ struct SparseLDLT(LinearOperator, Movable):
         var x = real_vector(self.n)
         self.apply_into(b, x)
         return x^
+
+    def _solve_many(self, B: RealArray) raises -> RealArray:
+        """`solve` for an `n x m` `B`."""
+        var n = self.n
+        var m = cols_of(B)
+        if rows_of(B) != n:
+            raise Error(
+                String("SparseLDLT.solve: B has ", rows_of(B), " rows, not ", n)
+            )
+        if not B.flags.C_CONTIGUOUS:
+            raise Error("SparseLDLT.solve: B is not C-contiguous")
+        var X = real_array(n, m)
+        var Y = List[Float64](length=n * m, fill=0)  # by columns, permuted
+        for c in range(m):
+            for k in range(n):
+                Y[c * n + k] = fget(B, self.perm[k], c)
+        self._solve_all_columns(Y, m)
+        for c in range(m):
+            for k in range(n):
+                fset(X, self.perm[k], c, Y[c * n + k])
+        # refinement, column by column as `apply_into` does it
+        var x = real_vector(n)
+        var r = real_vector(n)
+        for _ in range(self.refinement_steps):
+            for c in range(m):
+                for i in range(n):
+                    x.unsafe_set(i, fget(X, i, c))
+                self._A.apply_into(x, r)
+                for i in range(n):
+                    r.unsafe_set(i, fget(B, i, c) - r.unsafe_get(i))
+                for k in range(n):
+                    Y[c * n + k] = r.unsafe_get(self.perm[k])
+            self._solve_all_columns(Y, m)
+            for c in range(m):
+                for k in range(n):
+                    var i = self.perm[k]
+                    fset(X, i, c, fget(X, i, c) + Y[c * n + k])
+        return X^
 
     def apply_into(self, x: RealArray, mut y: RealArray) raises:
         """`y = A^-1 x`, as `solve`.
@@ -655,16 +749,19 @@ struct SparseCholesky(Movable, Preconditioner):
         return self.factor.n
 
     def solve(self, b: RealArray) raises -> RealArray:
-        """Solve `A x = b`.
+        """Solve `A x = b`, or `A X = B` for an `n x m` array `B` (each
+        column as `solve` of it alone, bit for bit; see
+        `SparseLDLT.solve`).
 
         Args:
-            b: The length-`n` right-hand side.
+            b: The length-`n` right-hand side, or an `n x m` array of `m`
+                right-hand sides (C-contiguous).
 
         Returns:
-            `x`.
+            `x`, of `b`'s shape.
 
         Raises:
-            If `b` does not have length `n`.
+            If `b` does not have `n` entries (or rows).
         """
         return self.factor.solve(b)
 

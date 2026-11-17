@@ -303,6 +303,35 @@ var solution = spsolve(
 The default, `DirectMethod.DENSE_LU`, is the dense pivoted LU, for any
 non-singular matrix of a few thousand unknowns.
 
+## Several right-hand sides
+
+`F.solve(B)` with an $n \times m$ array `B` solves $A X = B$. Solving the
+columns one by one streams the whole factor through memory $m$ times:
+122 MB per solve for the 30³ grid, more than the cache holds. The block
+solve applies each block of $L$ (or each column, if simplicial) to every
+right-hand side while it is in cache, and splits the columns into blocks
+for the physical cores. Each column gets exactly the operations of a
+single-vector solve, refinement included, so column $c$ of the result is
+`F.solve(B[:, c])` bit for bit, and the thread count does not change it.
+
+Measured on the 30³ grid (supernodal, no refinement) and the 2D 300 × 300
+grid; one call against $m$ separate solves:
+
+| matrix | $m$ | $m$ solves | block, 1 thread | block, 8 cores |
+|---|---|---|---|---|
+| 3D grid 30³ | 16 | 86 ms | 40 ms | 12 ms |
+| 3D grid 30³ | 64 | 344 ms | 156 ms | 41 ms |
+| 2D grid 300 × 300 | 64 | 157 ms | 139 ms | 52 ms |
+
+On one thread the block solve gains where the blocks are large, in 3D;
+the 2D factor's supernodes are small, and the gathers and scatters each
+column still does dominate.
+
+Uses: many load cases on one mesh, a block of probe vectors, the columns
+of a basis to project (`deflate=` in `eigsh` has `G` with a few columns).
+With refinement, each column's residual is one product with $A$, column
+by column.
+
 ## The API
 
 ```mojo
@@ -316,6 +345,7 @@ var F = SparseLDLT(
     layout=FactorLayout.AUTO,            # or .SIMPLICIAL, .SUPERNODAL
 )
 F.solve(b)                # A x = b
+F.solve(B)                # A X = B, B n x m: every column at once
 F.apply_into(b, x)        # the same, as a LinearOperator
 F.inertia()               # Inertia(positive, negative)
 F.factor_nonzeros()       # nnz(L), its diagonal included
@@ -379,7 +409,7 @@ instead of dense exact blocks.
   30³ vertices; the supernodal blocks store 15.2 M values, 122 MB, and
   few indices). Watch `factor_nonzeros()` and `stored_entries()`.
 - **Threads.** Only the supernodal numeric factorization is parallel.
-  The simplicial factor, the solves, AMD, and the symbolic analysis
+  The simplicial factor, single-vector solves, AMD, and the symbolic analysis
   (elimination tree and column counts, 2 ms for the 30³ grid) run on
   one thread. Hyperthreads are left out: waiting threads spin, and on
   a core's second hardware thread they slowed the working one.
@@ -407,6 +437,9 @@ instead of dense exact blocks.
     Darcy in both block orders, an indefinite shifted Laplacian: the
     same fill and inertia, solutions to rounding, and `AUTO`'s choice;
   - `test_supernodal_regularization_and_errors`; `test_etree_postorder`;
+  - `test_multiple_right_hand_sides`: columns of `solve(B)` against
+    single solves, bit for bit, both layouts, a refined saddle point,
+    `SparseCholesky`;
   - `test_typed_factorizations`: the three typed wrappers against
     `spsolve`, inertia of a shifted typed Laplacian and of the Darcy
     block system, and cochains from another complex refused;
@@ -416,13 +449,17 @@ instead of dense exact blocks.
   layouts, `nnz(L)` against `cholesky_nonzeros`),
   `test_sparse_ldlt_solves_saddle_points` (random saddle points in either
   block order, either layout), and
-  `test_etree_postorder_is_a_postorder` (random forests), and
+  `test_etree_postorder_is_a_postorder` (random forests),
+  `test_sparse_ldlt_solves_many_right_hand_sides` (random SPD and
+  right-hand sides: block columns equal single solves), and
   `test_column_counts_match_dense_elimination` (the elimination tree and
   column counts against symbolic elimination on a dense Boolean matrix).
 - `tests/test_parallel.mojo`:
   - `test_parallel_supernodal_matches_serial`: the factor's every value
     on 2, 3, and 8 threads and all cores equal to one thread's, for 3D
     0- and 1-form Laplacians, a 2D grid, and a regularized saddle point;
+  - `test_parallel_block_solves_match_serial`: 40 right-hand sides on
+    1, 3, and all threads, both layouts;
   - `test_parallel_supernodal_failures_match_serial`: a pivot overflowing
     in the root supernode, and zero pivots in two separate subtrees,
     report the serial error.

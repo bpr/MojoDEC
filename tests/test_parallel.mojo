@@ -32,6 +32,7 @@ from mojodec.core.utils import (
     compare_rows,
     fget,
     fset,
+    real_array,
     iget,
     int_array,
     iset,
@@ -665,6 +666,31 @@ def test_parallel_supernodal_matches_serial() raises:
     for _ in range(M.nrows):
         signs.append(-1)
     _check_supernodal_matches_serial(K, signs)
+
+
+def test_parallel_block_solves_match_serial() raises:
+    # many right-hand sides: blocks of columns on separate threads, the
+    # same bits as on one
+    var A = _laplacian_3d(12, 0)
+    var n = A.nrows
+    var m = 40
+    var B = real_array(n, m)
+    for c in range(m):
+        for i in range(n):
+            fset(B, i, c, Float64((i * 7 + c * 13) % 11) - 5.0)
+    for layout in [FactorLayout.SIMPLICIAL, FactorLayout.SUPERNODAL]:
+        var F = SparseLDLT(A, layout=layout)
+        _ = setenv("MOJODEC_NUM_THREADS", "1")
+        var want = F.solve(B)
+        for threads in ["3", ""]:
+            if threads:
+                _ = setenv("MOJODEC_NUM_THREADS", threads)
+            else:
+                _ = unsetenv("MOJODEC_NUM_THREADS")
+            var got = F.solve(B)
+            for i in range(n * m):
+                assert_equal(got.unsafe_get(i), want.unsafe_get(i))
+        _ = unsetenv("MOJODEC_NUM_THREADS")
 
 
 def _supernodal_error(A: CSRMatrix, perm: List[Int], threads: String) -> String:

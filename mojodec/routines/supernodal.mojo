@@ -426,12 +426,23 @@ struct _Supernodal(Movable):
         return self.vals[self.diag_at[k]]
 
     def solve_in_place(self, mut y: List[Float64]):
-        """`y = (L D L^T)^-1 y`, in the permuted numbering. Per supernode,
-        the rows below its triangle are gathered once into a dense vector,
-        so the inner loops run down contiguous columns."""
+        """`y = (L D L^T)^-1 y`, in the permuted numbering: `solve_columns`
+        with one column."""
+        self.solve_columns(
+            y.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), 0, 1
+        )
+
+    def solve_columns(self, Y: _FloatPtr, c_lo: Int, c_hi: Int):
+        """`Y[:, c] = (L D L^T)^-1 Y[:, c]` for the columns `c_lo..c_hi` of
+        a column-major `n`-row `Y`, in the permuted numbering. Supernode by
+        supernode, each block applied to every column while it is in
+        cache; per supernode and column, the rows below its triangle are
+        gathered once into a dense vector, so the inner loops run down
+        contiguous columns. Each column gets the same operations as when
+        solved alone."""
         var ns = len(self.begin) - 1
+        var n = self.n
         var vp = self.vals.unsafe_ptr()
-        var yp = y.unsafe_ptr()
         var maxdeg = 0
         for s in range(ns):
             maxdeg = max(maxdeg, self.row_ptr[s + 1] - self.row_ptr[s])
@@ -445,47 +456,53 @@ struct _Supernodal(Movable):
             var deg = self.row_ptr[s + 1] - rp
             var nr = nc + deg
             var base = self.val_ptr[s]
-            for r in range(deg):
-                bp[unsafe_offset=r] = 0
-            for j in range(nc):
-                var xj = yp[unsafe_offset=s0 + j]
-                if xj == 0:
-                    continue
-                var col = base + j * nr
-                var xv = V(-xj)
-                var i = j + 1
-                while i + _W <= nc:
-                    yp.unsafe_store(
-                        s0 + i,
-                        vp.unsafe_load[width=_W](col + i).fma(
-                            xv, yp.unsafe_load[width=_W](s0 + i)
-                        ),
-                    )
-                    i += _W
-                while i < nc:
-                    yp[unsafe_offset=s0 + i] -= vp[unsafe_offset=col + i] * xj
-                    i += 1
-                var c = col + nc
-                var r = 0
-                while r + _W <= deg:
-                    bp.unsafe_store(
-                        r,
-                        vp.unsafe_load[width=_W](c + r).fma(
-                            xv, bp.unsafe_load[width=_W](r)
-                        ),
-                    )
-                    r += _W
-                while r < deg:
-                    bp[unsafe_offset=r] = vp[unsafe_offset=c + r].fma(
-                        -xj, bp[unsafe_offset=r]
-                    )
-                    r += 1
-            for r in range(deg):
-                yp[unsafe_offset=self.rows[rp + r]] += bp[unsafe_offset=r]
-        for k in range(self.n):  # D
-            yp[unsafe_offset=k] = (
-                yp[unsafe_offset=k] / vp[unsafe_offset=self.diag_at[k]]
-            )
+            for cy in range(c_lo, c_hi):
+                var yp = Y.unsafe_offset(cy * n)
+                for r in range(deg):
+                    bp[unsafe_offset=r] = 0
+                for j in range(nc):
+                    var xj = yp[unsafe_offset=s0 + j]
+                    if xj == 0:
+                        continue
+                    var col = base + j * nr
+                    var xv = V(-xj)
+                    var i = j + 1
+                    while i + _W <= nc:
+                        yp.unsafe_store(
+                            s0 + i,
+                            vp.unsafe_load[width=_W](col + i).fma(
+                                xv, yp.unsafe_load[width=_W](s0 + i)
+                            ),
+                        )
+                        i += _W
+                    while i < nc:
+                        yp[unsafe_offset=s0 + i] -= (
+                            vp[unsafe_offset=col + i] * xj
+                        )
+                        i += 1
+                    var c = col + nc
+                    var r = 0
+                    while r + _W <= deg:
+                        bp.unsafe_store(
+                            r,
+                            vp.unsafe_load[width=_W](c + r).fma(
+                                xv, bp.unsafe_load[width=_W](r)
+                            ),
+                        )
+                        r += _W
+                    while r < deg:
+                        bp[unsafe_offset=r] = vp[unsafe_offset=c + r].fma(
+                            -xj, bp[unsafe_offset=r]
+                        )
+                        r += 1
+                for r in range(deg):
+                    yp[unsafe_offset=self.rows[rp + r]] += bp[unsafe_offset=r]
+        for cy in range(c_lo, c_hi):  # D
+            var yp = Y.unsafe_offset(cy * n)
+            for k in range(n):
+                yp[unsafe_offset=k] = (
+                    yp[unsafe_offset=k] / vp[unsafe_offset=self.diag_at[k]]
+                )
         for s in range(ns - 1, -1, -1):  # L^T
             var s0 = self.begin[s]
             var nc = self.begin[s + 1] - s0
@@ -493,34 +510,38 @@ struct _Supernodal(Movable):
             var deg = self.row_ptr[s + 1] - rp
             var nr = nc + deg
             var base = self.val_ptr[s]
-            for r in range(deg):
-                bp[unsafe_offset=r] = yp[unsafe_offset=self.rows[rp + r]]
-            for j in range(nc - 1, -1, -1):
-                var col = base + j * nr
-                var c = col + nc
-                var accv = V(0)
-                var r = 0
-                while r + _W <= deg:
-                    accv = vp.unsafe_load[width=_W](c + r).fma(
-                        bp.unsafe_load[width=_W](r), accv
-                    )
-                    r += _W
-                var acc = yp[unsafe_offset=s0 + j] - accv.reduce_add()
-                while r < deg:
-                    acc -= vp[unsafe_offset=c + r] * bp[unsafe_offset=r]
-                    r += 1
-                var i = j + 1
-                var tv = V(0)
-                while i + _W <= nc:
-                    tv = vp.unsafe_load[width=_W](col + i).fma(
-                        yp.unsafe_load[width=_W](s0 + i), tv
-                    )
-                    i += _W
-                acc -= tv.reduce_add()
-                while i < nc:
-                    acc -= vp[unsafe_offset=col + i] * yp[unsafe_offset=s0 + i]
-                    i += 1
-                yp[unsafe_offset=s0 + j] = acc
+            for cy in range(c_lo, c_hi):
+                var yp = Y.unsafe_offset(cy * n)
+                for r in range(deg):
+                    bp[unsafe_offset=r] = yp[unsafe_offset=self.rows[rp + r]]
+                for j in range(nc - 1, -1, -1):
+                    var col = base + j * nr
+                    var c = col + nc
+                    var accv = V(0)
+                    var r = 0
+                    while r + _W <= deg:
+                        accv = vp.unsafe_load[width=_W](c + r).fma(
+                            bp.unsafe_load[width=_W](r), accv
+                        )
+                        r += _W
+                    var acc = yp[unsafe_offset=s0 + j] - accv.reduce_add()
+                    while r < deg:
+                        acc -= vp[unsafe_offset=c + r] * bp[unsafe_offset=r]
+                        r += 1
+                    var i = j + 1
+                    var tv = V(0)
+                    while i + _W <= nc:
+                        tv = vp.unsafe_load[width=_W](col + i).fma(
+                            yp.unsafe_load[width=_W](s0 + i), tv
+                        )
+                        i += _W
+                    acc -= tv.reduce_add()
+                    while i < nc:
+                        acc -= (
+                            vp[unsafe_offset=col + i] * yp[unsafe_offset=s0 + i]
+                        )
+                        i += 1
+                    yp[unsafe_offset=s0 + j] = acc
 
     def num_supernodes(self) -> Int:
         """The number of supernodes."""
