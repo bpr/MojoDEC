@@ -211,6 +211,66 @@ def _sub_dots(
 
 
 @always_inline
+def _down_triangle(
+    vp: Pointer[Float64, ...],
+    col: Int,
+    yp: Pointer[mut=True, Float64, ...],
+    s0: Int,
+    lo: Int,
+    nc: Int,
+    xj: Float64,
+):
+    """`yp[s0 + i] -= vp[col + i] xj` for `i` in `lo..nc` by fused
+    multiply-adds: a column of a supernode's triangle in the forward
+    solve."""
+    comptime V = SIMD[DType.float64, _W]
+    var xv = V(-xj)
+    var i = lo
+    while i + _W <= nc:
+        yp.unsafe_store(
+            s0 + i,
+            vp.unsafe_load[width=_W](col + i).fma(
+                xv, yp.unsafe_load[width=_W](s0 + i)
+            ),
+        )
+        i += _W
+    while i < nc:
+        yp[unsafe_offset=s0 + i] = vp[unsafe_offset=col + i].fma(
+            -xj, yp[unsafe_offset=s0 + i]
+        )
+        i += 1
+
+
+@always_inline
+def _up_triangle(
+    vp: Pointer[Float64, ...],
+    col: Int,
+    yp: Pointer[Float64, ...],
+    s0: Int,
+    lo: Int,
+    nc: Int,
+    acc: Float64,
+) -> Float64:
+    """`acc - sum_i vp[col + i] yp[s0 + i]` over `i` in `lo..nc`: `_W`
+    lanes of fused multiply-adds, reduced and subtracted, then the rest
+    one at a time; a column of a supernode's triangle in the backward
+    solve."""
+    comptime V = SIMD[DType.float64, _W]
+    var i = lo
+    var tv = V(0)
+    while i + _W <= nc:
+        tv = vp.unsafe_load[width=_W](col + i).fma(
+            yp.unsafe_load[width=_W](s0 + i), tv
+        )
+        i += _W
+    var out = acc - tv.reduce_add()
+    while i < nc:
+        out = vp[unsafe_offset=col + i].fma(-yp[unsafe_offset=s0 + i], out)
+        i += 1
+    return out
+
+
+@always_inline
 def _dot_lanes(
     a: Pointer[Float64, ...], b: Pointer[Float64, ...], deg_v: Int
 ) -> Float64:
@@ -517,7 +577,10 @@ struct _Supernodal(Movable):
         columns of `Y`) on the way down, `_sub_dots` (pairs of columns of
         `L` by pairs of columns of `Y`) on the way up. Each entry is the
         same chain of fused multiply-adds whatever the number of columns,
-        so a column gets the same bits as when solved alone."""
+        so a column gets the same bits as when solved alone. One column
+        builds those chains column by column of `L` instead, without the
+        copies the products need (a single solve was 20-28% slower
+        through them)."""
         var ns = len(self.begin) - 1
         var n = self.n
         var mb = c_hi - c_lo
@@ -542,28 +605,46 @@ struct _Supernodal(Movable):
             var deg = self.row_ptr[s + 1] - rp
             var nr = nc + deg
             var base = self.val_ptr[s]
+            if mb == 1:
+                # one column: the rows below the triangle get the chains
+                # `_sub_product` builds (from 0, in column order, then
+                # subtracted), built column by column of `L`, each while
+                # it is in cache, with no copies of `Y`
+                for r in range(deg):
+                    bp[unsafe_offset=r] = 0
+                for j in range(nc):
+                    var xj = Y0[unsafe_offset=s0 + j]
+                    var col = base + j * nr
+                    if xj != 0:
+                        _down_triangle(vp, col, Y0, s0, j + 1, nc, xj)
+                    var c = col + nc
+                    var xv = V(xj)
+                    var r = 0
+                    while r + _W <= deg:
+                        bp.unsafe_store(
+                            r,
+                            vp.unsafe_load[width=_W](c + r).fma(
+                                xv, bp.unsafe_load[width=_W](r)
+                            ),
+                        )
+                        r += _W
+                    while r < deg:
+                        bp[unsafe_offset=r] = vp[unsafe_offset=c + r].fma(
+                            xj, bp[unsafe_offset=r]
+                        )
+                        r += 1
+                for r in range(deg):
+                    var at = self.rows[rp + r]
+                    Y0[unsafe_offset=at] = (
+                        Y0[unsafe_offset=at] - bp[unsafe_offset=r]
+                    )
+                continue
             for cy in range(mb):  # the triangle, column by column
                 var yp = Y0.unsafe_offset(cy * n)
                 for j in range(nc):
                     var xj = yp[unsafe_offset=s0 + j]
-                    if xj == 0:
-                        continue
-                    var col = base + j * nr
-                    var xv = V(-xj)
-                    var i = j + 1
-                    while i + _W <= nc:
-                        yp.unsafe_store(
-                            s0 + i,
-                            vp.unsafe_load[width=_W](col + i).fma(
-                                xv, yp.unsafe_load[width=_W](s0 + i)
-                            ),
-                        )
-                        i += _W
-                    while i < nc:
-                        yp[unsafe_offset=s0 + i] = vp[
-                            unsafe_offset=col + i
-                        ].fma(-xj, yp[unsafe_offset=s0 + i])
-                        i += 1
+                    if xj != 0:
+                        _down_triangle(vp, base + j * nr, yp, s0, j + 1, nc, xj)
             if deg == 0:
                 continue
             for t in range(nc):  # W = Y[s0:s0+nc, :], row-major
@@ -603,6 +684,23 @@ struct _Supernodal(Movable):
             var base = self.val_ptr[s]
             var deg_v = deg - deg % _W
             self._gather(Y0, n, bp, rp, deg, mb)
+            if mb == 1:
+                # one column: each column of `L`'s dot (`_dot_lanes`, as
+                # `_sub_dots` takes it) just before it is used
+                for j in range(nc - 1, -1, -1):
+                    var col = base + j * nr
+                    var c = col + nc
+                    var acc = Y0[unsafe_offset=s0 + j] - _dot_lanes(
+                        vp.unsafe_offset(c), bp, deg_v
+                    )
+                    for r in range(deg_v, deg):
+                        acc = vp[unsafe_offset=c + r].fma(
+                            -bp[unsafe_offset=r], acc
+                        )
+                    Y0[unsafe_offset=s0 + j] = _up_triangle(
+                        vp, col, Y0, s0, j + 1, nc, acc
+                    )
+                continue
             _sub_dots(
                 wp, mb, vp.unsafe_offset(base + nc), nr, bp, deg, deg_v, nc
             )
@@ -619,20 +717,9 @@ struct _Supernodal(Movable):
                         acc = vp[unsafe_offset=c + r].fma(
                             -b[unsafe_offset=r], acc
                         )
-                    var i = j + 1
-                    var tv = V(0)
-                    while i + _W <= nc:
-                        tv = vp.unsafe_load[width=_W](col + i).fma(
-                            yp.unsafe_load[width=_W](s0 + i), tv
-                        )
-                        i += _W
-                    acc -= tv.reduce_add()
-                    while i < nc:
-                        acc = vp[unsafe_offset=col + i].fma(
-                            -yp[unsafe_offset=s0 + i], acc
-                        )
-                        i += 1
-                    yp[unsafe_offset=s0 + j] = acc
+                    yp[unsafe_offset=s0 + j] = _up_triangle(
+                        vp, col, yp, s0, j + 1, nc, acc
+                    )
         _ = buf^
         _ = wbuf^
 

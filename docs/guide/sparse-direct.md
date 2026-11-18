@@ -317,15 +317,20 @@ like the factorization's, so each value of $L$ loaded serves several
 right-hand sides. Each column gets exactly the operations of a
 single-vector solve, refinement included, so column $c$ of the result is
 `F.solve(B[:, c])` bit for bit, and the thread count does not change it.
+A single column (one right-hand side, or a core's share of a few) takes
+loops of its own with the same operations, walking each column of $L$
+once; through the matrix products a single solve was 20–28% slower.
 
-Measured on the 30³ grid (supernodal, no refinement) and the 2D 300 × 300
-grid; one call against $m$ separate solves:
+Measured on an i7-10875H (8 cores) on the 30³ grid and the 2D 300 × 300
+grid (supernodal, no refinement unless stated); one call against $m$
+separate solves ($m$ times one solve's time), median of three runs:
 
 | matrix | $m$ | $m$ solves | block, 1 thread | block, 8 cores |
 |---|---|---|---|---|
-| 3D grid 30³ | 16 | 86 ms | 40 ms | 12 ms |
-| 3D grid 30³ | 64 | 344 ms | 156 ms | 41 ms |
-| 2D grid 300 × 300 | 64 | 157 ms | 139 ms | 52 ms |
+| 3D grid 30³ | 16 | 234 ms | 108 ms | 25 ms |
+| 3D grid 30³ | 64 | 934 ms | 407 ms | 69 ms |
+| 3D grid 30³, one refinement step | 64 | 1907 ms | 857 ms | 175 ms |
+| 2D grid 300 × 300 | 64 | 486 ms | 351 ms | 100 ms |
 
 On one thread the block solve gains where the blocks are large, in 3D;
 the 2D factor's supernodes are small, and the gathers and scatters each

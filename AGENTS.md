@@ -366,10 +366,15 @@ plan). Key design points that span several files:
   odd ones by `_dot_lanes`) going up; the triangles stay column by
   column. Every entry's chain is fixed whatever `mb` or tile, so keep
   explicit `fma`s there (contraction differs between tile and tail
-  code). Above `_PARALLEL_SOLVE_WORK`
+  code). `mb == 1` (single solves, and a core's one-column block) has
+  its own loops with the same chains, built column by column of `L`
+  (`_down_triangle`, `_up_triangle`, `_dot_lanes`) without `W` or
+  `_sub_product`: through the matrix kernels a single solve was 20-28%
+  slower. Above `_PARALLEL_SOLVE_WORK`
   ((stored + steps (stored + nnz A)) x m = 4e6) the blocks go to the
   physical cores in one `parallel_ranges` call. 30^3, m = 64, no
-  refinement: 344 ms as single solves, 156 ms one thread, 41 ms on 8. The typed wrappers overload `solve` on a `List` of
+  refinement (i7-10875H): 934 ms as single solves, 407 ms one thread,
+  69 ms on 8. The typed wrappers overload `solve` on a `List` of
   cochains (`BlockSparseLDLT`: of `CochainPair`s), packed into one n x m
   solve (`_typed_solve_many`, `_columns_of`, `_column`).
   3-7x faster factors than simplicial in 3D on one thread, about 4x more
