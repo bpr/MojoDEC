@@ -21,7 +21,7 @@ var energy = sc[1].star.inner_product(omega.v, omega.v)       # omega^T S omega
 from std.math import sqrt
 from mojodec.core.operator import Preconditioner
 from mojodec.core.sparse import CSRMatrix
-from mojodec.core.subset import Subset
+from mojodec.core.index_set import IndexSet
 from mojodec.core.utils import RealArray, real_array, real_vector
 
 
@@ -357,8 +357,11 @@ struct DiagonalOperator(Copyable, Movable, Preconditioner, Sized, Writable):
             out.append(1.0 / v)
         return Self(out^)
 
-    def exclude_subset(self, subset: Subset) raises -> Self:
+    def exclude_subset[S: IndexSet](self, subset: S) raises -> Self:
         """The operator with the entries of `subset` set to zero.
+
+        Parameters:
+            S: The set type: a `Subset` of cells, or any `IndexSet`.
 
         Args:
             subset: The cells indexing the diagonal.
@@ -367,12 +370,15 @@ struct DiagonalOperator(Copyable, Movable, Preconditioner, Sized, Writable):
             A copy with those entries zeroed.
 
         Raises:
-            If `subset.size` differs from n.
+            If `subset.universe_size()` differs from n.
         """
         return self._keep(subset, False)
 
-    def restrict_to_subset(self, subset: Subset) raises -> Self:
+    def restrict_to_subset[S: IndexSet](self, subset: S) raises -> Self:
         """The operator with the entries outside `subset` set to zero.
+
+        Parameters:
+            S: The set type: a `Subset` of cells, or any `IndexSet`.
 
         Args:
             subset: The cells indexing the diagonal.
@@ -381,12 +387,12 @@ struct DiagonalOperator(Copyable, Movable, Preconditioner, Sized, Writable):
             A copy with the other entries zeroed.
 
         Raises:
-            If `subset.size` differs from n.
+            If `subset.universe_size()` differs from n.
         """
         return self._keep(subset, True)
 
-    def _keep(self, subset: Subset, inside: Bool) raises -> Self:
-        self._check(subset.size, "DiagonalOperator subset")
+    def _keep[S: IndexSet](self, subset: S, inside: Bool) raises -> Self:
+        self._check(subset.universe_size(), "DiagonalOperator subset")
         var out = self.values.copy()
         for i in range(len(out)):
             if (i in subset) != inside:

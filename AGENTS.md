@@ -83,7 +83,7 @@ there); `mojodec/prelude.mojo` is the small common subset.
   keep the patch file in sync with any change there.
 - NuMojo's `linalg.solve` (no pivoting) and Jacobi `eigh` are unsuitable for
   DEC systems; use MojoDEC's own `routines/dense.mojo` (pivoted LU,
-  Householder/QL `eigh`) and `routines/linalg.mojo` (`cg`, `minres`,
+  Householder/QL `eigh`) and `routines/linalg_core.mojo` (`cg`, `minres`,
   `lsqr`, dense `spsolve`, `eigh_generalized`).
 
 ### Known toolchain bugs
@@ -126,6 +126,22 @@ check it before proposing a design change. The complex caches nothing:
 operators other than `d`, `boundary`, and the stars are functions whose
 results the caller owns (caching Whitney sparsity was rejected, see the
 plan). Key design points that span several files:
+
+- **Linear algebra boundary** (to become a package of its own):
+  `core/{sparse,operator,diagonal,parallel,utils,index_set}.mojo` and
+  `routines/{dense,linalg_core,sparse_ldlt_core,supernodal,ordering,lanczos_core,amg}.mojo`
+  import nothing else from MojoDEC: no complexes, cochains, subsets, or
+  typed layer. `CSRMatrix` and `DiagonalOperator`'s
+  `exclude_subset`/`restrict_to_subset` take any `IndexSet`
+  (`core/index_set.mojo`: `universe_size()` and `in`), which `Subset`
+  implements. The typed overloads stay in `routines/linalg.mojo`,
+  `lanczos.mojo`, and `sparse_ldlt.mojo`, which re-export the core
+  modules' names and define the overloaded ones (`cg`, `minres`,
+  `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`, `eigsh`) again as
+  forwarders: Mojo does not merge overloads of one name imported from
+  two modules (the second import is ambiguous). Put new solver code in
+  the core modules, importing nothing from the DEC side; a forwarder's
+  signature must match its core function's.
 
 - **`SimplicialComplex`** (`core/simplicial_complex.mojo`) stores its
   `ComplexData` (mesh + one `SimplexLevel` per dimension) behind an
@@ -247,14 +263,14 @@ plan). Key design points that span several files:
   `d_k = B_{k+1}^T` when built. `len(cells)` on a `CellSet` counts cells;
   `len(cells.levels)` is the number of dimensions.
 - **Operators and Krylov solvers** (`core/operator.mojo`,
-  `routines/linalg.mojo`): `LinearOperator` is `num_rows`/`num_cols`/
+  `routines/linalg_core.mojo`; typed overloads in `routines/linalg.mojo`): `LinearOperator` is `num_rows`/`num_cols`/
   `apply_into(x, mut y)` on `RealArray`; `CSRMatrix`, `DiagonalOperator`,
   `Identity`, `MatrixOp`, `DiagonalOp`, and `BlockOp` (applied block by
   block) implement it. `Preconditioner` is a method-less marker for
   symmetric positive definite operators (`DiagonalOperator`, `DiagonalOp`,
   `Identity`; never a general `CSRMatrix`). `BlockDiagonal(P1, P2)`
   (`core/operator.mojo`) stacks two for 2 x 2 systems; `DenseCholesky`
-  (`routines/linalg.mojo`) is an exact dense inverse for small problems. `cg` and `minres` are generic
+  (`routines/linalg_core.mojo`) is an exact dense inverse for small problems. `cg` and `minres` are generic
   over both, with `M=` keyword-only; the unpreconditioned overloads pass
   `Identity`, which reproduces the old iterates bit for bit. Both raise on
   a non-symmetric operator (`_require_symmetric`, two probe products) and
@@ -271,7 +287,7 @@ plan). Key design points that span several files:
   `eigenvalue_range` runs 10 CG steps on `probe_vector(n, 3)` for the
   extreme Ritz values (inner bounds). Without the options, every solve is
   bit for bit what it was before them; keep it so.
-  `eigsh(K, M, nev, sigma=)` (`routines/lanczos.mojo`, from the papers:
+  `eigsh(K, M, nev, sigma=)` (`routines/lanczos_core.mojo`, from the papers:
   Ericsson–Ruhe, Wu–Simon) factors `K - sigma M` once (`SparseLDLT`)
   and runs thick-restart Lanczos on `OP = (K - sigma M)^-1 M` in the `M`
   inner product (basis and `M V` stored, full reorthogonalization twice,
@@ -287,7 +303,8 @@ plan). Key design points that span several files:
   pair's normwise backward error with norms from 30 power steps (lower
   bounds, so the errors err high); dense arrays are wrapped in a private
   `_Dense` operator. Pass sparse `K` to keep it at n sparse products.
-- **Sparse direct** (`routines/ordering.mojo`, `routines/sparse_ldlt.mojo`,
+- **Sparse direct** (`routines/ordering.mojo`, `routines/sparse_ldlt_core.mojo`
+  (typed wrappers in `routines/sparse_ldlt.mojo`),
   `routines/supernodal.mojo`; ports of faer's AMD and simplicial and
   supernodal Cholesky, notices in `NOTICE`):
   `amd_ordering(A)` builds AMD's quotient graph exactly as faer's

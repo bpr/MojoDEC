@@ -85,7 +85,7 @@ from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.routines.lanczos import eigsh
 from mojodec.routines.ordering import amd_ordering
 from mojodec.routines.supernodal import etree_postorder
-from mojodec.routines.sparse_ldlt import (
+from mojodec.routines.sparse_ldlt_core import (
     _etree_and_counts,
     FactorLayout,
     FillOrdering,

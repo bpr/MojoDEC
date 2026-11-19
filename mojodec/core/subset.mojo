@@ -27,13 +27,14 @@ var u = spsolve(A, f.v)
 
 from std.bit import count_trailing_zeros, pop_count
 
+from mojodec.core.index_set import IndexSet
 from mojodec.core.primality import Primality
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.sparse import CSRMatrix
 
 
-struct Subset(Copyable, Equatable, Movable, Sized, Writable):
+struct Subset(Copyable, Equatable, IndexSet, Movable, Sized, Writable):
     """A set of primal k-simplices or dual k-cells of a complex."""
 
     var dim: Int
@@ -231,6 +232,14 @@ struct Subset(Copyable, Equatable, Movable, Sized, Writable):
             if w != 0:
                 return False
         return True
+
+    def universe_size(self) -> Int:
+        """The number of cells the set is drawn from (`size`).
+
+        Returns:
+            The number of k-simplices (or dual k-cells) of the complex.
+        """
+        return self.size
 
     def __contains__(self, i: Int) -> Bool:
         """Whether cell `i` is in the set (false for `i` out of range).

@@ -35,8 +35,8 @@ from std.math import isfinite, sqrt
 from mojodec.core.operator import LinearOperator, Preconditioner
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.utils import RealArray, real_vector
-from mojodec.routines.linalg import eigenvalue_range, jacobi
-from mojodec.routines.sparse_ldlt import SparseCholesky, SparseLDLT
+from mojodec.routines.linalg_core import eigenvalue_range, jacobi
+from mojodec.routines.sparse_ldlt_core import SparseCholesky, SparseLDLT
 
 
 struct Relaxation(Equatable, ImplicitlyCopyable, Writable):

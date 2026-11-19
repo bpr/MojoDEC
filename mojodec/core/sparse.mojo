@@ -23,7 +23,7 @@ from numojo.prelude import *
 
 from mojodec.core.operator import LinearOperator
 from mojodec.core.parallel import parallel_ranges
-from mojodec.core.subset import Subset
+from mojodec.core.index_set import IndexSet
 from mojodec.core.utils import (
     RealArray,
     real_vector,
@@ -564,9 +564,12 @@ struct CSRMatrix(Copyable, LinearOperator, Movable, Writable):
         self.indices.resize(w, 0)
         self.data.resize(w, 0)
 
-    def exclude_subset(self, subset: Subset) raises -> Self:
+    def exclude_subset[S: IndexSet](self, subset: S) raises -> Self:
         """The matrix with the rows of `subset` emptied, so its products are
         zero on those cells (e.g. Dirichlet boundary values held fixed).
+
+        Parameters:
+            S: The set type: a `Subset` of cells, or any `IndexSet`.
 
         Args:
             subset: The cells indexing the rows.
@@ -575,13 +578,16 @@ struct CSRMatrix(Copyable, LinearOperator, Movable, Writable):
             A copy with those rows empty.
 
         Raises:
-            If `subset.size` differs from `nrows`.
+            If `subset.universe_size()` differs from `nrows`.
         """
         return self._keep_rows(subset, False)
 
-    def restrict_to_subset(self, subset: Subset) raises -> Self:
+    def restrict_to_subset[S: IndexSet](self, subset: S) raises -> Self:
         """The matrix with only the rows of `subset` kept, so its products
         are zero off those cells.
+
+        Parameters:
+            S: The set type: a `Subset` of cells, or any `IndexSet`.
 
         Args:
             subset: The cells indexing the rows.
@@ -590,12 +596,12 @@ struct CSRMatrix(Copyable, LinearOperator, Movable, Writable):
             A copy with the other rows empty.
 
         Raises:
-            If `subset.size` differs from `nrows`.
+            If `subset.universe_size()` differs from `nrows`.
         """
         return self._keep_rows(subset, True)
 
-    def _keep_rows(self, subset: Subset, inside: Bool) raises -> Self:
-        if subset.size != self.nrows:
+    def _keep_rows[S: IndexSet](self, subset: S, inside: Bool) raises -> Self:
+        if subset.universe_size() != self.nrows:
             raise Error("CSRMatrix: subset size differs from the row count")
         var out = Self(self.nrows, self.ncols)
         out.indices = List[Int](capacity=len(self.indices))

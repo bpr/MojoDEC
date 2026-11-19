@@ -222,13 +222,17 @@ and `reorder_vertices` fixes it. See
   are compared, the tests allow the conditioning (`eps L / h`), not the
   last bit. One example is the Whitney top-form mass against the primal
   volume.
-- **Solvers:** `routines/dense.mojo` and `routines/linalg.mojo` provide
-  pivoted LU, Householder `eigh`, and Krylov methods;
-  `routines/sparse_ldlt.mojo`, `routines/supernodal.mojo`, and
+- **Solvers:** `routines/dense.mojo` and `routines/linalg_core.mojo`
+  provide pivoted LU, Householder `eigh`, and Krylov methods;
+  `routines/sparse_ldlt_core.mojo`, `routines/supernodal.mojo`, and
   `routines/ordering.mojo` the sparse LDL^T and Cholesky factorizations
   (simplicial or supernodal, the supernodal factor parallel as one task
   graph) with AMD (ported from faer). NuMojo's
-  unpivoted `solve` and Jacobi `eigh` are not used.
+  unpivoted `solve` and Jacobi `eigh` are not used. These, with
+  `lanczos_core.mojo`, `amg.mojo`, and the sparse and diagonal matrices,
+  import nothing from the DEC side, so they can become a package of their
+  own; the typed overloads are in `linalg.mojo`, `lanczos.mojo`, and
+  `sparse_ldlt.mojo` (see AGENTS.md, Linear algebra boundary).
 
 ## Verification
 
