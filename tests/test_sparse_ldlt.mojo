@@ -557,8 +557,8 @@ def test_multiple_right_hand_sides() raises:
             for layout in [FactorLayout.SIMPLICIAL, FactorLayout.SUPERNODAL]:
                 var F = SparseLDLT(A, layout=layout)
                 var X = F.solve(B)
-                assert_equal(X.shape[0], n)
-                assert_equal(X.shape[1], m)
+                assert_equal(X.rows(), n)
+                assert_equal(X.cols(), m)
                 for c in range(m):
                     var b = real_vector(n)
                     for i in range(n):

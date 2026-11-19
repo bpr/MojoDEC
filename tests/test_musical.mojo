@@ -18,12 +18,13 @@ from mojodec.core.typed import PRIMAL, TypedCochain, TypedComplex
 from mojodec.routines.musical import dual_edge_pieces, flat
 from mojodec.routines.quality import well_centeredness
 from mojodec.vis.draw import simplex_quivers
+from mojodec.core.utils import real_array_from_string
 
 
 def obtuse() raises -> SimplicialComplex:
     """A fan of triangles, several obtuse, so some dual pieces are negative."""
     return SimplicialComplex(
-        nm.fromstring[f64](
+        real_array_from_string(
             "[[0,0],[2,0],[3,1],[1,0.3],[-1,1],[0.9,2],[-0.5,-1]]"
         ),
         nm.fromstring[DType.int](

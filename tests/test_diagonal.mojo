@@ -16,6 +16,7 @@ from mojodec import (
     star,
 )
 from mojodec.core.utils import real_vector_from_list
+from mojodec.core.utils import real_array_from_string
 
 
 def test_products() raises:
@@ -76,7 +77,7 @@ def test_arithmetic_and_errors() raises:
 
 
 def test_hodge_stars_are_diagonal() raises:
-    var V = nm.fromstring[nm.f64]("[[0,0],[1,0],[1,1],[0,1]]")
+    var V = real_array_from_string("[[0,0],[1,0],[1,1],[0,1]]")
     var S = nm.fromstring[DType.int]("[[0,1,3],[1,2,3]]")
     var sc = SimplicialComplex(V, S)
     # star on a cochain agrees with the operator applied to its values

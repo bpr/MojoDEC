@@ -6,7 +6,7 @@
 Sparse linear solvers (`mojodec.routines.linalg_core`).
 =======================================================
 The parts of `scipy.sparse.linalg` and `scipy.linalg` that PyDEC's examples
-use, over `CSRMatrix` and NuMojo arrays.
+use, over `CSRMatrix` and `RealArray`.
 
 - `cg`: (preconditioned) conjugate gradients for symmetric positive
   (semi)definite systems.
@@ -328,7 +328,7 @@ struct NullSpace(ImplicitlyCopyable, Movable, Sized):
         if n <= 0:
             raise Error("NullSpace.constants: n must be positive")
         var ones = List[RealArray]()
-        ones.append(nm.ones[f64](Shape(n)))
+        ones.append(RealArray.ones(n))
         return NullSpace(ones)
 
     def __len__(self) -> Int:

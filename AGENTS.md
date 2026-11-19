@@ -8,8 +8,9 @@ CLAUDE.md.
 
 MojoDEC is largely inspired by PyDEC (Discrete Exterior Calculus). It runs
 on Mojo 1.3, using
-NuMojo arrays in place of PyDEC's NumPy arrays and its own `CSRMatrix` in
-place of PyDEC's `scipy.sparse` matrices. README.md has the full MojoDEC ↔
+its own `RealArray` (real vectors and matrices) and NuMojo integer arrays
+in place of PyDEC's NumPy arrays, and its own `CSRMatrix` in place of
+PyDEC's `scipy.sparse` matrices. README.md has the full MojoDEC ↔
 PyDEC file mapping, the list of deliberate differences from PyDEC, and the
 features added beyond PyDEC.
 
@@ -96,16 +97,18 @@ maintainers, in `third_party/numojo-bugs.md`; add new ones there.
   ~1.8e16 and 1e23 with a digit too few, so they don't read back, and
   some Float32 values too (widen them to Float64 first). Parse integer
   text with `atol`, not `atof`, which loses digits past 2^53.
-- `nm.fromstring` reads `1e4` as 14 (it drops the `e`); write test
-  literals without exponents or use `real_array_from_rows`.
+- `nm.fromstring` (and `real_array_from_string`, which parses with it)
+  reads `1e4` as 14 (it drops the `e`); write test literals without
+  exponents or use `real_array_from_rows`.
 - `assert_almost_equal` has a default `rtol=1e-5` on top of `atol`, so
   every call passes `rtol` explicitly (normally `rtol=0`, with an `atol`
   from the problem's conditioning); `tests/run_all.sh` fails on a call
   without one.
-- NuMojo's elementwise array arithmetic (`b - A @ x`) is slow: 0.63 ms
-  for 4,000 entries, 50 times the sparse product itself. In hot loops,
-  write the loop over `unsafe_get`/`unsafe_set` (the AMG cycle went from
-  3 ms to 0.09).
+- NuMojo's elementwise array arithmetic was slow (0.63 ms for 4,000
+  entries, 50 times the sparse product itself). Real arrays are now
+  `RealArray`, whose `+`, `-`, and scaling are plain loops, but each
+  still allocates its result: in hot loops, write the loop over
+  `unsafe_get`/`unsafe_set` (the AMG cycle went from 3 ms to 0.09).
 - Write `sqrt(x)` (`std.math`), never `x ** 0.5`: Mojo's `**` with a
   fractional exponent is off by up to ~5e-12 relative, which Cholesky and
   Gram-matrix solves amplify (it cost DarcyFlow two digits and Sphere's
@@ -131,7 +134,15 @@ plan). Key design points that span several files:
   `core/{sparse,operator,diagonal,parallel,utils,index_set}.mojo` and
   `routines/{dense,linalg_core,sparse_ldlt_core,supernodal,ordering,lanczos_core,amg}.mojo`
   import nothing else from MojoDEC: no complexes, cochains, subsets, or
-  typed layer. `CSRMatrix` and `DiagonalOperator`'s
+  typed layer, and no NuMojo: real vectors and dense matrices are
+  `RealArray` (`core/real_array.mojo`: C-contiguous `Float64`, rank 1 or
+  2, NuMojo's method names for flat access, `+`/`-`/scaling entrywise,
+  `to_numpy`), which the rest of MojoDEC uses too (`utils` re-exports
+  it, with `real_vector`/`real_array`; `from_ndarray`/`to_ndarray` and
+  `real_array_from_string` convert to and from NuMojo, which integer
+  arrays still are). `read_array(path)` and `loadtxt(path)` without a
+  dtype give a `RealArray`; with one, a NuMojo array of that dtype.
+  `CSRMatrix` and `DiagonalOperator`'s
   `exclude_subset`/`restrict_to_subset` take any `IndexSet`
   (`core/index_set.mojo`: `universe_size()` and `in`), which `Subset`
   implements. The typed overloads stay in `routines/linalg.mojo`,
@@ -194,7 +205,7 @@ plan). Key design points that span several files:
   `dual_edge_pieces` use. In loops, look faces up with
   `level.find_vertices(sorted_list)`, not `simplex_to_index(Simplex(...))`.
 - **Cochains** (`core/cochain.mojo`): PyDEC's dual-typed `cochain.v` is split
-  into `Cochain` (NuMojo vector) and `CochainBasis` (`CSRMatrix`), both
+  into `Cochain` (a `RealArray`) and `CochainBasis` (`CSRMatrix`), both
   implementing the `CochainLike` trait. `d`, `star`, `delta`,
   `laplace_derham`, `laplace_beltrami` are generic over `CochainLike`.
 - **Operators**: on `CSRMatrix`, `A @ B` / `A @ x` are matrix products
@@ -422,7 +433,7 @@ plan). Key design points that span several files:
   `A_c = R @ (A @ P)`; coarsest at `coarse_size` by `SparseCholesky`,
   regularized `SparseLDLT` if singular. V-cycle from zero: Chebyshev on
   `[0.1, 1.1] lambda` (Saad 12.1) or forward/backward Gauss-Seidel.
-  Residuals by loops (`_residual`), not NuMojo's `-`.
+  Residuals by loops (`_residual`), not `RealArray`'s `-`.
 - **Geometric multigrid** (`routines/gmg.mojo`, from the papers):
   `GeometricMultigrid(A, hierarchy, k)` takes the finest operator and a
   `List[Refinement]` (`refinement_hierarchy`), checks the chain

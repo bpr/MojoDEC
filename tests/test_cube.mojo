@@ -8,6 +8,7 @@ from mojodec.core.regular_cube_complex import RegularCubeComplex
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.utils import IntArray, rows_of, cols_of, take_int_rows
 from mojodec.routines.cube_array import cube_array_search, cube_array_boundary
+from mojodec.core.utils import real_array_from_string
 
 
 def I(s: String) raises -> NDArray[DType.int]:
@@ -23,7 +24,7 @@ def assert_int_array(a: IntArray, s: String) raises:
 
 
 def assert_dense(A: CSRMatrix, s: String) raises:
-    var b = nm.fromstring[f64](s)
+    var b = real_array_from_string(s)
     assert_equal(A.nrows, rows_of(b))
     assert_equal(A.ncols, cols_of(b))
     var D = A.todense()

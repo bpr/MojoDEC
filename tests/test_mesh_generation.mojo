@@ -53,6 +53,7 @@ from mojodec.routines.mesh_generation import (
 )
 from mojodec.core.abstract_simplicial_complex import AbstractSimplicialComplex
 from mojodec.routines.simplex_array import coherent_orientation
+from mojodec.core.utils import real_array_from_string, real_vector
 
 
 def test_simplicial_grid_2d() raises:
@@ -71,7 +72,7 @@ def test_simplicial_grid_2d() raises:
 
 def test_cube_grid() raises:
     var vi = cube_grid([2, 1])
-    var V = nm.fromstring[f64]("[[0,0],[1,0],[2,0],[0,1],[1,1],[2,1]]")
+    var V = real_array_from_string("[[0,0],[1,0],[2,0],[0,1],[1,1],[2,1]]")
     for i in range(V.size):
         assert_equal(vi.vertices.unsafe_get(i), V.unsafe_get(i))
     var expected: List[Int] = [0, 3, 1, 4, 1, 4, 2, 5]
@@ -347,7 +348,7 @@ def test_flat_torus_spectrum_and_harmonic_forms() raises:
     var W1 = whitney_innerproduct(t3, 1)
     var E = t3[1].num_simplices
     for a in range(3):
-        var w = nm.zeros[f64](Shape(E))
+        var w = real_vector(E)
         var h = (1.0 + 0.5 * Float64(a)) / Float64(dims[a])
         for e in range(E):
             var iu = _grid_index(Int(t3[1].simplices.unsafe_get(2 * e)), dims)

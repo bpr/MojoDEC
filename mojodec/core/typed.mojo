@@ -964,7 +964,7 @@ struct TypedCochain[n: Int, k: Int, primal: Bool](
             `s * self`.
 
         Raises:
-            Only if the NuMojo array arithmetic fails.
+            Never; `raises` for compatibility.
         """
         return Self(self.complex, self.v * s)
 
@@ -978,7 +978,7 @@ struct TypedCochain[n: Int, k: Int, primal: Bool](
             `s * self`.
 
         Raises:
-            Only if the NuMojo array arithmetic fails.
+            Never; `raises` for compatibility.
         """
         return self * s
 
@@ -989,7 +989,7 @@ struct TypedCochain[n: Int, k: Int, primal: Bool](
             `-self`.
 
         Raises:
-            Only if the NuMojo array arithmetic fails.
+            Never; `raises` for compatibility.
         """
         return self * -1.0
 

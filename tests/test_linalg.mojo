@@ -36,6 +36,7 @@ from mojodec.routines.linalg import (
 )
 from mojodec.routines import dense
 from mojodec.routines.dense import EighResult
+from mojodec.core.utils import from_ndarray, real_array_from_string
 
 
 def laplacian_1d(n: Int) raises -> CSRMatrix:
@@ -60,7 +61,7 @@ def laplacian_1d(n: Int) raises -> CSRMatrix:
 def test_cg() raises:
     var A = laplacian_1d(50)
     nm.random.seed(1)
-    var b = nm.random.rand[f64](Shape(50))
+    var b = from_ndarray(nm.random.rand[f64](Shape(50)))
     var res = cg(A, b, rtol=1e-12)
     assert_true(res.converged())
     assert_true(res.normal_residual_norm is None)
@@ -92,7 +93,7 @@ def test_lsqr() raises:
     var A = CSRMatrix.from_coo(
         4, 2, [0, 1, 2, 3, 3], [0, 1, 0, 1, 0], [1.0, 1.0, 1.0, 1.0, 1.0]
     )
-    var b = nm.fromstring[f64]("[1, 2, 3, 4]")
+    var b = real_array_from_string("[1, 2, 3, 4]")
     var res = lsqr(A, b)
     var AtA = A.T() @ A
     var Atb = A.T() @ b
@@ -116,8 +117,8 @@ def test_lsqr() raises:
 
 def test_dense_pivoting() raises:
     # zero leading pivot: needs row exchanges
-    var A = nm.fromstring[f64]("[[0, 1, 1], [1, 0, 1], [1, 1, 0]]")
-    var b = nm.fromstring[f64]("[2, 2, 2]")
+    var A = real_array_from_string("[[0, 1, 1], [1, 0, 1], [1, 1, 0]]")
+    var b = real_array_from_string("[2, 2, 2]")
     var x = dense.solve(A, b)
     for i in range(3):
         assert_almost_equal(x.unsafe_get(i), 1.0, atol=1e-15, rtol=0)
@@ -125,8 +126,8 @@ def test_dense_pivoting() raises:
 
 
 def test_eigh_generalized() raises:
-    var K = nm.fromstring[f64]("[[2, -1, 0], [-1, 2, -1], [0, -1, 2]]")
-    var M = nm.fromstring[f64]("[[2, 0, 0], [0, 1, 0], [0, 0, 3]]")
+    var K = real_array_from_string("[[2, -1, 0], [-1, 2, -1], [0, -1, 2]]")
+    var M = real_array_from_string("[[2, 0, 0], [0, 1, 0], [0, 0, 3]]")
     var wv = eigh_generalized(K, M)
     for j in range(3):
         var lam = wv.values.unsafe_get(j)
@@ -143,9 +144,9 @@ def test_eigh_generalized() raises:
 def test_eigh_generalized_diagonal() raises:
     nm.random.seed(7)
     var n = 12
-    var B = nm.random.rand[f64](Shape(n, n))
-    var K = nm.zeros[f64](Shape(n, n))
-    var M = nm.zeros[f64](Shape(n, n))
+    var B = from_ndarray(nm.random.rand[f64](Shape(n, n)))
+    var K = real_array(n, n)
+    var M = real_array(n, n)
     var m = List[Float64]()
     for i in range(n):
         for j in range(n):
@@ -183,8 +184,8 @@ def test_eigh_generalized_diagonal() raises:
 def test_dense_eigh() raises:
     nm.random.seed(3)
     var n = 30
-    var B = nm.random.rand[f64](Shape(n, n))
-    var A = nm.zeros[f64](Shape(n, n))
+    var B = from_ndarray(nm.random.rand[f64](Shape(n, n)))
+    var A = real_array(n, n)
     for i in range(n):
         for j in range(n):
             A.unsafe_set(i * n + j, fget(B, i, j) + fget(B, j, i))
@@ -439,7 +440,7 @@ def test_dense_cholesky_and_block_diagonal() raises:
         _ = DenseCholesky(laplacian_1d(n) - CSRMatrix.identity(n) * 5.0)
     with assert_raises(contains="not symmetric"):
         _ = DenseCholesky(
-            CSRMatrix.from_dense(nm.fromstring[f64]("[[2, 1], [0, 2]]"))
+            CSRMatrix.from_dense(real_array_from_string("[[2, 1], [0, 2]]"))
         )
 
 
@@ -480,10 +481,10 @@ def test_eigen_residuals() raises:
     # backward-stable solvers: tiny backward errors for every pair
     nm.random.seed(5)
     var n = 40
-    var B = nm.random.rand[f64](Shape(n, n))
-    var A = nm.zeros[f64](Shape(n, n))
+    var B = from_ndarray(nm.random.rand[f64](Shape(n, n)))
+    var A = real_array(n, n)
     var m = List[Float64]()
-    var M = nm.zeros[f64](Shape(n, n))
+    var M = real_array(n, n)
     for i in range(n):
         for j in range(n):
             A.unsafe_set(i * n + j, fget(B, i, j) + fget(B, j, i))
@@ -639,7 +640,7 @@ def test_nullspace() raises:
                 x.unsafe_get(i), f.unsafe_get(i) - mean, atol=1e-8, rtol=0
             )
     # a right-hand side in the kernel: x = 0, whatever the guess
-    var flat = nm.ones[f64](Shape(n)) * 3.0
+    var flat = RealArray.ones(n) * 3.0
     for which in range(2):
         var z = cg(A, flat, x0=guess.copy(), nullspace=ns) if which == 0 else (
             minres(A, flat, M=jacobi(A), x0=guess.copy(), nullspace=ns)
@@ -682,8 +683,8 @@ def test_nullspace() raises:
     var w = List[RealArray]()
     var e = real_vector(n)
     e.unsafe_set(0, 1.0)
-    w.append(nm.ones[f64](Shape(n)) * 5.0)
-    w.append(nm.ones[f64](Shape(n)) + e)
+    w.append(RealArray.ones(n) * 5.0)
+    w.append(RealArray.ones(n) + e)
     var two = NullSpace(w)
     var q0 = two.vector(0)
     var q1 = two.vector(1)
@@ -697,12 +698,12 @@ def test_nullspace() raises:
     with assert_raises(contains="no vectors"):
         _ = NullSpace(List[RealArray]())
     var dep = List[RealArray]()
-    dep.append(nm.ones[f64](Shape(n)))
-    dep.append(nm.ones[f64](Shape(n)) * 2.0)
+    dep.append(RealArray.ones(n))
+    dep.append(RealArray.ones(n) * 2.0)
     with assert_raises(contains="vector 1 depends on the ones before it"):
         _ = NullSpace(dep)
     var mixed = List[RealArray]()
-    mixed.append(nm.ones[f64](Shape(n)))
+    mixed.append(RealArray.ones(n))
     mixed.append(real_vector(3))
     with assert_raises(contains="vector 1 has length 3, not 40"):
         _ = NullSpace(mixed)

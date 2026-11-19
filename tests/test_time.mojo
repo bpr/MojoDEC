@@ -30,6 +30,7 @@ from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.routines.innerproduct import whitney_innerproduct
 from mojodec.routines.mesh_generation import kuhn_grid
 from mojodec.core.utils import RealArray, fget
+from mojodec.core.utils import real_array_from_string
 
 
 def oscillator(dt: Float64) raises -> Leapfrog:
@@ -37,7 +38,7 @@ def oscillator(dt: Float64) raises -> Leapfrog:
     return Leapfrog(
         DiagonalOperator([2.0]),
         DiagonalOperator([3.0]),
-        CSRMatrix.from_dense(nm.fromstring[f64]("[[1]]")),
+        CSRMatrix.from_dense(real_array_from_string("[[1]]")),
         dt,
     )
 
@@ -77,14 +78,14 @@ def test_invalid_schemes() raises:
         _ = Leapfrog(
             DiagonalOperator([-2.0]),
             DiagonalOperator([3.0]),
-            CSRMatrix.from_dense(nm.fromstring[f64]("[[1]]")),
+            CSRMatrix.from_dense(real_array_from_string("[[1]]")),
             0.1,
         )
     with assert_raises(contains="K is 1 x 2, expected 1 x 1"):
         _ = Leapfrog(
             DiagonalOperator([2.0]),
             DiagonalOperator([3.0]),
-            CSRMatrix.from_dense(nm.fromstring[f64]("[[1, 1]]")),
+            CSRMatrix.from_dense(real_array_from_string("[[1, 1]]")),
             0.1,
         )
     var lf = oscillator(0.1)
@@ -97,7 +98,7 @@ def test_invalid_schemes() raises:
 def equilateral(subdivisions: Int) raises -> TypedComplex[2]:
     """An equilateral triangle of side 1 cut into equilateral triangles."""
     var mesh = SimplicialMesh(
-        nm.fromstring[f64]("[[0, 0], [1, 0], [0.5, 0.8660254037844386]]"),
+        real_array_from_string("[[0, 0], [1, 0], [0.5, 0.8660254037844386]]"),
         nm.fromstring[DType.int]("[[0, 1, 2]]"),
     )
     for _ in range(subdivisions):
@@ -158,7 +159,7 @@ def test_maxwell_cavity_mode() raises:
 def test_midpoint_oscillator() raises:
     # 2 q' = p, 3 p' = -q, omega = 1/sqrt(6): the midpoint rule turns by
     # theta = 2 atan(omega dt / 2) per step, for any dt, energy exact
-    var K = CSRMatrix.from_dense(nm.fromstring[f64]("[[1]]"))
+    var K = CSRMatrix.from_dense(real_array_from_string("[[1]]"))
     for dt in [0.2, 10.0]:  # 10 is twice the leapfrog's limit
         var im = ImplicitMidpoint(
             DiagonalOperator([2.0]), DiagonalOperator([3.0]), K, dt
@@ -389,7 +390,7 @@ def test_auto_factors_small_fill_and_iterates_on_large() raises:
 
 
 def test_invalid_implicit_schemes() raises:
-    var K = CSRMatrix.from_dense(nm.fromstring[f64]("[[1]]"))
+    var K = CSRMatrix.from_dense(real_array_from_string("[[1]]"))
     var one = DiagonalOperator([1.0])
     with assert_raises(contains="dt must be positive"):
         _ = ImplicitMidpoint(one, one, K, 0.0)
@@ -397,7 +398,7 @@ def test_invalid_implicit_schemes() raises:
         _ = ImplicitMidpoint(one, DiagonalOperator([-1.0]), K, 0.1)
     with assert_raises(contains="expected Mq square and K 1 x 2"):
         _ = ImplicitMidpoint(one, DiagonalOperator([1.0, 1.0]), K, 0.1)
-    var skew = CSRMatrix.from_dense(nm.fromstring[f64]("[[2, 1], [0, 2]]"))
+    var skew = CSRMatrix.from_dense(real_array_from_string("[[2, 1], [0, 2]]"))
     with assert_raises(contains="symmetric"):
         _ = CrankNicolson(skew, skew, 0.1)
     with assert_raises(contains="same square size"):

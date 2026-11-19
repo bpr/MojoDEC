@@ -21,14 +21,16 @@ from mojodec.core.cochain import (
 from mojodec.core.sparse import CSRMatrix
 from mojodec.core.primality import Primality
 from mojodec.core.subset import Subset
+from mojodec.core.utils import real_array_from_string
+from mojodec.core.real_array import RealArray
 
 
 def I(s: String) raises -> NDArray[DType.int]:
     return nm.fromstring[DType.int](s)
 
 
-def R(s: String) raises -> NDArray[f64]:
-    return nm.fromstring[f64](s)
+def R(s: String) raises -> RealArray:
+    return real_array_from_string(s)
 
 
 def all_cases() raises -> List[SimplicialComplex]:

@@ -28,7 +28,7 @@ volumes, build, and Whitney times were measured again after later work
 | Public API | `mojodec/__init__.mojo` | re-exports `core` and `routines`; `prelude.mojo` is a small subset |
 
 The untyped API follows PyDEC: a complex, levels indexed by dimension,
-cochains holding NuMojo vectors, and operators as `CSRMatrix` and
+cochains holding `RealArray` vectors, and operators as `CSRMatrix` and
 `DiagonalOperator`. The typed layer (`core/typed.mojo`) is a thin wrapper
 on top. It carries the degree and primality of every cochain and
 operator as parameters, so the compiler checks how they compose.

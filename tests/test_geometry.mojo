@@ -31,10 +31,12 @@ from mojodec.routines.combinatorial import (
     permutation_parity,
     relative_parity,
 )
+from mojodec.core.utils import from_ndarray, real_array, real_array_from_string
+from mojodec.core.real_array import RealArray
 
 
-def A(s: String) raises -> NDArray[f64]:
-    return nm.fromstring[f64](s)
+def A(s: String) raises -> RealArray:
+    return real_array_from_string(s)
 
 
 def test_unsigned_volume() raises:
@@ -129,7 +131,7 @@ def test_signed_volume() raises:
 def test_volumes_agree() raises:
     nm.random.seed(0)
     for N in range(1, 10):
-        var pts = nm.random.rand[f64](Shape(N + 1, N))
+        var pts = from_ndarray(nm.random.rand[f64](Shape(N + 1, N)))
         assert_almost_equal(
             abs(signed_volume(pts)), unsigned_volume(pts), atol=1e-15, rtol=0
         )
@@ -199,7 +201,7 @@ def test_circumcenter_random() raises:
     nm.random.seed(0)
     for N in range(1, 10):
         for M in range(1, N + 1):
-            var pts = nm.random.rand[f64](Shape(M, N))
+            var pts = from_ndarray(nm.random.rand[f64](Shape(M, N)))
             var cr = circumcenter(pts)
             var lo: Float64 = 1e300
             var hi: Float64 = -1e300
@@ -315,10 +317,10 @@ def test_needle_tetrahedron_volumes() raises:
         )
         if det == 0:
             continue
-        var V = nm.zeros[f64](Shape(4, 3))
+        var V = real_array(4, 3)
         for m in range(3):
             for k in range(3):
-                V[Item(m + 1, k)] = Float64(e[m * 3 + k])
+                V[m + 1, k] = Float64(e[m * 3 + k])
         var want = Float64(det) / 6.0
         var out = real_vector(1)
         _simplex_volumes(V, S, 3, True, out)

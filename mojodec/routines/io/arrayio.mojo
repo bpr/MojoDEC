@@ -25,7 +25,9 @@ from std.sys import size_of
 import numojo as nm
 from numojo.prelude import *
 
+from mojodec.core.real_array import RealArray
 from mojodec.core.sparse import CSRMatrix
+from mojodec.core.utils import from_ndarray, to_ndarray
 from mojodec.routines.io.scan import ByteReader, append_le_array, write_float
 
 
@@ -125,13 +127,29 @@ struct SparseFormat(Equatable, ImplicitlyCopyable, Writable):
         writer.write(self.array_format())
 
 
-def read_array[
-    dtype: DType = DType.float64
-](path: String) raises -> NDArray[dtype]:
-    """Read a dense array written by PyDEC's `write_array`.
+def read_array(path: String) raises -> RealArray:
+    """Read a real array written by PyDEC's `write_array`: `read_array[dtype]`
+    with `Float64`, as a `RealArray` (rank 1 or 2).
+
+    Args:
+        path: The array file to read.
+
+    Returns:
+        The array, with the shape recorded in the header's `dims`.
+
+    Raises:
+        As `read_array[dtype]`, or if the array has rank above 2.
+    """
+    return from_ndarray(read_array[DType.float64](path))
+
+
+def read_array[dtype: DType](path: String) raises -> NDArray[dtype]:
+    """Read a dense array written by PyDEC's `write_array`, as a NuMojo
+    array of `dtype`; `read_array(path)`, without a `dtype`, gives a
+    `RealArray`.
 
     ```mojo
-    var V = read_array("mesh.vertices")                  # float64
+    var V = read_array("mesh.vertices")                  # RealArray
     var E = read_array[DType.int]("mesh.elements")
     ```
 
@@ -220,6 +238,24 @@ def read_header(path: String) raises -> Dict[String, String]:
     """
     var reader = ByteReader.open(path, "arrayio")
     return _read_header(reader)
+
+
+def write_array(
+    path: String, A: RealArray, format: ArrayFormat = .BINARY
+) raises:
+    """Write a real array in PyDEC's format (as `float64`); see the
+    `NDArray` overload.
+
+    Args:
+        path: The file to write; an existing file is replaced.
+        A: The array to write.
+        format: `BASIC` (text), `ASCII`, or `BINARY` (little-endian raw
+            values).
+
+    Raises:
+        If the file cannot be written.
+    """
+    write_array(path, to_ndarray(A), format)
 
 
 def write_array[

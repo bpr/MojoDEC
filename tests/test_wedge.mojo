@@ -15,6 +15,7 @@ from mojodec.core.utils import fget, iget, rows_of
 from mojodec.routines.io.meshio import read_mesh
 from mojodec.routines.mesh_generation import simplicial_grid_2d
 from mojodec.routines.wedge import wedge
+from mojodec.core.utils import from_ndarray
 
 
 def grid() raises -> SimplicialComplex:
@@ -34,7 +35,7 @@ def tets() raises -> SimplicialComplex:
 def random_cochain(sc: SimplicialComplex, k: Int, seed: Int) raises -> Cochain:
     nm.random.seed(seed)
     var c = sc.get_cochain(k)
-    c.v = nm.random.rand[f64](Shape(c.v.size))
+    c.v = from_ndarray(nm.random.rand[f64](Shape(c.v.size)))
     return c^
 
 

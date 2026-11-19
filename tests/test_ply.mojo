@@ -13,13 +13,14 @@ from mojodec.routines.io.ply import PlyFormat, read_ply, write_ply
 from mojodec.routines.io.scan import append_le
 from mojodec.routines.io.text import loadtxt
 from mojodec.routines.mesh_generation import icosphere, simplicial_grid_2d
+from mojodec.core.real_array import RealArray
 
 comptime DIR = "tests/meshes/ply/"
 comptime TMP = "/tmp/mojodec_ply_test.ply"
 
 
 def assert_mesh(
-    mesh: SimplicialMesh, V: nm.NDArray[f64], T: nm.NDArray[DType.int]
+    mesh: SimplicialMesh, V: RealArray, T: nm.NDArray[DType.int]
 ) raises:
     assert_equal(rows_of(mesh.vertices), rows_of(V))
     assert_equal(cols_of(mesh.vertices), cols_of(V))

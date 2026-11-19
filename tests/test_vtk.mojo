@@ -15,6 +15,7 @@ from mojodec.routines.io.vtk import (
     write_vtu,
     write_vtu_cubes,
 )
+from mojodec.core.utils import real_array, real_array_from_string
 
 comptime TMP = "/tmp/mojodec_vtk_test.vtu"
 
@@ -33,17 +34,17 @@ def block(xml: String, name: String) raises -> String:
 
 
 def test_triangles() raises:
-    var V = nm.fromstring[f64]("[[0,0],[1,0],[1,1],[0,1]]")
+    var V = real_array_from_string("[[0,0],[1,0],[1,1],[0,1]]")
     var S = nm.fromstring[DType.int]("[[0,1,3],[1,2,3]]")
     var p = real_vector(2)
     p.unsafe_set(0, 0.5)
     p.unsafe_set(1, -2.0)
-    var u = nm.fromstring[f64]("[[1,0],[0,1]]")
+    var u = real_array_from_string("[[1,0],[0,1]]")
     write_vtu(
         TMP,
         V,
         S,
-        point_data=[VTKField("x", nm.fromstring[f64]("[0,1,1,0]"))],
+        point_data=[VTKField("x", real_array_from_string("[0,1,1,0]"))],
         cell_data=[VTKField("p", p), VTKField("u<&>", u)],
     )
     var xml = read(TMP)
@@ -64,7 +65,7 @@ def triangle_mesh(format: VTKFormat) raises:
     p.unsafe_set(1, -2.0)
     write_vtu(
         TMP,
-        nm.fromstring[f64]("[[0,0],[1,0],[1,1],[0,1]]"),
+        real_array_from_string("[[0,0],[1,0],[1,1],[0,1]]"),
         nm.fromstring[DType.int]("[[0,1,3],[1,2,3]]"),
         cell_data=[VTKField("p", p)],
         format=format,
@@ -130,7 +131,7 @@ def test_appended() raises:
 
 
 def test_edges_and_tets() raises:
-    var V = nm.fromstring[f64]("[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]")
+    var V = real_array_from_string("[[0,0,0],[1,0,0],[0,1,0],[0,0,1]]")
     write_vtu(TMP, V, nm.fromstring[DType.int]("[[0,1],[2,3]]"))
     var xml = read(TMP)
     assert_equal(block(xml, "types"), "3\n3")
@@ -174,14 +175,14 @@ def test_cubes() raises:
 
 
 def test_bad_inputs() raises:
-    var V = nm.fromstring[f64]("[[0,0],[1,0],[0,1]]")
+    var V = real_array_from_string("[[0,0],[1,0],[0,1]]")
     var S = nm.fromstring[DType.int]("[[0,1,2]]")
     with assert_raises(contains="expected 1"):
         write_vtu(TMP, V, S, cell_data=[VTKField("p", real_vector(2))])
     with assert_raises(contains="out of range"):
         write_vtu(TMP, V, nm.fromstring[DType.int]("[[0,1,3]]"))
     with assert_raises(contains="E <= 3"):
-        write_vtu(TMP, nm.zeros[f64](Shape(3, 4)), S)
+        write_vtu(TMP, real_array(3, 4), S)
     var rcc = RegularCubeComplex(
         RegularCubeMesh(nm.ones[DType.int](Shape(1, 1)))
     )
@@ -191,7 +192,7 @@ def test_bad_inputs() raises:
 
 def test_non_finite_values() raises:
     # VTK's ASCII reader cannot parse nan or inf, which were once written
-    var V = nm.fromstring[f64]("[[0,0],[1,0],[1,1],[0,1]]")
+    var V = real_array_from_string("[[0,0],[1,0],[1,1],[0,1]]")
     var S = nm.fromstring[DType.int]("[[0,1,3],[1,2,3]]")
     var p = real_vector(2)
     p.unsafe_set(1, nan[DType.float64]())

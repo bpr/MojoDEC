@@ -143,7 +143,7 @@ struct DiagonalOperator(Copyable, Movable, Preconditioner, Sized, Writable):
             A new array of length n.
 
         Raises:
-            If NuMojo cannot allocate the array.
+            Never; `raises` for compatibility.
         """
         var out = real_vector(len(self.values))
         for i in range(len(self.values)):
@@ -168,7 +168,7 @@ struct DiagonalOperator(Copyable, Movable, Preconditioner, Sized, Writable):
             A new 2-D array.
 
         Raises:
-            If NuMojo cannot allocate the array.
+            Never; `raises` for compatibility.
         """
         var n = len(self.values)
         var out = real_array(n, n)

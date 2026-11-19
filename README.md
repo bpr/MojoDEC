@@ -3,9 +3,10 @@
 MojoDEC is largely inspired by [PyDEC](https://github.com/hirani/pydec).
 It implements Discrete Exterior Calculus (DEC) and lowest order finite element
 exterior calculus (FEEC), i.e., Whitney forms. It runs on Mojo 1.3, with
-[NuMojo](https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo) arrays
-in place of PyDEC's NumPy arrays and its own `CSRMatrix` in place of
-PyDEC's `scipy.sparse` matrices. The main functionality, as in PyDEC:
+its own `RealArray` for real vectors and matrices and
+[NuMojo](https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo)
+integer arrays in place of PyDEC's NumPy arrays, and its own `CSRMatrix`
+in place of PyDEC's `scipy.sparse` matrices. The main functionality, as in PyDEC:
 - simplicial complexes of dimension n embedded in dimension N >= n
 - abstract simplicial complexes (no embedding needed), and Rips complexes
 - cubical complexes in all dimensions
@@ -158,7 +159,7 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 `mojodec.vis` draws with matplotlib through Mojo's Python interop, so it
 needs the Python, NumPy, and matplotlib that `pixi install` provides. As in
 PyDEC, `triplot` and the line plots add to matplotlib's current axes;
-`simplex_quivers` and `cube_quivers` are pure Mojo and return NuMojo arrays
+`simplex_quivers` and `cube_quivers` are pure Mojo and return `RealArray`s
 for `quiver`. `mojodec` does not re-export `vis`, so programs that do not
 plot never load Python.
 
@@ -570,7 +571,7 @@ the published mathematics:
 ## Differences from PyDEC
 
 - **Cochains.** PyDEC's `cochain.v` is either a vector or a sparse basis.
-  Mojo's static types split this into `Cochain` (a NuMojo vector) and
+  Mojo's static types split this into `Cochain` (a `RealArray`) and
   `CochainBasis` (a `CSRMatrix`); `d`, `star`, `delta`, and the Laplacians
   are generic over both. Adding or subtracting cochains also requires
   both to be primal or both dual, and `c[s]` requires a simplex of the

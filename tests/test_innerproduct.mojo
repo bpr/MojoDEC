@@ -27,14 +27,15 @@ from mojodec.routines.innerproduct import (
     whitney_innerproduct,
     regular_cube_innerproduct,
 )
+from mojodec.core.utils import real_array, real_array_from_string
 
 
 def I(s: String) raises -> NDArray[DType.int]:
     return nm.fromstring[DType.int](s)
 
 
-def R(s: String) raises -> NDArray[f64]:
-    return nm.fromstring[f64](s)
+def R(s: String) raises -> RealArray:
+    return real_array_from_string(s)
 
 
 def assert_close(A: RealArray, B: RealArray) raises:
@@ -254,7 +255,7 @@ def test_cube_innerproduct() raises:
         [2, 3, 4, 8],
         [7, 8, 9, 11],
     ]
-    var expected = nm.zeros[f64](Shape(12, 12))
+    var expected = real_array(12, 12)
     for ref b in blocks:
         for i in range(4):
             for j in range(4):
@@ -304,7 +305,7 @@ def test_whitney_extreme_degrees() raises:
 
 def test_whitney_needs_geometry() raises:
     var sc = SimplicialComplex(
-        nm.fromstring[f64]("[[0,0],[1,0],[0,1]]"),
+        real_array_from_string("[[0,0],[1,0],[0,1]]"),
         nm.fromstring[DType.int]("[[0,1,2]]"),
         compute_geometry=False,
     )

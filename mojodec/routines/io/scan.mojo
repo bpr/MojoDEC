@@ -20,6 +20,7 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.parallel import num_chunks, parallel_ranges
+from mojodec.core.real_array import RealArray
 
 
 struct ByteReader(Movable):
@@ -350,6 +351,35 @@ struct ByteReader(Movable):
             If fewer than `count` values are left, or `out` is too small.
         """
         comptime size = size_of[dtype]()
+        if start + count > out.size:
+            raise self.err("destination too small")
+        if self.pos + size * count > len(self.data):
+            raise self.err("file ends early")
+        unsafe_memcpy(
+            dest=out.unsafe_ptr().unsafe_offset(start).unsafe_bitcast[Byte](),
+            src=self.data.unsafe_ptr().unsafe_offset(self.pos),
+            count=size * count,
+        )
+        self.pos += size * count
+        if self._swapped():
+            for i in range(start, start + count):
+                out.unsafe_set(i, _swap(out.unsafe_get(i)))
+
+    def binary_into(
+        mut self, mut out: RealArray, start: Int, count: Int
+    ) raises:
+        """Read `count` binary `Float64` values into `out[start:start +
+        count]` (flat indices).
+
+        Args:
+            out: The destination.
+            start: The first flat index to write.
+            count: The number of values.
+
+        Raises:
+            If fewer than `count` values are left, or `out` is too small.
+        """
+        comptime size = size_of[DType.float64]()
         if start + count > out.size:
             raise self.err("destination too small")
         if self.pos + size * count > len(self.data):

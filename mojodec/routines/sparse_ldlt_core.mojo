@@ -600,8 +600,6 @@ struct SparseLDLT(LinearOperator, Movable):
             raise Error(
                 String("SparseLDLT.solve: B has ", rows_of(B), " rows, not ", n)
             )
-        if not B.flags.C_CONTIGUOUS:
-            raise Error("SparseLDLT.solve: B is not C-contiguous")
         var X = real_array(n, m)
         if n == 0 or m == 0:
             return X^

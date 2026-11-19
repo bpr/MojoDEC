@@ -512,18 +512,18 @@ def _graph(n: Int, ints: List[Int], shift: Bool) raises -> RealArray:
 
 
 def _csr(A: RealArray) raises -> CSRMatrix:
-    var n = A.shape[0]
+    var n = A.rows()
     var r = List[Int]()
     var c = List[Int]()
     var v = List[Float64]()
     for i in range(n):
-        for j in range(A.shape[1]):
+        for j in range(A.cols()):
             var x = fget(A, i, j)
             if x != 0:
                 r.append(i)
                 c.append(j)
                 v.append(x)
-    return CSRMatrix.from_coo(n, A.shape[1], r, c, v)
+    return CSRMatrix.from_coo(n, A.cols(), r, c, v)
 
 
 def _vector(n: Int, ints: List[Int], offset: Int) raises -> RealArray:

@@ -32,6 +32,7 @@ from mojodec.routines.mesh_generation import (
     simplicial_grid_2d,
     triangulate_ncube,
 )
+from mojodec.core.utils import real_array_from_string
 
 
 def assert_list(got: List[Int], expected: List[Int]) raises:
@@ -63,13 +64,13 @@ def torus_surface(n: Int) raises -> SimplicialComplex:
             iset(T, t + 1, 0, a)
             iset(T, t + 1, 1, c)
             iset(T, t + 1, 2, d)
-    var V = nm.zeros[f64](Shape(n * n, 3))
+    var V = real_array(n * n, 3)
     return SimplicialComplex(SimplicialMesh(V, T), compute_geometry=False)
 
 
 def test_triangle_and_square() raises:
     var tri = SimplicialComplex(
-        nm.fromstring[f64]("[[0,0],[1,0],[0,1]]"),
+        real_array_from_string("[[0,0],[1,0],[0,1]]"),
         nm.fromstring[DType.int]("[[0,1,2]]"),
     )
     assert_list(tri.betti_numbers(), [1, 0, 0])
@@ -119,7 +120,7 @@ def test_links() raises:
 
 
 def test_disconnected() raises:
-    var V = nm.zeros[f64](Shape(6, 2))
+    var V = real_array(6, 2)
     var S = nm.fromstring[DType.int]("[[0,1,2],[3,4,5]]")
     var sc = SimplicialComplex(SimplicialMesh(V, S), compute_geometry=False)
     assert_list(sc.betti_numbers(), [2, 0, 0])
@@ -190,7 +191,7 @@ def test_chain_complex_and_errors() raises:
     # an empty subcomplex: relative = absolute
     assert_list(sc.relative_betti_numbers(CellSet.empty(sc)), [1, 0, 1])
     # non-integer boundary entries
-    var half = CSRMatrix.from_dense(nm.fromstring[f64]("[[0.5],[-0.5]]"))
+    var half = CSRMatrix.from_dense(real_array_from_string("[[0.5],[-0.5]]"))
     with assert_raises(contains="must be integers"):
         _ = betti_numbers(ChainComplex(2, [half^]))
 
@@ -215,7 +216,7 @@ def assert_flagged(cells: CellSet, expected: List[List[Int]]) raises:
 
 def test_manifolds() raises:
     var tri = SimplicialComplex(
-        nm.fromstring[f64]("[[0,0],[1,0],[0,1]]"),
+        real_array_from_string("[[0,0],[1,0],[0,1]]"),
         nm.fromstring[DType.int]("[[0,1,2]]"),
     )
     assert_true(tri.is_homology_manifold())
@@ -251,7 +252,7 @@ def test_manifolds() raises:
 
 def test_pinched_meshes() raises:
     # two triangles meeting at vertex 2
-    var V = nm.zeros[f64](Shape(7, 3))
+    var V = real_array(7, 3)
     var bow = SimplicialComplex(
         SimplicialMesh(V, nm.fromstring[DType.int]("[[0,1,2],[2,3,4]]")),
         compute_geometry=False,

@@ -62,7 +62,7 @@ def jittered_kuhn(dim: Int, n: Int) raises -> SimplicialMesh:
     var mesh = kuhn_grid(dims)
     var h = 1.0 / Float64(n)
     var rng = Lcg(UInt64(1000 * dim + n))
-    var nv = mesh.vertices.shape[0]
+    var nv = mesh.vertices.rows()
     for i in range(nv):
         var interior = True
         for a in range(dim):
@@ -81,8 +81,8 @@ def shuffled(mesh: SimplicialMesh, seed: UInt64) raises -> SimplicialMesh:
     """`mesh` with its vertex numbers randomly permuted (Fisher-Yates):
     vertex `i` becomes `p[i]`. Element rows keep their order, and each
     row's vertices their positions, so orientations are unchanged."""
-    var nv = mesh.vertices.shape[0]
-    var d = mesh.vertices.shape[1]
+    var nv = mesh.vertices.rows()
+    var d = mesh.vertices.cols()
     var p = List[Int](length=nv, fill=0)
     for i in range(nv):
         p[i] = i
@@ -163,14 +163,14 @@ def main() raises:
             + " "
             + String(dim)
             + " "
-            + String(mesh.vertices.shape[0])
+            + String(mesh.vertices.rows())
             + " "
             + String(mesh.elements.shape[0])
             + "\n"
         )
         print(
             name,
-            mesh.vertices.shape[0],
+            mesh.vertices.rows(),
             "vertices",
             mesh.elements.shape[0],
             "elements",

@@ -32,6 +32,8 @@ from mojodec.routines.quality import (
     well_centered_fraction,
     well_centeredness,
 )
+from mojodec.core.utils import real_array, real_array_from_string
+from mojodec.core.real_array import RealArray
 
 
 def sphere(subdivisions: Int, radius: Float64) raises -> SimplicialComplex:
@@ -39,7 +41,7 @@ def sphere(subdivisions: Int, radius: Float64) raises -> SimplicialComplex:
     return SimplicialComplex(vt)
 
 
-def total(x: nm.NDArray[f64]) -> Float64:
+def total(x: RealArray) -> Float64:
     var s: Float64 = 0
     for i in range(x.size):
         s += x.unsafe_get(i)
@@ -153,7 +155,7 @@ def test_sphere_curvatures() raises:
 def test_flat_surface_in_3d() raises:
     # a planar grid lifted into 3D: no curvature at interior vertices
     var vt = simplicial_grid_2d(4)
-    var V = nm.zeros[f64](Shape(rows_of(vt.vertices), 3))
+    var V = real_array(rows_of(vt.vertices), 3)
     for v in range(rows_of(vt.vertices)):
         V.unsafe_set(3 * v, fget(vt.vertices, v, 0))
         V.unsafe_set(3 * v + 1, 0.5 * fget(vt.vertices, v, 1))
@@ -181,7 +183,7 @@ def test_needs_a_surface() raises:
 
 def test_quality() raises:
     var sc = SimplicialComplex(
-        nm.fromstring[f64](
+        real_array_from_string(
             "[[0,0],[1,0],[0.5,0.8660254037844386],[2,0],[2,1],[4,0],[3,0.2]]"
         ),
         nm.fromstring[DType.int]("[[0,1,2],[1,3,4],[3,5,6]]"),
@@ -229,7 +231,7 @@ def test_unused_vertices_and_small_angles() raises:
     # level-0 rows as vertex ids
     var ico = icosahedron()
     var nv = rows_of(ico.vertices)
-    var V = nm.zeros[DType.float64](Shape(nv + 1, 3))
+    var V = real_array(nv + 1, 3)
     for v in range(nv):
         for j in range(3):
             V.unsafe_set((v + 1) * 3 + j, fget(ico.vertices, v, j))
@@ -249,7 +251,7 @@ def test_unused_vertices_and_small_angles() raises:
     # a flat fan whose sliver has a 1e-8 angle at the center: the angle was
     # computed as 0, leaving a defect of 1e-8
     var t = 0.00000001
-    var W = nm.zeros[DType.float64](Shape(5, 2))
+    var W = real_array(5, 2)
     var angles: List[Float64] = [0.0, t, 2.0, 4.0]
     for i in range(4):
         W.unsafe_set((i + 1) * 2, cos(angles[i]))

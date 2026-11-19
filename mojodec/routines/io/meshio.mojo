@@ -19,6 +19,7 @@ The array files sit next to the XML file and use `mojodec.routines.io.arrayio`.
 """
 
 from mojodec.core.mesh import SimplicialMesh
+from mojodec.core.utils import from_ndarray
 from mojodec.routines.io.arrayio import ArrayFormat, read_array, write_array
 
 
@@ -54,7 +55,9 @@ def read_mesh(path: String) raises -> SimplicialMesh:
     var dir = _dirname(path)
     var vertices_file = _field_file(xml, "vertices")
     var elements_file = _field_file(xml, "elements")
-    var vertices = read_array[DType.float64](_join(dir, vertices_file))
+    var vertices = from_ndarray(
+        read_array[DType.float64](_join(dir, vertices_file))
+    )
     var elements = read_array[DType.int](_join(dir, elements_file))
     return SimplicialMesh(vertices, elements)
 

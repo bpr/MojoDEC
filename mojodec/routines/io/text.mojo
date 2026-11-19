@@ -14,11 +14,29 @@ space-padded tables shipped with PyDEC's examples defeat.
 import numojo as nm
 from numojo.prelude import *
 
+from mojodec.core.real_array import RealArray
+from mojodec.core.utils import from_ndarray
 
-def loadtxt[
-    dtype: DType = DType.float64
-](path: String) raises -> NDArray[dtype]:
-    """Read a whitespace-separated table into a 2-D array (1-D for one column).
+
+def loadtxt(path: String) raises -> RealArray:
+    """Read a whitespace-separated table of reals: `loadtxt[dtype]` with
+    `Float64`, as a `RealArray`.
+
+    Args:
+        path: The text file to read.
+
+    Returns:
+        A `rows x cols` array, or a vector when there is one column.
+
+    Raises:
+        As `loadtxt[dtype]`.
+    """
+    return from_ndarray(loadtxt[DType.float64](path))
+
+
+def loadtxt[dtype: DType](path: String) raises -> NDArray[dtype]:
+    """Read a whitespace-separated table into a 2-D NuMojo array (1-D for
+    one column); `loadtxt(path)`, without a `dtype`, gives a `RealArray`.
 
     Blank lines and lines holding only a comment are skipped. Values are
     parsed as `Float64` and truncated toward zero for integral `dtype`s.

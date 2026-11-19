@@ -6,8 +6,8 @@
 MojoDEC Top-Level Package (`mojodec`).
 ======================================
 Discrete exterior calculus on simplicial and cubical complexes, largely
-inspired by PyDEC, with NuMojo arrays in place of NumPy and `CSRMatrix` in
-place of `scipy.sparse`.
+inspired by PyDEC, with `RealArray` and NuMojo integer arrays in place of
+NumPy and `CSRMatrix` in place of `scipy.sparse`.
 
 ```mojo
 import numojo as nm

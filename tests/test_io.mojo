@@ -28,6 +28,7 @@ from mojodec.routines.io.meshio import read_mesh, write_mesh
 from mojodec.routines.io.ply import read_ply
 from mojodec.routines.io.scan import ByteReader, parse_numbers
 from mojodec.routines.io.text import loadtxt
+from mojodec.core.utils import real_array, real_vector
 
 
 def meshes() -> List[String]:
@@ -139,6 +140,7 @@ def test_dense_roundtrip() raises:
     ]
     var formats: List[ArrayFormat] = [.BINARY, .ASCII, .BASIC]
     for ref sh in shapes:
+        # NuMojo arrays, of any rank (RealArray is rank 1 or 2)
         var A = nm.random.rand[f64](NDArrayShape(sh))
         var Ai = nm.zeros[DType.int32](NDArrayShape(sh))
         for j in range(Ai.size):
@@ -147,7 +149,7 @@ def test_dense_roundtrip() raises:
             if fmt == ArrayFormat.BASIC and len(sh) > 2:
                 continue
             write_array(TMP, A, fmt)
-            var B = read_array(TMP)
+            var B = read_array[DType.float64](TMP)
             for j in range(A.size):
                 # every format round-trips doubles exactly
                 assert_equal(A.unsafe_get(j), B.unsafe_get(j))
@@ -191,7 +193,7 @@ def test_binary_conversions() raises:
 
 
 def test_truncated_files() raises:
-    var A = nm.zeros[DType.float64](Shape(4, 3))
+    var A = real_array(4, 3)
     var formats: List[ArrayFormat] = [.BINARY, .ASCII, .BASIC]
     for fmt in formats:
         write_array(TMP, A, fmt)
@@ -246,7 +248,7 @@ def test_text_floats_roundtrip_exactly() raises:
         0.1,
         -2.5e-300,
     ]
-    var a = nm.zeros[f64](Shape(len(values)))
+    var a = real_vector(len(values))
     for i in range(len(values)):
         a.unsafe_set(i, values[i])
     var formats: List[ArrayFormat] = [.ASCII, .BASIC]

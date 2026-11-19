@@ -12,14 +12,16 @@ from mojodec.routines.simplex_array import (
     simplex_array_boundary,
 )
 from mojodec.routines.combinatorial import relative_parity
+from mojodec.core.utils import real_array_from_string
+from mojodec.core.real_array import RealArray
 
 
 def I(s: String) raises -> NDArray[DType.int]:
     return nm.fromstring[DType.int](s)
 
 
-def R(s: String) raises -> NDArray[f64]:
-    return nm.fromstring[f64](s)
+def R(s: String) raises -> RealArray:
+    return real_array_from_string(s)
 
 
 def check_same(

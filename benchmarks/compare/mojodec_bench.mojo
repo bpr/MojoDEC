@@ -59,7 +59,7 @@ def frobenius(A: CSRMatrix) -> Float64:
 
 
 def bench_mesh(dir: String, name: String, repeats: Int) raises:
-    var V = read_array[DType.float64](dir + "/" + name + ".vertices.arr")
+    var V = read_array(dir + "/" + name + ".vertices.arr")
     var E = read_array[DType.int](dir + "/" + name + ".elements.arr")
     var n = E.shape[1] - 1
 

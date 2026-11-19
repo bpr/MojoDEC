@@ -5,7 +5,7 @@
 """
 Small dense linear algebra (`mojodec.routines.dense`).
 ======================================================
-LU factorization with row partial pivoting on NuMojo arrays.
+LU factorization with row partial pivoting on `RealArray`s.
 
 NuMojo 0.12's `linalg.solve` factors without row exchanges, which breaks on
 the saddle-point systems DEC builds (the circumcenter system has a zero
@@ -429,7 +429,7 @@ def inv(A: RealArray) raises -> RealArray:
         If `A` is not square or is singular.
     """
     var n = rows_of(A)
-    return solve(A, nm.identity[DType.float64](n))
+    return solve(A, RealArray.identity(n))
 
 
 def cholesky(A: RealArray) raises -> RealArray:

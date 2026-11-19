@@ -10,7 +10,7 @@ vector of values or, for the basis returned by `get_cochain_basis`, a sparse
 identity whose columns are the basis cochains; applying operators to a basis
 composes their matrices. Mojo's static types split these into two structs.
 
-- `Cochain`: values in a 1-D NuMojo array.
+- `Cochain`: values in a vector (`RealArray`).
 - `CochainBasis`: values in the columns of a `CSRMatrix`.
 
 The operators `d`, `star`, `delta`, `laplace_derham`, and `laplace_beltrami`
@@ -159,7 +159,7 @@ trait CochainLike(Copyable, Deinitable, Movable, Writable):
 
 
 struct Cochain(CochainLike):
-    """A cochain with its values in a 1-D NuMojo array.
+    """A cochain with its values in a vector (`RealArray`).
 
     ```mojo
     var omega = sc.get_cochain(1)

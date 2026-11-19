@@ -15,7 +15,7 @@ Conventions:
   increasing and duplicates are summed. Explicit zeros may remain until
   `eliminate_zeros()` is called, as in SciPy.
 - `A @ B` is the matrix product (SciPy's `A * B`), `A @ x` the product with a
-  1-D NuMojo array, and `A * s` scales by a scalar.
+  vector (`RealArray`), and `A * s` scales by a scalar.
 """
 
 import numojo as nm
@@ -438,7 +438,7 @@ struct CSRMatrix(Copyable, LinearOperator, Movable, Writable):
             The `min(nrows, ncols)` diagonal entries.
 
         Raises:
-            If NuMojo cannot allocate the array.
+            Never; `raises` for compatibility.
         """
         var n = min(self.nrows, self.ncols)
         var out = real_vector(n)
@@ -453,7 +453,7 @@ struct CSRMatrix(Copyable, LinearOperator, Movable, Writable):
             A new 2-D array.
 
         Raises:
-            If NuMojo cannot allocate the array.
+            Never; `raises` for compatibility.
         """
         var out = real_array(self.nrows, self.ncols)
         for i in range(self.nrows):

@@ -67,7 +67,7 @@ def _jittered(dims: List[Int], shuffle: Bool) raises -> SimplicialMesh:
     the vertex numbers are permuted, so vertex blocks are scattered."""
     var mesh = kuhn_grid(dims)
     var d = len(dims)
-    var nv = mesh.vertices.shape[0]
+    var nv = mesh.vertices.rows()
     var state: UInt64 = 12345
     for i in range(nv):
         var interior = True
@@ -145,9 +145,9 @@ def _with_unused_vertices(
 ) raises -> SimplicialMesh:
     """The same mesh behind `extra` unused vertices: vertex i becomes
     i + extra, which keeps every sorted face in the same order."""
-    var nv = mesh.vertices.shape[0]
-    var d = mesh.vertices.shape[1]
-    var V = nm.zeros[DType.float64](Shape(nv + extra, d))
+    var nv = mesh.vertices.rows()
+    var d = mesh.vertices.cols()
+    var V = real_array(nv + extra, d)
     for i in range(nv):
         for a in range(d):
             fset(V, i + extra, a, fget(mesh.vertices, i, a))
@@ -234,7 +234,7 @@ def _fan(n: Int, K: Int) raises -> SimplicialMesh:
             E.unsafe_set(t * K + j, Scalar[DType.int](j))
         E.unsafe_set(t * K + K - 2, Scalar[DType.int](K - 2 + perm[t]))
         E.unsafe_set(t * K + K - 1, Scalar[DType.int](K - 2 + perm[t + 1]))
-    var V = nm.zeros[DType.float64](Shape(n + K - 1, K - 1))
+    var V = real_array(n + K - 1, K - 1)
     return SimplicialMesh(V, E)
 
 
@@ -438,7 +438,7 @@ def test_large_meshes_check_orientation() raises:
     iset(T, n, 0, iget(mesh.elements, 40_000, 0))
     iset(T, n, 1, iget(mesh.elements, 40_000, 1))
     iset(T, n, 2, nv)
-    var V = nm.zeros[DType.float64](Shape(nv + 1, 2))
+    var V = real_array(nv + 1, 2)
     for i in range(nv):
         for j in range(2):
             fset(V, i, j, fget(mesh.vertices, i, j))

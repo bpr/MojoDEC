@@ -6,7 +6,7 @@
 Sparse linear solvers (`mojodec.routines.linalg`).
 ==================================================
 The parts of `scipy.sparse.linalg` and `scipy.linalg` that PyDEC's examples
-use, over `CSRMatrix` and NuMojo arrays.
+use, over `CSRMatrix` and `RealArray`.
 
 - `cg`: (preconditioned) conjugate gradients for symmetric positive
   (semi)definite systems.

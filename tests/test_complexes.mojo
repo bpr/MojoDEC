@@ -29,6 +29,7 @@ from mojodec.core.utils import (
     int_array,
     lexsort_rows,
 )
+from mojodec.core.utils import from_ndarray, real_array, real_array_from_string
 
 
 def I(s: String) raises -> NDArray[DType.int]:
@@ -44,7 +45,7 @@ def assert_int_array(a: IntArray, s: String) raises:
 
 
 def assert_dense(A: CSRMatrix, s: String) raises:
-    var b = nm.fromstring[f64](s)
+    var b = real_array_from_string(s)
     assert_equal(A.nrows, rows_of(b))
     assert_equal(A.ncols, cols_of(b))
     var D = A.todense()
@@ -136,7 +137,7 @@ def test_rips_chain_complex() raises:
 
 def test_rips_complex_example() raises:
     var rc = RipsComplex(
-        nm.fromstring[f64]("[[0,0],[2,0],[2,2],[0,2],[1,1]]"), 2.1
+        real_array_from_string("[[0,0],[2,0],[2,2],[0,2],[1,1]]"), 2.1
     )
     assert_int_array(
         rc.simplices[1], "[[0,1],[0,3],[0,4],[1,2],[1,4],[2,3],[2,4],[3,4]]"
@@ -146,7 +147,7 @@ def test_rips_complex_example() raises:
 
 def test_rips_without_edges() raises:
     # points too far apart for any edge: a 0-dimensional complex
-    var rc = RipsComplex(nm.fromstring[f64]("[[0,0],[5,0],[0,5]]"), 1.0)
+    var rc = RipsComplex(real_array_from_string("[[0,0],[5,0],[0,5]]"), 1.0)
     assert_equal(len(rc.simplices), 1)
     assert_equal(rc.complex_dimension(), 0)
     ref cc = rc.chain_complex()
@@ -170,7 +171,7 @@ def test_rips_random() raises:
     for dim in range(2, 4):
         var N = 200
         var R = 0.2 if dim == 2 else 0.25
-        var pts = nm.random.rand[f64](Shape(N, dim))
+        var pts = from_ndarray(nm.random.rand[f64](Shape(N, dim)))
         var rc = RipsComplex(pts, R)
         var edges = Set[Int]()
         for r in range(rows_of(rc.simplices[1])):
@@ -195,7 +196,9 @@ def test_rips_random() raises:
 
 
 def test_kd_tree() raises:
-    var kdt = KDTree(nm.fromstring[f64]("[[0,0],[1,0],[1,1],[0,1],[0.5,0.5]]"))
+    var kdt = KDTree(
+        real_array_from_string("[[0,0],[1,0],[1,1],[0,1],[0.5,0.5]]")
+    )
     assert_equal(kdt.nearest([2.0, 2.0]).value(), 2)
     assert_equal(kdt.nearest([0.1, 0.2]).value(), 0)
     assert_equal(kdt.nearest([0.9, 0.0]).value(), 1)
@@ -204,13 +207,22 @@ def test_kd_tree() raises:
     for dim in range(1, 5):
         var sizes: List[Int] = [1, 2, 5, 10, 50]
         for num_pts in sizes:
-            var pts = nm.random.rand[f64](Shape(num_pts, dim)) * 20.0 - 10.0
+            var pts = from_ndarray(nm.random.rand[f64](Shape(num_pts, dim)))
+            # separate loops, as NuMojo's `* 20.0 - 10.0` rounded twice
+            for i in range(pts.size):
+                pts.unsafe_set(i, pts.unsafe_get(i) * 20.0)
+            for i in range(pts.size):
+                pts.unsafe_set(i, pts.unsafe_get(i) - 10.0)
             var tree = KDTree(pts)
             for _ in range(5):
                 var sample = List[Float64]()
                 for _ in range(dim):
                     sample.append(
-                        Float64(nm.random.rand[f64](Shape(1)).unsafe_get(0))
+                        Float64(
+                            from_ndarray(
+                                nm.random.rand[f64](Shape(1))
+                            ).unsafe_get(0)
+                        )
                         * 20
                         - 10
                     )
@@ -237,11 +249,11 @@ def test_kd_tree() raises:
 
 
 def test_kd_tree_and_sort_edge_cases() raises:
-    var tree = KDTree(nm.array[f64]("[[0], [0.1], [0.2]]"))
+    var tree = KDTree(real_array_from_string("[[0], [0.1], [0.2]]"))
     assert_equal(len(tree.in_sphere([0.05], 1.0, 0)), 0)  # once crashed
     assert_equal(len(tree.nearest_n([0.05], -1)), 0)
     with assert_raises(contains="coordinate"):
-        _ = KDTree(nm.zeros[DType.float64](Shape(3, 0)))
+        _ = KDTree(real_array(3, 0))
     # a query point of the wrong length was read past its end
     with assert_raises(contains="query point has 2 coordinates"):
         _ = tree.nearest([0.0, 1.0])

@@ -44,11 +44,12 @@ from mojodec.routines.topology import (
     link_of,
     star_of,
 )
+from mojodec.core.utils import real_array, real_array_from_string
 
 
 def triangle() raises -> SimplicialComplex:
     return SimplicialComplex(
-        nm.fromstring[f64]("[[0,0],[1,0],[0,1]]"),
+        real_array_from_string("[[0,0],[1,0],[0,1]]"),
         nm.fromstring[DType.int]("[[0,1,2]]"),
     )
 
@@ -434,7 +435,7 @@ def test_orient_coherently() raises:
 def test_orientation_of_pieces() raises:
     # two triangles touching at a vertex (no shared edge), and a separate
     # coherent pair
-    var V = nm.zeros[f64](Shape(8, 2))
+    var V = real_array(8, 2)
     var S = nm.fromstring[DType.int]("[[0,1,2],[2,3,4],[5,6,7],[6,5,4]]")
     assert_true(all_ones(coherent_orientation(S).value()))
     _ = SimplicialComplex(SimplicialMesh(V, S), compute_geometry=False)
@@ -454,7 +455,7 @@ def test_orientation_of_pieces() raises:
 
 def test_moebius_band_is_rejected() raises:
     # the 5-vertex Moebius band: triangles {i, i+1, i+2} mod 5
-    var V = nm.zeros[f64](Shape(5, 3))
+    var V = real_array(5, 3)
     var S = nm.fromstring[DType.int](
         "[[0,1,2],[1,2,3],[2,3,4],[3,4,0],[4,0,1]]"
     )
@@ -468,7 +469,7 @@ def test_moebius_band_is_rejected() raises:
 
 def test_non_pseudomanifold_is_rejected() raises:
     # three triangles on one edge
-    var V = nm.zeros[f64](Shape(5, 3))
+    var V = real_array(5, 3)
     var S = nm.fromstring[DType.int]("[[0,1,2],[1,0,3],[0,1,4]]")
     with assert_raises(contains="the face [0, 1] is shared by 3 elements"):
         _ = SimplicialComplex(SimplicialMesh(V, S), compute_geometry=False)

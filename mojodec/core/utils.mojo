@@ -5,12 +5,13 @@
 """
 Array helpers (`mojodec.core.utils`).
 =====================================
-Small conveniences over NuMojo's `NDArray` used throughout MojoDEC.
+Small conveniences over the arrays used throughout MojoDEC.
 
 MojoDEC stores integer arrays (simplex arrays, cube arrays, index lists) as
-`NDArray[DType.int]` and real arrays (vertices, volumes, cochain values) as
-`NDArray[DType.float64]`. All arrays built here are C-contiguous, so element
-`(i, j)` of an `r x c` array lives at flat offset `i * c + j`.
+NuMojo's `NDArray[DType.int]` and real arrays (vertices, volumes, cochain
+values) as `RealArray` (`mojodec.core.real_array`, its own type, which
+the linear algebra shares). All arrays built here are C-contiguous, so
+element `(i, j)` of an `r x c` array lives at flat offset `i * c + j`.
 """
 
 from std.math import sqrt
@@ -18,11 +19,10 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.parallel import chunk_scratch, num_chunks, parallel_ranges
+from mojodec.core.real_array import RealArray
 
 comptime IntArray = NDArray[DType.int]
 """A C-contiguous array of machine integers."""
-comptime RealArray = NDArray[DType.float64]
-"""A C-contiguous array of 64-bit floats."""
 
 
 def int_array(rows: Int, cols: Int) raises -> IntArray:
@@ -67,9 +67,9 @@ def real_array(rows: Int, cols: Int) raises -> RealArray:
         A `rows x cols` array of zeros.
 
     Raises:
-        If NuMojo cannot allocate the array.
+        If `rows` or `cols` is negative.
     """
-    return nm.zeros[DType.float64](Shape(rows, cols))
+    return RealArray.zeros(rows, cols)
 
 
 def real_vector(n: Int) raises -> RealArray:
@@ -82,9 +82,9 @@ def real_vector(n: Int) raises -> RealArray:
         A length-`n` array of zeros.
 
     Raises:
-        If NuMojo cannot allocate the array.
+        If `n` is negative.
     """
-    return nm.zeros[DType.float64](Shape(n))
+    return RealArray.zeros(n)
 
 
 def int_array_from_rows(rows: List[List[Int]], cols: Int) raises -> IntArray:
@@ -121,8 +121,7 @@ def real_array_from_rows(rows: List[List[Float64]]) raises -> RealArray:
             empty).
 
     Raises:
-        If the rows have different lengths, or NuMojo cannot allocate
-            the array.
+        If the rows have different lengths.
     """
     var cols = len(rows[0]) if len(rows) > 0 else 0
     var a = real_array(len(rows), cols)
@@ -147,7 +146,7 @@ def probe_vector(n: Int, seed: UInt64) raises -> RealArray:
         The vector, from a linear congruential generator.
 
     Raises:
-        If NuMojo cannot allocate the array.
+        If `n` is negative.
     """
     var x = real_vector(n)
     var s: UInt64 = 0x9E3779B97F4A7C15 ^ seed
@@ -155,6 +154,72 @@ def probe_vector(n: Int, seed: UInt64) raises -> RealArray:
         s = s * 6364136223846793005 + 1442695040888963407
         x.unsafe_set(i, Float64((s >> 11) & 0xFFFFF) / 524288.0 - 1.0)
     return x^
+
+
+def from_ndarray(a: NDArray[DType.float64]) raises -> RealArray:
+    """A `RealArray` copy of a NuMojo array of rank 1 or 2.
+
+    Args:
+        a: The NuMojo array (any layout).
+
+    Returns:
+        The same entries and shape, C-contiguous.
+
+    Raises:
+        If `a` has rank 0 or above 2.
+    """
+    if a.ndim == 1:
+        var n = Int(a.shape.unsafe_get(0))
+        var out = RealArray.zeros(n)
+        for i in range(n):
+            out.unsafe_set(i, a.item(i))
+        return out^
+    if a.ndim == 2:
+        var r = Int(a.shape.unsafe_get(0))
+        var c = Int(a.shape.unsafe_get(1))
+        var out = RealArray.zeros(r, c)
+        for i in range(r):
+            for j in range(c):
+                out.unsafe_set(i * c + j, a.item(i, j))
+        return out^
+    raise Error(String("from_ndarray: rank ", a.ndim, " (1 or 2 needed)"))
+
+
+def real_array_from_string(text: String) raises -> RealArray:
+    """A real array from NumPy-style text, `"[[0, 0], [1, 0]]"` or
+    `"[1.5, 2]"`, parsed by NuMojo's `fromstring` (so write no exponents:
+    it reads `1e4` as 14).
+
+    Args:
+        text: Nested brackets of numbers, rank 1 or 2.
+
+    Returns:
+        The array.
+
+    Raises:
+        If the text does not parse, or has rank above 2.
+    """
+    return from_ndarray(nm.fromstring[DType.float64](text))
+
+
+def to_ndarray(a: RealArray) raises -> NDArray[DType.float64]:
+    """A NuMojo copy of a `RealArray`, for NuMojo's routines and I/O.
+
+    Args:
+        a: The array.
+
+    Returns:
+        The same entries and shape, as `NDArray[DType.float64]`.
+
+    Raises:
+        If NuMojo cannot allocate the array.
+    """
+    var out = nm.zeros[DType.float64](
+        Shape(a.rows()) if a.ndim == 1 else Shape(a.rows(), a.cols())
+    )
+    for i in range(a.size):
+        out.unsafe_set(i, a.unsafe_get(i))
+    return out^
 
 
 def real_vector_from_list(values: List[Float64]) raises -> RealArray:
@@ -167,12 +232,9 @@ def real_vector_from_list(values: List[Float64]) raises -> RealArray:
         A 1-D array of length `len(values)`.
 
     Raises:
-        If NuMojo cannot allocate the array.
+        Never; `raises` for compatibility.
     """
-    var a = real_vector(len(values))
-    for i in range(len(values)):
-        a.unsafe_set(i, values[i])
-    return a^
+    return RealArray(values=values.copy())
 
 
 def int_vector_from_list(values: List[Int]) raises -> IntArray:
@@ -207,6 +269,32 @@ def rows_of[dt: DType](a: NDArray[dt]) -> Int:
         The number of rows.
     """
     return Int(a.shape.unsafe_get(0)) if a.ndim >= 1 else 0
+
+
+@always_inline
+def rows_of(a: RealArray) -> Int:
+    """Length of the first axis.
+
+    Args:
+        a: The array.
+
+    Returns:
+        The number of rows (a vector's length).
+    """
+    return a.rows()
+
+
+@always_inline
+def cols_of(a: RealArray) -> Int:
+    """Length of the second axis (1 for a vector).
+
+    Args:
+        a: The array.
+
+    Returns:
+        The number of columns.
+    """
+    return a.cols()
 
 
 @always_inline
@@ -326,7 +414,7 @@ def take_rows(a: RealArray, rows: List[Int]) raises -> RealArray:
         A `len(rows) x cols_of(a)` array.
 
     Raises:
-        If NuMojo cannot allocate the array.
+        Never; `raises` for compatibility.
     """
     var c = cols_of(a)
     var out = real_array(len(rows), c)
@@ -833,7 +921,7 @@ def scaled(x: RealArray, alpha: Float64) raises -> RealArray:
         A 1-D array of length `x.size` holding `alpha * x`.
 
     Raises:
-        If NuMojo cannot allocate the array.
+        Never; `raises` for compatibility.
     """
     var y = real_vector(x.size)
     var n = x.size
