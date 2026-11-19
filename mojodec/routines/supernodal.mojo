@@ -270,6 +270,124 @@ def _up_triangle(
     return out
 
 
+def _down_tiles(
+    vp: Pointer[Float64, ...],
+    base: Int,
+    nr: Int,
+    yp: Pointer[mut=True, Float64, ...],
+    n: Int,
+    wp: Pointer[Float64, ...],
+    mb: Int,
+    m4: Int,
+    r0: Int,
+    r1: Int,
+):
+    """Rows `r0..r1` of a supernode's triangle in the forward solve, the
+    columns `j < r0` of `L` (block at `vp[base]`, `nr` rows): for the
+    first `m4` (a multiple of 4) columns `c` of `Y` (`yp[c * n + i]`),
+    `y[i] = fma(L[i, j], -x_j, y[i])` for `j` in order, skipped where
+    `x_j = wp[j * mb + c]` is 0, the chains `_down_triangle` builds.
+    Register tiles of `_W` rows by 4 columns of `Y` when the block is
+    full, one load of `L` per step of `j`; scalars otherwise."""
+    if r0 == 0:
+        return
+    if r1 - r0 < _W:
+        for cy in range(m4):
+            var y = yp.unsafe_offset(cy * n)
+            for j in range(r0):
+                var xj = wp[unsafe_offset=j * mb + cy]
+                if xj != 0:
+                    var col = base + j * nr
+                    for i in range(r0, r1):
+                        y[unsafe_offset=i] = vp[unsafe_offset=col + i].fma(
+                            -xj, y[unsafe_offset=i]
+                        )
+        return
+    comptime V = SIMD[DType.float64, _W]
+    var c0 = 0
+    while c0 < m4:
+        var y0 = yp.unsafe_offset(c0 * n + r0)
+        var y1 = y0.unsafe_offset(n)
+        var y2 = y1.unsafe_offset(n)
+        var y3 = y2.unsafe_offset(n)
+        var acc0 = y0.unsafe_load[width=_W](0)
+        var acc1 = y1.unsafe_load[width=_W](0)
+        var acc2 = y2.unsafe_load[width=_W](0)
+        var acc3 = y3.unsafe_load[width=_W](0)
+        for j in range(r0):
+            # fma(-L, x, y) rounds y - L x, as fma(L, -x, y) does
+            var lv = -vp.unsafe_load[width=_W](base + j * nr + r0)
+            var w = j * mb + c0
+            var x0 = wp[unsafe_offset=w]
+            var x1 = wp[unsafe_offset=w + 1]
+            var x2 = wp[unsafe_offset=w + 2]
+            var x3 = wp[unsafe_offset=w + 3]
+            if x0 != 0 and x1 != 0 and x2 != 0 and x3 != 0:
+                acc0 = lv.fma(V(x0), acc0)
+                acc1 = lv.fma(V(x1), acc1)
+                acc2 = lv.fma(V(x2), acc2)
+                acc3 = lv.fma(V(x3), acc3)
+            else:
+                if x0 != 0:
+                    acc0 = lv.fma(V(x0), acc0)
+                if x1 != 0:
+                    acc1 = lv.fma(V(x1), acc1)
+                if x2 != 0:
+                    acc2 = lv.fma(V(x2), acc2)
+                if x3 != 0:
+                    acc3 = lv.fma(V(x3), acc3)
+        y0.unsafe_store(0, acc0)
+        y1.unsafe_store(0, acc1)
+        y2.unsafe_store(0, acc2)
+        y3.unsafe_store(0, acc3)
+        c0 += 4
+
+
+def _up_triangle4(
+    vp: Pointer[Float64, ...],
+    col: Int,
+    yp: Pointer[mut=True, Float64, ...],
+    n: Int,
+    j: Int,
+    nc: Int,
+    acc: SIMD[DType.float64, 4],
+):
+    """`_up_triangle` for four columns of `Y` (`yp[c * n + i]`), each
+    load of `L` shared: `yp[c * n + j] = _up_triangle(..., acc[c])`."""
+    comptime V = SIMD[DType.float64, _W]
+    var y0 = yp
+    var y1 = y0.unsafe_offset(n)
+    var y2 = y1.unsafe_offset(n)
+    var y3 = y2.unsafe_offset(n)
+    var t0 = V(0)
+    var t1 = V(0)
+    var t2 = V(0)
+    var t3 = V(0)
+    var i = j + 1
+    while i + _W <= nc:
+        var lv = vp.unsafe_load[width=_W](col + i)
+        t0 = lv.fma(y0.unsafe_load[width=_W](i), t0)
+        t1 = lv.fma(y1.unsafe_load[width=_W](i), t1)
+        t2 = lv.fma(y2.unsafe_load[width=_W](i), t2)
+        t3 = lv.fma(y3.unsafe_load[width=_W](i), t3)
+        i += _W
+    var o0 = acc[0] - t0.reduce_add()
+    var o1 = acc[1] - t1.reduce_add()
+    var o2 = acc[2] - t2.reduce_add()
+    var o3 = acc[3] - t3.reduce_add()
+    while i < nc:
+        var l = vp[unsafe_offset=col + i]
+        o0 = l.fma(-y0[unsafe_offset=i], o0)
+        o1 = l.fma(-y1[unsafe_offset=i], o1)
+        o2 = l.fma(-y2[unsafe_offset=i], o2)
+        o3 = l.fma(-y3[unsafe_offset=i], o3)
+        i += 1
+    y0[unsafe_offset=j] = o0
+    y1[unsafe_offset=j] = o1
+    y2[unsafe_offset=j] = o2
+    y3[unsafe_offset=j] = o3
+
+
 @always_inline
 def _dot_lanes(
     a: Pointer[Float64, ...], b: Pointer[Float64, ...], deg_v: Int
@@ -575,8 +693,11 @@ struct _Supernodal(Movable):
         gathered once per column into a dense block, and the products with
         them are matrix products: `_sub_product` (register tiles of rows by
         columns of `Y`) on the way down, `_sub_dots` (pairs of columns of
-        `L` by pairs of columns of `Y`) on the way up. Each entry is the
-        same chain of fused multiply-adds whatever the number of columns,
+        `L` by pairs of columns of `Y`) on the way up. The triangles take
+        groups of four columns of `Y`, each load of `L` shared
+        (`_down_tiles`, `_up_triangle4`), and the rest column by column.
+        Each entry is the same chain of fused multiply-adds whatever the
+        number of columns,
         so a column gets the same bits as when solved alone. One column
         builds those chains column by column of `L` instead, without the
         copies the products need (a single solve was 20-28% slower
@@ -639,19 +760,38 @@ struct _Supernodal(Movable):
                         Y0[unsafe_offset=at] - bp[unsafe_offset=r]
                     )
                 continue
-            for cy in range(mb):  # the triangle, column by column
+            # the triangle, the solved rows going to W = Y[s0:s0+nc, :],
+            # row-major: groups of 4 columns of `Y` by blocks of `_W`
+            # rows (the columns of `L` before a block by `_down_tiles`,
+            # then the block's own triangle), the others column by column
+            var m4 = mb - mb % 4
+            var r0 = 0
+            while r0 < nc and m4 > 0:
+                var r1 = min(r0 + _W, nc)
+                _down_tiles(
+                    vp, base, nr, Y0.unsafe_offset(s0), n, wp, mb, m4, r0, r1
+                )
+                for cy in range(m4):
+                    var yp = Y0.unsafe_offset(cy * n + s0)
+                    for j in range(r0, r1):
+                        var xj = yp[unsafe_offset=j]
+                        wp[unsafe_offset=j * mb + cy] = xj
+                        if xj != 0:
+                            var col = base + j * nr
+                            for i in range(j + 1, r1):
+                                yp[unsafe_offset=i] = vp[
+                                    unsafe_offset=col + i
+                                ].fma(-xj, yp[unsafe_offset=i])
+                r0 = r1
+            for cy in range(m4, mb):
                 var yp = Y0.unsafe_offset(cy * n)
                 for j in range(nc):
                     var xj = yp[unsafe_offset=s0 + j]
+                    wp[unsafe_offset=j * mb + cy] = xj
                     if xj != 0:
                         _down_triangle(vp, base + j * nr, yp, s0, j + 1, nc, xj)
             if deg == 0:
                 continue
-            for t in range(nc):  # W = Y[s0:s0+nc, :], row-major
-                for cy in range(mb):
-                    wp[unsafe_offset=t * mb + cy] = Y0[
-                        unsafe_offset=cy * n + s0 + t
-                    ]
             self._gather(Y0, n, bp, rp, deg, mb)
             _sub_product(
                 bp,
@@ -704,22 +844,32 @@ struct _Supernodal(Movable):
             _sub_dots(
                 wp, mb, vp.unsafe_offset(base + nc), nr, bp, deg, deg_v, nc
             )
-            for cy in range(mb):  # the rest, and the triangle
-                var yp = Y0.unsafe_offset(cy * n)
-                var b = bp.unsafe_offset(cy * deg)
-                for j in range(nc - 1, -1, -1):
-                    var col = base + j * nr
-                    var c = col + nc
-                    var acc = (
-                        yp[unsafe_offset=s0 + j] - wp[unsafe_offset=j * mb + cy]
-                    )
-                    for r in range(deg_v, deg):
-                        acc = vp[unsafe_offset=c + r].fma(
-                            -b[unsafe_offset=r], acc
+            for j in range(nc - 1, -1, -1):  # the rest, and the triangle
+                var col = base + j * nr
+                var c = col + nc
+                var cy = 0
+                while cy < mb:
+                    var cw = 4 if cy + 4 <= mb else 1
+                    var acc = SIMD[DType.float64, 4](0)
+                    for k in range(cw):
+                        var b = bp.unsafe_offset((cy + k) * deg)
+                        var a = (
+                            Y0[unsafe_offset=(cy + k) * n + s0 + j]
+                            - wp[unsafe_offset=j * mb + cy + k]
                         )
-                    yp[unsafe_offset=s0 + j] = _up_triangle(
-                        vp, col, yp, s0, j + 1, nc, acc
-                    )
+                        for r in range(deg_v, deg):
+                            a = vp[unsafe_offset=c + r].fma(
+                                -b[unsafe_offset=r], a
+                            )
+                        acc[k] = a
+                    var yp = Y0.unsafe_offset(cy * n + s0)
+                    if cw == 4:
+                        _up_triangle4(vp, col, yp, n, j, nc, acc)
+                    else:
+                        yp[unsafe_offset=j] = _up_triangle(
+                            vp, col, yp, 0, j + 1, nc, acc[0]
+                        )
+                    cy += cw
         _ = buf^
         _ = wbuf^
 

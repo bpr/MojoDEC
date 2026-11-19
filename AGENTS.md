@@ -363,8 +363,14 @@ plan). Key design points that span several files:
   as matrices: `_sub_product` (the factor's kernel, `W` = the
   supernode's solved rows, row-major) going down, `_sub_dots` (2 x 2
   tiles of `L` columns by `Y` columns, `_W` lanes then `reduce_add`,
-  odd ones by `_dot_lanes`) going up; the triangles stay column by
-  column. Every entry's chain is fixed whatever `mb` or tile, so keep
+  odd ones by `_dot_lanes`) going up. The triangles take groups of 4
+  columns of `Y`: down by blocks of `_W` rows, the columns of `L`
+  before a block by `_down_tiles` (8 x 4 register tiles starting from
+  `Y`, a zero `x_j` skipped per column as the single solve skips it),
+  then the block's own triangle; up by `_up_triangle4` (one load of `L`
+  for four dots); the other `mb % 4` columns column by column (a
+  one-column tile reads `L` across its rows, slower than the sweep down
+  each column). Every entry's chain is fixed whatever `mb` or tile, so keep
   explicit `fma`s there (contraction differs between tile and tail
   code). `mb == 1` (single solves, and a core's one-column block) has
   its own loops with the same chains, built column by column of `L`
@@ -373,8 +379,8 @@ plan). Key design points that span several files:
   slower. Above `_PARALLEL_SOLVE_WORK`
   ((stored + steps (stored + nnz A)) x m = 4e6) the blocks go to the
   physical cores in one `parallel_ranges` call. 30^3, m = 64, no
-  refinement (i7-10875H): 934 ms as single solves, 407 ms one thread,
-  69 ms on 8. The typed wrappers overload `solve` on a `List` of
+  refinement (i7-10875H): 915 ms as single solves, 304 ms one thread,
+  53 ms on 8. The typed wrappers overload `solve` on a `List` of
   cochains (`BlockSparseLDLT`: of `CochainPair`s), packed into one n x m
   solve (`_typed_solve_many`, `_columns_of`, `_column`).
   3-7x faster factors than simplicial in 3D on one thread, about 4x more
