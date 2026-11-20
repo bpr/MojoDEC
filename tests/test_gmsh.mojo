@@ -563,13 +563,15 @@ def test_parallel_parse_agrees() raises:
     var tags: List[Int] = [2, 5, 7, 9]
     var good = _two_triangles(tags, 2)
     # signs, -0, exponents, tabs and CRLF, a tag past 2^53 (left to the
-    # serial reader); then malformed numbers: a fraction where an integer
+    # serial reader), subnormals (parsed on the workers, not flushed);
+    # then malformed numbers: a fraction where an integer
     # goes, text, a number missing, one too many, a section left open
     var texts: List[String] = [
         good,
         good.replace(" 0 0 0\n", " -0 0.0e0 -0.\n").replace("\n5 ", "\n+5 "),
         good.replace(" 1 1 0\n", " 1.0e+00\t1E0 0\r\n"),
         good.replace("9 1 1 0", "9007199254740993 1 1 0"),
+        good.replace(" 1 1 0\n", " 4.9e-324 -2.5e-310 1e-320\n"),
         good.replace("2 2 0 5 9 7", "2 2 0 5.0 9 7"),
         good.replace("2 2 0 5 9 7", "2 2 0 5 9 seven"),
         good.replace("2 2 0 5 9 7", "2 2 0 5 9"),
@@ -582,7 +584,7 @@ def test_parallel_parse_agrees() raises:
         _write(texts[i])
         var r = _parse_both(TMP)
         assert_equal(r[0], r[1], String("text ", i))
-        assert_equal(r[0].startswith("error"), i >= 4, String("text ", i))
+        assert_equal(r[0].startswith("error"), i >= 5, String("text ", i))
 
 
 def main() raises:

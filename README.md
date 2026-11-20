@@ -405,7 +405,7 @@ the published mathematics:
 - **Parallel loops** on large meshes: circumcenters and primal volumes
   (from 50k simplices), Whitney mass matrices (from 4096 top simplices),
   and sparse matrix-vector products in `cg` and `lsqr` (from 1M stored
-  entries), through MAX's `parallelize`. Smaller problems run serially, and
+  entries), on molina's own thread pool. Smaller problems run serially, and
   the results are the same either way. `MOLINA_NUM_THREADS=k` caps the
   threads at k.
 - **`icosahedron` and `icosphere`**, closed surfaces to test on.

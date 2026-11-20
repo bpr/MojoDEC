@@ -843,11 +843,7 @@ def _scan_decimal(
 def _atof_token(
     p: Pointer[Byte, _], start: Int, end: Int
 ) -> Tuple[Int, UInt64, UInt8]:
-    """`_scan_number`'s result for a decimal outside the fast path.
-
-    Values below 1e-307 (and 0) are left to the serial reader: the thread
-    pool's workers flush subnormal results to zero, so `atof` there gives
-    0 where the calling thread gives a subnormal."""
+    """`_scan_number`'s result for a decimal outside the fast path."""
     try:
         var x = atof(
             StringSlice(
@@ -856,8 +852,6 @@ def _atof_token(
                 )
             )
         )
-        if abs(x) < 1.0e-307:
-            return (end, UInt64(0), _OTHER)
         return (end, bitcast[DType.uint64](x), _FLOAT)
     except:
         return (end, UInt64(0), _OTHER)

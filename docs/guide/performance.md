@@ -1090,8 +1090,7 @@ in `$Nodes` (half of them decimals), on one thread.
   rows; format 2.2's elements a run of one type and tag at a time).
 - **Results and errors stay the serial reader's.** A token the serial
   reader might read differently (an integer past 2^53, text that is not
-  a decimal) leaves the section to it. So does a subnormal: the thread
-  pool's workers flush subnormals to zero, so `atof` there gives 0. Any
+  a decimal) leaves the section to it. Any
   error reruns the section serially, which raises the same message as
   before. A test parses the fixtures and malformed texts both ways with
   the threshold at 0, in chunks of a few bytes.

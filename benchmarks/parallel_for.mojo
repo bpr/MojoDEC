@@ -2,101 +2,102 @@
 # MojoDEC: Discrete Exterior Calculus in Mojo.
 # Largely inspired by PyDEC (https://github.com/hirani/pydec).
 # ===----------------------------------------------------------------------=== #
-"""A pure-Mojo `parallel_for` on POSIX threads, timed against MAX's
-`parallelize`.
-
-Kept as a baseline for benchmarking MojoDEC's parallel loops. Threads are
-created and joined on every call, so it suits loops of at least tens of
-microseconds per thread.
+"""The thread pool of molina (`parallel_ranges`) timed against MAX's
+`parallelize`, which it replaced: the cost of a call that does no work,
+on workers still polling and on workers asleep, and a loop with work.
 
 ```sh
-pixi run mojo run benchmarks/parallel_for.mojo
+pixi run mojo run -D ASSERT=none -I . benchmarks/parallel_for.mojo
 ```
 """
 
-from std.ffi import external_call
+from std.sys import num_logical_cores
 from std.time import perf_counter_ns
+
 from max.algorithm import parallelize
 
-
-@fieldwise_init
-struct _Job(Copyable):
-    """One thread's share: the body's address and its index range."""
-
-    var body: Int
-    var lo: Int
-    var hi: Int
+from molina.parallel import parallel_ranges
 
 
-def _run[
-    F: def(Int) -> None
-](arg: OpaquePointer[MutAnyOrigin]) -> OpaquePointer[MutAnyOrigin]:
-    """The thread entry point: run the body over the job's range."""
-    var job = arg.unsafe_bitcast[_Job]()
-    var body = OpaquePointer[MutAnyOrigin](
-        unsafe_from_address=job[].body
-    ).unsafe_bitcast[F]()
-    for i in range(job[].lo, job[].hi):
-        body[](i)
-    return arg
-
-
-def parallel_for[F: def(Int) -> None](n: Int, body: F, workers: Int):
-    """Run `body(i)` for `i` in `0..n`, split into `workers` contiguous
-    ranges, one per thread (the calling thread takes the first).
-
-    The body must not raise and must not write where another index writes.
-    """
-    var jobs = List[_Job](capacity=workers)
-    var tids = List[UInt64](length=workers, fill=0)
-    var addr = Int(Pointer(to=body))
-    for w in range(workers):
-        jobs.append(_Job(addr, n * w // workers, n * (w + 1) // workers))
-    var entry = _run[F]
-    for w in range(1, workers):
-        _ = external_call["pthread_create", Int32](
-            Pointer(to=tids[w]),
-            Int(0),
-            entry,
-            Pointer(to=jobs[w]).unsafe_bitcast[NoneType](),
-        )
-    _ = _run[F](Pointer(to=jobs[0]).unsafe_bitcast[NoneType]())
-    for w in range(1, workers):
-        _ = external_call["pthread_join", Int32](tids[w], Int(0))
+def _idle(ns: Int):
+    """Spin for `ns` nanoseconds (long enough for idle workers to sleep)."""
+    var s = perf_counter_ns()
+    while perf_counter_ns() - s < ns:
+        pass
 
 
 def main():
-    var n = 1 << 24
+    var cores = num_logical_cores()
+    var n = 1 << 22
     var out = List[Float64](length=n, fill=0)
     var po = out.unsafe_ptr()
 
-    def work(r: Int) {po}:
-        var x = Float64(r)
-        for _ in range(20):
-            x = x * 0.999 + 1.0
-        po[unsafe_offset=r] = x
+    def mark(c: Int, lo: Int, hi: Int) {po}:
+        po[unsafe_offset=c] = 1.0
 
-    var chunk = n // 64
+    def mark1(c: Int) {po}:
+        po[unsafe_offset=c] = 1.0
 
-    def work_chunk(c: Int) {po, chunk}:
+    print("empty call, back to back (us):")
+    for w in [2, 8, cores]:
+        var t0 = perf_counter_ns()
+        for _ in range(1000):
+            parallel_ranges(w, 0, mark)
+        var t1 = perf_counter_ns()
+        for _ in range(1000):
+            parallelize(mark1, w)
+        var t2 = perf_counter_ns()
+        print(
+            "  ",
+            w,
+            "chunks: molina",
+            Float64(t1 - t0) / 1e6,
+            " MAX",
+            Float64(t2 - t1) / 1e6,
+        )
+
+    var pool = 0
+    var mx = 0
+    for _ in range(20):
+        _idle(2_000_000)
+        var t = perf_counter_ns()
+        parallel_ranges(cores, 0, mark)
+        pool += perf_counter_ns() - t
+        _idle(2_000_000)
+        t = perf_counter_ns()
+        parallelize(mark1, cores)
+        mx += perf_counter_ns() - t
+    print(
+        "empty call after 2 ms idle (us): molina",
+        Float64(pool) / 2e4,
+        " MAX",
+        Float64(mx) / 2e4,
+    )
+
+    def work(c: Int, lo: Int, hi: Int) {po}:
+        for r in range(lo, hi):
+            var x = Float64(r)
+            for _ in range(20):
+                x = x * 0.999 + 1.0
+            po[unsafe_offset=r] = x
+
+    var chunk = n // cores
+
+    def work1(c: Int) {po, chunk}:
         for r in range(c * chunk, (c + 1) * chunk):
             var x = Float64(r)
             for _ in range(20):
                 x = x * 0.999 + 1.0
             po[unsafe_offset=r] = x
 
-    for w in [1, 2, 4, 8, 16]:
-        var t = perf_counter_ns()
-        parallel_for(n, work, w)
-        print(
-            "pthreads",
-            w,
-            "threads:",
-            Float64(perf_counter_ns() - t) / 1e6,
-            "ms",
-        )
-    var check = out[n - 1]
     var t = perf_counter_ns()
-    parallelize(work_chunk, 64)
-    print("max parallelize:", Float64(perf_counter_ns() - t) / 1e6, "ms")
-    print("same result:", out[n - 1] == check)
+    parallel_ranges(n, 0, work)
+    var t1 = perf_counter_ns()
+    parallelize(work1, cores)
+    var t2 = perf_counter_ns()
+    print(
+        "4M updates of 20 steps (ms): molina",
+        Float64(t1 - t) / 1e6,
+        " MAX",
+        Float64(t2 - t1) / 1e6,
+    )

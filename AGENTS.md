@@ -72,11 +72,10 @@ there); `mojodec/prelude.mojo` is the small common subset.
   (plain `>=1.3` would exclude the 1.3 nightlies, which conda orders before
   1.3.0); `pixi.lock` records the build actually tested. Don't pin exact
   versions in `pixi.toml` except temporarily while testing one. `max-core`
-  is needed by the vendored NuMojo (`max.algorithm`, `max.gpu`); MojoDEC
-  and molina use `max.algorithm.parallelize` only through
-  `molina/parallel.mojo`.
-  `benchmarks/parallel_for.mojo` is a pure-Mojo POSIX-threads baseline to
-  time it against.
+  is needed only by the vendored NuMojo (`max.algorithm`, `max.gpu`):
+  molina's parallel loops run on its own POSIX-threads pool
+  (`molina/parallel.mojo`), and `benchmarks/parallel_for.mojo` times it
+  against MAX's `parallelize`.
 - `-D ASSERT=none` removes `debug_assert` bounds checks. `mojo run`/`build`
   accept it (the `*-release` tasks pass it via `MOJO_FLAGS`); `mojo
   precompile` does not, so it applies only to code compiled from source.
@@ -134,10 +133,9 @@ results the caller owns (caching Whitney sparsity was rejected, see the
 plan). Key design points that span several files:
 
 - **Linear algebra boundary**: the package `molina` (`molina/`, beside
-  `mojodec/`; `../mogeometry` precompiles it, and `../minigrad`'s
-  `linalg` compiles `molina.dense` from source with a newer Mojo and no
-  MAX, so `dense`, `operator`, `utils`, and `real_array` must not import
-  `parallel`, `max`, or the package root) holds
+  `mojodec/`; `../mogeometry` and `../minigrad` use it too, minigrad on
+  a newer Mojo and without MAX, so molina must import nothing from MAX)
+  holds
   `real_array`, `utils`, `parallel`, `index_set`, `operator`,
   `diagonal`, `sparse`, `dense`, `ordering`, `supernodal`,
   `sparse_ldlt`, `linalg`, `lanczos`, and `amg`. It imports nothing from
@@ -584,9 +582,16 @@ plan). Key design points that span several files:
 `body(chunk, lo, hi)` on one chunk per logical core (per physical core
 with `memory_bound=True`, which the matvec passes: a second hardware
 thread speeds up arithmetic, not memory streams), or serially when
-`n < serial_below`. A MAX `parallelize` call costs about 200 µs whatever the
-work (POSIX threads cost 20–50 µs), so thresholds are set where the serial
-loop takes a few hundred µs: matvec at `PARALLEL_NNZ` (1M stored entries),
+`n < serial_below`. The loops run on molina's own pool: POSIX threads
+started on first use and kept, which poll for 100 µs after a loop and
+then sleep on a futex; chunks are claimed by compare-and-swap on one
+ticket (generation and next chunk), and the runtime's global teardown
+after `main` joins the workers (`mojo run` frees their code next). A call
+costs 1–3 µs on polling workers and about 8 µs on sleeping ones (MAX's
+`parallelize`, used before, 12–130 µs). A loop started inside a body, or
+from a second thread while one runs, runs serially. The thresholds date
+from MAX's cost and are set where the serial loop takes a few hundred
+µs: matvec at `PARALLEL_NNZ` (1M stored entries),
 circumcenters and primal volumes at 50k simplices, `whitney_innerproduct`
 at 4096 top simplices (element loop and row assembly), dual volumes at
 4096 top simplices, the supernodal factor at 5e6 multiply-adds (one call
@@ -594,11 +599,9 @@ for the whole factorization). `MOLINA_NUM_THREADS=k` caps the chunks at k (1 run
 everything serially, for single-threaded benchmarks). Bodies must not
 raise: record failures per chunk and raise afterwards. Keep a hot serial loop out of a function that also
 holds the parallel branch (`CSRMatrix._matvec_parallel` is separate): in
-the same function the serial loop ran about 15% slower. The pool's threads flush
-subnormals to zero, inputs and results (FTZ and DAZ; the calling thread
-does not), so a parallel loop matches the serial one only away from
-subnormals (`parse_numbers` leaves `atof` results under 1e-307 to the
-serial reader). Loops that sum
+the same function the serial loop ran about 15% slower. The workers keep
+the default floating-point environment (MAX's flushed subnormals to
+zero), so subnormals need no special case. Loops that sum
 into shared entries stay bit for bit serial by ownership: each chunk owns
 a block of outputs and adds only to those, in the serial order (dual
 volumes: faces by first vertex id, which can exceed the number of

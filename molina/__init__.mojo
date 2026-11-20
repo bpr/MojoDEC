@@ -10,7 +10,7 @@ Linear algebra in pure Mojo: `RealArray` vectors and dense matrices,
 factorizations and `eigh`, AMD ordering, simplicial and supernodal sparse
 LDL^T and Cholesky, Krylov solvers (`cg`, `minres`, `lsqr`), shift-invert
 Lanczos (`eigsh`), and smoothed-aggregation multigrid. It imports
-nothing from MojoDEC, which builds on it, nor from NuMojo.
+nothing from MojoDEC, which builds on it, nor from NuMojo or MAX.
 
 ```mojo
 from molina import CSRMatrix, cg, jacobi, real_vector_from_list
@@ -35,8 +35,8 @@ Modules
 - `ordering`, `sparse_ldlt`, `supernodal`: the sparse direct solvers.
 - `linalg`: the iterative solvers, `spsolve`, `eigh_generalized`.
 - `lanczos`: `eigsh`. `amg`: `SmoothedAggregation`.
-- `parallel`: `parallel_ranges`, the loops on MAX's thread pool
-  (`MOLINA_NUM_THREADS` caps them).
+- `parallel`: `parallel_ranges`, the loops on molina's own POSIX-threads
+  pool (`MOLINA_NUM_THREADS` caps them).
 """
 
 comptime __version__: String = "0.1.0"

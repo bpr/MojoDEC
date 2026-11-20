@@ -17,7 +17,7 @@
 context:
   version: "0.1.0"
   # A precompiled .mojoc only loads in the compiler that built it, so the
-  # compiler, and MAX (whose max.mojoc MojoDEC imports), are pinned exactly.
+  # compiler, and MAX (whose max.mojoc NuMojo imports), are pinned exactly.
   mojo_version: "1.3.0.dev2026110305"
   max_version: "26.8.0.dev2026110305"
   # "vendored" (third_party/numojo) or "package" (the numojo conda package)

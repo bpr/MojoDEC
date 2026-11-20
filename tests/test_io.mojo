@@ -403,10 +403,8 @@ def test_parse_numbers_match_reader() raises:
     assert_true(kept == [-0, 5, 999999999999999, 0])
     # tokens left to the reader, a token running into the end, and
     # stretches below the threshold give None
-    # (subnormals too: the pool's threads flush them to zero)
     for bad in [
         "1 2 abc 3 ",
-        "1 4.9e-324 2 ",
         "1 99999999999999999999 2 ",
         "1 9007199254740993 2 ",
         "1 2 0x10 ",

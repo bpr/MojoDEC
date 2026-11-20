@@ -8,10 +8,10 @@ MojoDEC is packaged as a conda package with
 ## Dependencies
 
 - `mojo-compiler` and `max-core`, pinned exactly. A `.mojoc` only loads in
-  the compiler that built it, and MojoDEC imports `max.algorithm` (in
-  `molina/parallel.mojo`), so `max-core` must be the release that goes with
-  the compiler (e.g. Mojo `1.3.0.dev2026110305` with MAX
-  `26.8.0.dev2026110305`).
+  the compiler that built it, and NuMojo imports `max.algorithm` and
+  `max.gpu` (molina imports nothing from MAX), so `max-core` must be the
+  release that goes with the compiler (e.g. Mojo `1.3.0.dev2026110305`
+  with MAX `26.8.0.dev2026110305`).
 - `numojo`. MojoDEC's API takes and returns NuMojo arrays.
 - `python`, `numpy` and `matplotlib-base`, for `mojodec.vis`, which plots
   through Python interop. Code that doesn't plot never loads Python.
