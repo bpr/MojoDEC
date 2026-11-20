@@ -134,7 +134,10 @@ results the caller owns (caching Whitney sparsity was rejected, see the
 plan). Key design points that span several files:
 
 - **Linear algebra boundary**: the package `molina` (`molina/`, beside
-  `mojodec/`; mogeometry and minigrad are to use it too) holds
+  `mojodec/`; `../mogeometry` precompiles it, and `../minigrad`'s
+  `linalg` compiles `molina.dense` from source with a newer Mojo and no
+  MAX, so `dense`, `operator`, `utils`, and `real_array` must not import
+  `parallel`, `max`, or the package root) holds
   `real_array`, `utils`, `parallel`, `index_set`, `operator`,
   `diagonal`, `sparse`, `dense`, `ordering`, `supernodal`,
   `sparse_ldlt`, `linalg`, `lanczos`, and `amg`. It imports nothing from
