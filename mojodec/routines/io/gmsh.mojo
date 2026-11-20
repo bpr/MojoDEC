@@ -44,7 +44,7 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.mesh import SimplicialMesh
-from mojodec.core.parallel import num_chunks, parallel_ranges
+from molina.parallel import num_chunks, parallel_ranges
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.core.subset import Subset

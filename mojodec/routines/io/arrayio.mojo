@@ -25,8 +25,8 @@ from std.sys import size_of
 import numojo as nm
 from numojo.prelude import *
 
-from mojodec.core.real_array import RealArray
-from mojodec.core.sparse import CSRMatrix
+from molina.real_array import RealArray
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import from_ndarray, to_ndarray
 from mojodec.routines.io.scan import ByteReader, append_le_array, write_float
 

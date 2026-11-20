@@ -24,8 +24,8 @@ from mojodec import (
     simplicial_grid_2d,
     whitney_innerproduct,
 )
-from mojodec.core.parallel import num_chunks, parallel_ranges
-from mojodec.core.sparse import PARALLEL_NNZ
+from molina.parallel import num_chunks, parallel_ranges
+from molina.sparse import PARALLEL_NNZ
 from mojodec.core.utils import (
     _lexsort_rows,
     _merge_sort_rows,
@@ -119,9 +119,9 @@ def _dual_volumes(mesh: SimplicialMesh) raises -> List[List[Float64]]:
 
 
 def _check_dual_volumes_match_serial(mesh: SimplicialMesh) raises:
-    _ = setenv("MOJODEC_NUM_THREADS", "1")
+    _ = setenv("MOLINA_NUM_THREADS", "1")
     var serial = _dual_volumes(mesh)
-    _ = unsetenv("MOJODEC_NUM_THREADS")
+    _ = unsetenv("MOLINA_NUM_THREADS")
     var parallel = _dual_volumes(mesh)
     assert_equal(len(serial), len(parallel))
     for k in range(len(serial)):
@@ -166,10 +166,10 @@ def _check_unused_vertices(mesh: SimplicialMesh) raises:
     var shifted = _with_unused_vertices(mesh, 3)
     for threads in ["1", ""]:
         if threads:
-            _ = setenv("MOJODEC_NUM_THREADS", threads)
+            _ = setenv("MOLINA_NUM_THREADS", threads)
         var want = _dual_volumes(mesh)
         var got = _dual_volumes(shifted)
-        _ = unsetenv("MOJODEC_NUM_THREADS")
+        _ = unsetenv("MOLINA_NUM_THREADS")
         for k in range(len(want)):
             assert_equal(len(want[k]), len(got[k]))
             for i in range(len(want[k])):
@@ -178,14 +178,14 @@ def _check_unused_vertices(mesh: SimplicialMesh) raises:
         var sc = SimplicialComplex(mesh.vertices, mesh.elements)
         var shifted_sc = SimplicialComplex(shifted.vertices, shifted.elements)
         if threads:
-            _ = setenv("MOJODEC_NUM_THREADS", threads)
+            _ = setenv("MOLINA_NUM_THREADS", threads)
         for k in range(len(sc)):
             var A = whitney_innerproduct(sc, k)
             var B = whitney_innerproduct(shifted_sc, k)
             assert_true(A.indptr == B.indptr)
             assert_true(A.indices == B.indices)
             assert_true(A.data == B.data)
-        _ = unsetenv("MOJODEC_NUM_THREADS")
+        _ = unsetenv("MOLINA_NUM_THREADS")
 
 
 def test_unused_vertices() raises:
@@ -371,10 +371,10 @@ def test_large_reorder_vertices() raises:
     # parallel: the same result as on one thread, and the first of two
     # errors in different chunks
     var mesh = _jittered([25, 25, 25], shuffle=True)
-    _ = setenv("MOJODEC_NUM_THREADS", "1")
+    _ = setenv("MOLINA_NUM_THREADS", "1")
     var one = reorder_vertices(mesh)
     var keys_one = morton_keys(mesh.vertices)
-    _ = unsetenv("MOJODEC_NUM_THREADS")
+    _ = unsetenv("MOLINA_NUM_THREADS")
     var all = reorder_vertices(mesh)
     assert_true(morton_keys(mesh.vertices) == keys_one)
     assert_true(all.old_vertex == one.old_vertex)
@@ -403,7 +403,7 @@ def test_large_reorder_vertices() raises:
 
 
 def _complex_error(mesh: SimplicialMesh, threads: String) raises -> String:
-    _ = setenv("MOJODEC_NUM_THREADS", threads)
+    _ = setenv("MOLINA_NUM_THREADS", threads)
     var message = String()
     try:
         _ = SimplicialComplex(
@@ -411,7 +411,7 @@ def _complex_error(mesh: SimplicialMesh, threads: String) raises -> String:
         )
     except e:
         message = String(e)
-    _ = unsetenv("MOJODEC_NUM_THREADS")
+    _ = unsetenv("MOLINA_NUM_THREADS")
     return message
 
 
@@ -462,23 +462,23 @@ def test_large_mesh_checks_indices() raises:
 
 def test_num_threads_env_caps_chunks() raises:
     var cores = num_logical_cores()
-    _ = setenv("MOJODEC_NUM_THREADS", "1")
+    _ = setenv("MOLINA_NUM_THREADS", "1")
     assert_equal(num_chunks(100_000, 0), 1)
-    _ = setenv("MOJODEC_NUM_THREADS", "2")
+    _ = setenv("MOLINA_NUM_THREADS", "2")
     assert_equal(num_chunks(100_000, 0), min(2, cores))
     # not a positive integer: ignored
-    _ = setenv("MOJODEC_NUM_THREADS", "zero")
+    _ = setenv("MOLINA_NUM_THREADS", "zero")
     assert_equal(num_chunks(100_000, 0), cores)
-    _ = setenv("MOJODEC_NUM_THREADS", "0")
+    _ = setenv("MOLINA_NUM_THREADS", "0")
     assert_equal(num_chunks(100_000, 0), cores)
-    _ = unsetenv("MOJODEC_NUM_THREADS")
+    _ = unsetenv("MOLINA_NUM_THREADS")
     assert_equal(num_chunks(100_000, 0), cores)
     # memory-bound loops: one chunk per physical core, capped the same way
     var physical = num_physical_cores()
     assert_equal(num_chunks(100_000, 0, memory_bound=True), physical)
-    _ = setenv("MOJODEC_NUM_THREADS", "2")
+    _ = setenv("MOLINA_NUM_THREADS", "2")
     assert_equal(num_chunks(100_000, 0, memory_bound=True), min(2, physical))
-    _ = unsetenv("MOJODEC_NUM_THREADS")
+    _ = unsetenv("MOLINA_NUM_THREADS")
 
 
 def test_large_geometry() raises:
@@ -597,7 +597,7 @@ def _supernodal_values(
 ) raises -> List[Float64]:
     """The factor's blocks, then its number of regularized pivots."""
     if threads:
-        _ = setenv("MOJODEC_NUM_THREADS", threads)
+        _ = setenv("MOLINA_NUM_THREADS", threads)
     var s: Optional[List[Int]] = None
     if len(signs) > 0:
         s = signs.copy()
@@ -609,7 +609,7 @@ def _supernodal_values(
         refinement_steps=0,
         layout=FactorLayout.SUPERNODAL,
     )
-    _ = unsetenv("MOJODEC_NUM_THREADS")
+    _ = unsetenv("MOLINA_NUM_THREADS")
     var out = F._super.value().vals.copy()
     out.append(Float64(F.num_regularized))
     return out^
@@ -681,7 +681,7 @@ def test_parallel_block_solves_match_serial() raises:
             fset(B, i, c, Float64((i * 7 + c * 13) % 11) - 5.0)
     for layout in [FactorLayout.SIMPLICIAL, FactorLayout.SUPERNODAL]:
         var F = SparseLDLT(A, layout=layout, refinement_steps=2)
-        _ = setenv("MOJODEC_NUM_THREADS", "1")
+        _ = setenv("MOLINA_NUM_THREADS", "1")
         var want = F.solve(B)
         for c in range(0, m, 13):
             var b = real_vector(n)
@@ -692,24 +692,24 @@ def test_parallel_block_solves_match_serial() raises:
                 assert_equal(x.unsafe_get(i), fget(want, i, c))
         for threads in ["3", ""]:
             if threads:
-                _ = setenv("MOJODEC_NUM_THREADS", threads)
+                _ = setenv("MOLINA_NUM_THREADS", threads)
             else:
-                _ = unsetenv("MOJODEC_NUM_THREADS")
+                _ = unsetenv("MOLINA_NUM_THREADS")
             var got = F.solve(B)
             for i in range(n * m):
                 assert_equal(got.unsafe_get(i), want.unsafe_get(i))
-        _ = unsetenv("MOJODEC_NUM_THREADS")
+        _ = unsetenv("MOLINA_NUM_THREADS")
 
 
 def _supernodal_error(A: CSRMatrix, perm: List[Int], threads: String) -> String:
     if threads:
-        _ = setenv("MOJODEC_NUM_THREADS", threads)
+        _ = setenv("MOLINA_NUM_THREADS", threads)
     var message = String("")
     try:
         _ = SparseLDLT(A, perm=perm.copy(), layout=FactorLayout.SUPERNODAL)
     except e:
         message = String(e)
-    _ = unsetenv("MOJODEC_NUM_THREADS")
+    _ = unsetenv("MOLINA_NUM_THREADS")
     return message^
 
 

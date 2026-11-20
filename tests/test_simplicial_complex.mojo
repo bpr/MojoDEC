@@ -15,7 +15,7 @@ from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex, _div6
 from mojodec.core.utils import real_array, fget, fset, rows_of, cols_of
 from mojodec.core.utils import real_array_from_string
-from mojodec.core.real_array import RealArray
+from molina.real_array import RealArray
 
 
 def I(s: String) raises -> NDArray[DType.int]:

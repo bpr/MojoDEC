@@ -32,9 +32,9 @@ var y = A @ CochainPair(flux, pressure)
 optionally with some unknowns of each kind given.
 """
 
-from mojodec.core.operator import LinearOperator
+from molina.operator import LinearOperator
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.typed import MatrixOp, TypedCochain
 from mojodec.core.utils import RealArray, real_vector
 

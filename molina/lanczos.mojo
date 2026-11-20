@@ -1,6 +1,6 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 # Written from the published algorithms: the spectral transformation of
 # Ericsson and Ruhe (Math. Comp. 35(152), 1980), the thick-restart Lanczos
@@ -8,8 +8,8 @@
 # usual M-orthogonal deflation of gradients for Maxwell eigenproblems.
 # ===----------------------------------------------------------------------=== #
 """
-Sparse symmetric eigenproblems (`mojodec.routines.lanczos_core`).
-=================================================================
+Sparse symmetric eigenproblems (`molina.lanczos`).
+==================================================
 `eigsh(K, M, nev, sigma=s)` finds the `nev` eigenvalues of
 `K x = lambda M x` nearest `s`, with `K` symmetric and `M` symmetric
 positive definite.
@@ -28,15 +28,15 @@ vectors are kept, the rest dropped. Converged pairs are then locked and
 their complement searched again, which finds every copy of a multiple
 eigenvalue.
 
-The overloads on typed operators are in `mojodec.routines.lanczos`, which
+MojoDEC's overloads on typed operators are in `mojodec.routines.lanczos`, which
 also forwards the ones here.
 """
 
 from std.math import isfinite, sqrt
 
-from mojodec.core.diagonal import DiagonalOperator
-from mojodec.core.sparse import CSRMatrix
-from mojodec.core.utils import (
+from molina.diagonal import DiagonalOperator
+from molina.sparse import CSRMatrix
+from molina.utils import (
     RealArray,
     axpy,
     dot,
@@ -44,9 +44,9 @@ from mojodec.core.utils import (
     real_array,
     real_vector,
 )
-from mojodec.routines import dense
-from mojodec.routines.dense import EighResult
-from mojodec.routines.sparse_ldlt_core import SparseCholesky, SparseLDLT
+from molina import dense
+from molina.dense import EighResult
+from molina.sparse_ldlt import SparseCholesky, SparseLDLT
 
 
 comptime _BREAKDOWN = 1e-10

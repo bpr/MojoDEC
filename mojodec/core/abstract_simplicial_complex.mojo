@@ -10,7 +10,7 @@ combinatorial complex (no vertex coordinates) built from its maximal simplices
 of each dimension, e.g. the graph used for least-squares ranking.
 """
 
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import (
     IntArray,
     compare_rows,

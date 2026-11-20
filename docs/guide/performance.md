@@ -33,8 +33,8 @@ libraries are doing the same arithmetic, not just similar work.
 Times are the best of three runs, in each library's own release build
 (Rust with `target-cpu=native`, as Mojo compiles for the host CPU).
 MojoDEC and formoniq run once on one thread and once on all cores;
-`MOJODEC_NUM_THREADS=1` makes MojoDEC's parallel loops serial (see
-`core/parallel.mojo`). PyDEC and dexterior are single-threaded.
+`MOLINA_NUM_THREADS=1` makes MojoDEC's parallel loops serial (see
+`molina/parallel.mojo`). PyDEC and dexterior are single-threaded.
 
 ## Results
 

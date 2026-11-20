@@ -24,7 +24,7 @@ use, over `CSRMatrix` and `RealArray`.
   and symmetric positive definite `M` (dense, or a `DiagonalOperator` such
   as a Hodge star).
 
-`cg` and `minres` take any `LinearOperator` (`mojodec.core.operator`) and,
+`cg` and `minres` take any `LinearOperator` (`molina.operator`) and,
 as `M`, any `Preconditioner`, and optionally a starting guess (`x0`), a
 `NullSpace`, and `ritz=True` for the Ritz values. Each solver has a typed overload on
 `MatrixOp`s and `TypedCochain`s, and `minres` and `spsolve` one on a
@@ -42,8 +42,7 @@ var b = tc.cochain[2, DUAL]()              # one value per dual cell
 var u = cg(A, b, rtol=1e-10).take_x()      # TypedCochain[2, 0, PRIMAL]
 ```
 
-The untyped solvers live in `mojodec.routines.linalg_core` and are
-re-exported here. `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, and
+The untyped solvers are molina's (`molina.linalg`), re-exported here. `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, and
 `eigh_generalized` are defined here as well, forwarding to it, because
 Mojo does not merge overloads of one name imported from two modules.
 """
@@ -51,13 +50,11 @@ Mojo does not merge overloads of one name imported from two modules.
 
 from std.math import isfinite, sqrt
 from std.memory import ArcPointer
-import numojo as nm
-from numojo.prelude import *
 
-from mojodec.core.diagonal import DiagonalOperator
-from mojodec.core.operator import Identity, LinearOperator, Preconditioner
+from molina.diagonal import DiagonalOperator
+from molina.operator import Identity, LinearOperator, Preconditioner
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.typed import DiagonalOp, MatrixOp, TypedCochain, TypedSubset
 from mojodec.core.typed_block import BlockOp, CochainPair
 from mojodec.core.utils import (
@@ -71,11 +68,11 @@ from mojodec.core.utils import (
     rows_of,
     cols_of,
 )
-from mojodec.routines import dense
-from mojodec.routines.dense import EighResult
+from molina import dense
+from molina.dense import EighResult
 from mojodec.routines.sparse_ldlt import SparseLDLT
-from mojodec.routines import linalg_core
-from mojodec.routines.linalg_core import (
+from molina import linalg as molina_linalg
+from molina.linalg import (
     DenseCholesky,
     DirectMethod,
     EigenvalueRange,
@@ -86,7 +83,7 @@ from mojodec.routines.linalg_core import (
 )
 
 # ===----------------------------------------------------------------------=== #
-# The untyped solvers, forwarded to `linalg_core`
+# The untyped solvers, forwarded to `molina.linalg`
 # ===----------------------------------------------------------------------=== #
 
 
@@ -103,7 +100,7 @@ def cg[
     nullspace: Optional[NullSpace] = None,
     ritz: Bool = False,
 ) raises -> SolveResult[RealArray]:
-    """Conjugate gradients for `A x = b`: `linalg_core.cg`, which
+    """Conjugate gradients for `A x = b`: `molina.linalg.cg`, which
     documents it.
 
     Parameters:
@@ -123,9 +120,9 @@ def cg[
         The solution with why the iteration stopped.
 
     Raises:
-        As `linalg_core.cg`.
+        As `molina.linalg.cg`.
     """
-    return linalg_core.cg(
+    return molina_linalg.cg(
         A,
         b,
         rtol,
@@ -151,7 +148,7 @@ def cg[
     nullspace: Optional[NullSpace] = None,
     ritz: Bool = False,
 ) raises -> SolveResult[RealArray]:
-    """Preconditioned conjugate gradients: `linalg_core.cg`, which
+    """Preconditioned conjugate gradients: `molina.linalg.cg`, which
     documents it.
 
     Parameters:
@@ -173,9 +170,9 @@ def cg[
         The solution with why the iteration stopped.
 
     Raises:
-        As `linalg_core.cg`.
+        As `molina.linalg.cg`.
     """
-    return linalg_core.cg(
+    return molina_linalg.cg(
         A,
         b,
         M=M,
@@ -201,7 +198,7 @@ def minres[
     nullspace: Optional[NullSpace] = None,
     ritz: Bool = False,
 ) raises -> SolveResult[RealArray]:
-    """MINRES for symmetric `A x = b`: `linalg_core.minres`, which
+    """MINRES for symmetric `A x = b`: `molina.linalg.minres`, which
     documents it.
 
     Parameters:
@@ -221,9 +218,9 @@ def minres[
         The solution with why the iteration stopped.
 
     Raises:
-        As `linalg_core.minres`.
+        As `molina.linalg.minres`.
     """
-    return linalg_core.minres(
+    return molina_linalg.minres(
         A,
         b,
         rtol,
@@ -249,7 +246,7 @@ def minres[
     nullspace: Optional[NullSpace] = None,
     ritz: Bool = False,
 ) raises -> SolveResult[RealArray]:
-    """Preconditioned MINRES: `linalg_core.minres`, which documents it.
+    """Preconditioned MINRES: `molina.linalg.minres`, which documents it.
 
     Parameters:
         Op: The operator type.
@@ -270,9 +267,9 @@ def minres[
         The solution with why the iteration stopped.
 
     Raises:
-        As `linalg_core.minres`.
+        As `molina.linalg.minres`.
     """
-    return linalg_core.minres(
+    return molina_linalg.minres(
         A,
         b,
         M=M,
@@ -286,7 +283,7 @@ def minres[
 
 
 def jacobi(A: CSRMatrix) raises -> DiagonalOperator:
-    """The Jacobi preconditioner of `A`: `linalg_core.jacobi`, which
+    """The Jacobi preconditioner of `A`: `molina.linalg.jacobi`, which
     documents it.
 
     Args:
@@ -296,9 +293,9 @@ def jacobi(A: CSRMatrix) raises -> DiagonalOperator:
         The inverse of `A`'s diagonal.
 
     Raises:
-        As `linalg_core.jacobi`.
+        As `molina.linalg.jacobi`.
     """
-    return linalg_core.jacobi(A)
+    return molina_linalg.jacobi(A)
 
 
 def lsqr(
@@ -308,7 +305,7 @@ def lsqr(
     btol: Float64 = 1e-8,
     iter_lim: Optional[Int] = None,
 ) raises -> SolveResult[RealArray]:
-    """LSQR for `min ||A x - b||`: `linalg_core.lsqr`, which documents it.
+    """LSQR for `min ||A x - b||`: `molina.linalg.lsqr`, which documents it.
 
     Args:
         A: An `m x n` matrix.
@@ -321,9 +318,9 @@ def lsqr(
         The least-squares solution with why the iteration stopped.
 
     Raises:
-        As `linalg_core.lsqr`.
+        As `molina.linalg.lsqr`.
     """
-    return linalg_core.lsqr(A, b, atol, btol, iter_lim)
+    return molina_linalg.lsqr(A, b, atol, btol, iter_lim)
 
 
 def spsolve(
@@ -332,7 +329,7 @@ def spsolve(
     *,
     method: DirectMethod = DirectMethod.DENSE_LU,
 ) raises -> RealArray:
-    """A direct solve of `A x = b`: `linalg_core.spsolve`, which documents
+    """A direct solve of `A x = b`: `molina.linalg.spsolve`, which documents
     it.
 
     Args:
@@ -344,14 +341,14 @@ def spsolve(
         The solution.
 
     Raises:
-        As `linalg_core.spsolve`.
+        As `molina.linalg.spsolve`.
     """
-    return linalg_core.spsolve(A, b, method=method)
+    return molina_linalg.spsolve(A, b, method=method)
 
 
 def eigh_generalized(K: RealArray, M: RealArray) raises -> EighResult:
     """All eigenpairs of `K x = lambda M x`, dense:
-    `linalg_core.eigh_generalized`, which documents it.
+    `molina.linalg.eigh_generalized`, which documents it.
 
     Args:
         K: A symmetric `n x n` array.
@@ -361,14 +358,14 @@ def eigh_generalized(K: RealArray, M: RealArray) raises -> EighResult:
         The eigenvalues ascending, and `M`-orthonormal eigenvectors.
 
     Raises:
-        As `linalg_core.eigh_generalized`.
+        As `molina.linalg.eigh_generalized`.
     """
-    return linalg_core.eigh_generalized(K, M)
+    return molina_linalg.eigh_generalized(K, M)
 
 
 def eigh_generalized(K: RealArray, M: DiagonalOperator) raises -> EighResult:
     """All eigenpairs of `K x = lambda M x` with a diagonal `M`:
-    `linalg_core.eigh_generalized`, which documents it.
+    `molina.linalg.eigh_generalized`, which documents it.
 
     Args:
         K: A symmetric `n x n` array.
@@ -378,9 +375,9 @@ def eigh_generalized(K: RealArray, M: DiagonalOperator) raises -> EighResult:
         The eigenvalues ascending, and `M`-orthonormal eigenvectors.
 
     Raises:
-        As `linalg_core.eigh_generalized`.
+        As `molina.linalg.eigh_generalized`.
     """
-    return linalg_core.eigh_generalized(K, M)
+    return molina_linalg.eigh_generalized(K, M)
 
 
 # ===----------------------------------------------------------------------=== #

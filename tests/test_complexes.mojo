@@ -18,7 +18,7 @@ from mojodec.core.rips_complex import (
     rips_chain_complex,
 )
 from mojodec.core.chain_complex import ChainComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import (
     IntArray,
     iget,

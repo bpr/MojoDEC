@@ -16,9 +16,9 @@ from mojodec import (
     kuhn_grid,
     whitney_innerproduct,
 )
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import RealArray, dot, probe_vector, real_vector
-from mojodec.routines.amg import _aggregates, _smoothed_prolongation
+from molina.amg import _aggregates, _smoothed_prolongation
 
 
 def _interior(sc: SimplicialComplex, k: Int) raises -> List[Int]:

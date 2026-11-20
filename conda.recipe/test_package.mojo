@@ -1,16 +1,17 @@
 # Smoke test for the packaged MojoDEC (run by conda.recipe/recipe.yaml):
-# imports the installed mojodec.mojoc and numojo.mojoc, builds a small
-# complex, and checks its counts and that d d = 0.
+# imports the installed mojodec.mojoc (with molina.mojoc and numojo.mojoc),
+# builds a small complex, and checks its counts and that d d = 0.
 
 from std.testing import assert_equal
 
 import numojo as nm
 from mojodec import SimplicialComplex, d
+from mojodec.core.utils import real_array_from_string
 
 
 def main() raises:
     # the unit square as two triangles
-    var V = nm.fromstring[nm.f64]("[[0,0],[1,0],[1,1],[0,1]]")
+    var V = real_array_from_string("[[0,0],[1,0],[1,1],[0,1]]")
     var S = nm.fromstring[DType.int]("[[0,1,3],[1,2,3]]")
     var sc = SimplicialComplex(V, S)
     assert_equal(sc[0].num_simplices, 4)

@@ -8,7 +8,7 @@ Simplex geometry (`mojodec.routines.geometry`).
 Volumes and circumcenters of simplices, largely inspired by `pydec.math.volume`
 and `pydec.math.circumcenter`. A simplex is given as an `(M+1) x N` NuMojo
 array whose rows are the coordinates of its `M+1` vertices in `N`-space; the
-dense small dense solves use the pivoted LU of `mojodec.routines.dense`.
+dense small dense solves use the pivoted LU of `molina.dense`.
 """
 
 from std.math import sqrt
@@ -25,7 +25,7 @@ from mojodec.core.utils import (
     rows_of,
     cols_of,
 )
-from mojodec.routines import dense
+from molina import dense
 
 
 def unsigned_volume(pts: RealArray) raises -> Float64:

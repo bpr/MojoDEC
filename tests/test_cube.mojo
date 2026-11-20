@@ -5,7 +5,7 @@ from numojo.prelude import *
 
 from mojodec.core.mesh import RegularCubeMesh
 from mojodec.core.regular_cube_complex import RegularCubeComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import IntArray, rows_of, cols_of, take_int_rows
 from mojodec.routines.cube_array import cube_array_search, cube_array_boundary
 from mojodec.core.utils import real_array_from_string

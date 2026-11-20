@@ -18,7 +18,7 @@ struct KDTree(Copyable, Movable, Writable):
     """A k-d tree over `N` points in `k` dimensions.
 
     ```mojo
-    var kd = KDTree(nm.fromstring[f64]("[[0,0],[1,0],[0,1],[1,1]]"))
+    var kd = KDTree(real_array_from_string("[[0,0],[1,0],[0,1],[1,1]]"))
     kd.nearest([2.0, 0.0])            # 1
     kd.nearest_n([2.0, 0.0], 2)       # [1, 3]
     kd.in_sphere([0.1, 0.2], 1.1)     # [0, 2, 1]

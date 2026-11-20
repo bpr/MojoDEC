@@ -18,7 +18,7 @@ from mojodec import (
     whitney_innerproduct,
 )
 from mojodec.core.mesh import SimplicialMesh
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import (
     RealArray,
     cols_of,

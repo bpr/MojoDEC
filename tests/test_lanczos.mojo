@@ -15,8 +15,8 @@ from mojodec import (
     kuhn_grid,
     whitney_innerproduct,
 )
-from mojodec.core.diagonal import DiagonalOperator
-from mojodec.core.sparse import CSRMatrix
+from molina.diagonal import DiagonalOperator
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import RealArray, dot, fget, real_vector
 from mojodec.routines.linalg import eigh_generalized
 

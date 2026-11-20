@@ -13,7 +13,7 @@ from mojodec.routines.io.ply import PlyFormat, read_ply, write_ply
 from mojodec.routines.io.scan import append_le
 from mojodec.routines.io.text import loadtxt
 from mojodec.routines.mesh_generation import icosphere, simplicial_grid_2d
-from mojodec.core.real_array import RealArray
+from molina.real_array import RealArray
 
 comptime DIR = "tests/meshes/ply/"
 comptime TMP = "/tmp/mojodec_ply_test.ply"

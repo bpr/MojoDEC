@@ -1,4 +1,4 @@
-"""Check MojoDEC's doc strings against a per-file baseline.
+"""Check the doc strings of molina and MojoDEC against a per-file baseline.
 
 `mojo doc --diagnose-missing-doc-strings` warns about public symbols without a
 doc string and about doc strings without the Args, Parameters, Returns, or
@@ -28,17 +28,19 @@ WARNING = re.compile(r"^(?P<path>[^:\s]+\.mojo):(?P<line>\d+):(?P<col>\d+): warn
 
 def run_mojo_doc():
     """The warnings, as (relative path, line, message) tuples."""
+    out = ""
     with tempfile.TemporaryDirectory() as tmp:
-        proc = subprocess.run(
-            [
-                "mojo", "doc", "-I", "build", "--diagnose-missing-doc-strings",
-                "-o", os.path.join(tmp, "api.json"), "mojodec",
-            ],
-            cwd=ROOT, capture_output=True, text=True,
-        )
-    out = proc.stdout + proc.stderr
-    if proc.returncode != 0:
-        sys.exit(out + "\nmojo doc failed (did `pixi run numojo` run?)")
+        for name in ("molina", "mojodec"):
+            proc = subprocess.run(
+                [
+                    "mojo", "doc", "-I", ".", "-I", "build", "--diagnose-missing-doc-strings",
+                    "-o", os.path.join(tmp, name + ".json"), name,
+                ],
+                cwd=ROOT, capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                sys.exit(proc.stdout + proc.stderr + "\nmojo doc failed (did `pixi run numojo` run?)")
+            out += proc.stdout + proc.stderr
     warnings = []
     for line in out.splitlines():
         m = WARNING.match(line.strip())

@@ -18,7 +18,7 @@ from mojodec.core.cell_set import (
 )
 from mojodec.core.chain_complex import ChainComplex
 from mojodec.core.mesh import RegularCubeMesh
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.subset import Subset
 from mojodec.core.utils import (
     IntArray,

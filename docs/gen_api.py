@@ -1,14 +1,15 @@
-"""Generate MojoDEC's API reference as Markdown, from `mojo doc`'s JSON.
+"""Generate the API reference of molina and MojoDEC as Markdown, from
+`mojo doc`'s JSON.
 
     pixi run docs                     # docs/api/, one page per module
-    python docs/gen_api.py api.json   # from JSON made earlier
+    python docs/gen_api.py molina.json mojodec.json   # from JSON made earlier
 
 `mojo doc` collects the doc strings of the package into JSON but does not
 render them. This writes `docs/api/index.md` and a page per module
 (`docs/api/mojodec/core/subset.md`, ...) with the module's aliases, traits,
 structs, and functions: signatures, summaries and descriptions, and the
-Parameters, Args, Returns, and Raises sections. Types defined in MojoDEC
-link to their pages. The pages read on GitHub as they are, and `pixi run
+Parameters, Args, Returns, and Raises sections. Types defined in either
+package link to their pages. The pages read on GitHub as they are, and `pixi run
 docs-site` builds them into a searchable site with MkDocs.
 
 Run from the repository root, after `pixi run numojo`.
@@ -26,20 +27,30 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "docs", "api")
 
 
-def load(json_path=None):
-    if json_path:
-        with open(json_path) as f:
-            return json.load(f)
+PACKAGE_NAMES = ("molina", "mojodec")
+
+
+def load(json_paths=()):
+    """One `mojo doc` JSON document per package."""
+    if json_paths:
+        docs = []
+        for path in json_paths:
+            with open(path) as f:
+                docs.append(json.load(f))
+        return docs
+    docs = []
     with tempfile.TemporaryDirectory() as tmp:
-        out = os.path.join(tmp, "api.json")
-        proc = subprocess.run(
-            ["mojo", "doc", "-I", "build", "-o", out, "mojodec"],
-            cwd=ROOT, capture_output=True, text=True,
-        )
-        if proc.returncode != 0:
-            sys.exit(proc.stdout + proc.stderr + "\nmojo doc failed (did `pixi run numojo` run?)")
-        with open(out) as f:
-            return json.load(f)
+        for name in PACKAGE_NAMES:
+            out = os.path.join(tmp, name + ".json")
+            proc = subprocess.run(
+                ["mojo", "doc", "-I", ".", "-I", "build", "-o", out, name],
+                cwd=ROOT, capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                sys.exit(proc.stdout + proc.stderr + "\nmojo doc failed (did `pixi run numojo` run?)")
+            with open(out) as f:
+                docs.append(json.load(f))
+    return docs
 
 
 def modules(pkg, prefix=()):
@@ -65,9 +76,10 @@ class Page:
         self.lines.append(text)
 
     def link(self, type_name, path):
-        """`type_name`, linked to its page when MojoDEC defines it."""
+        """`type_name`, linked to its page when molina or MojoDEC defines
+        it."""
         code = f"`{type_name}`"
-        if not path or not path.startswith("/mojodec/"):
+        if not path or not path.startswith(tuple(f"/{n}/" for n in PACKAGE_NAMES)):
             return code
         parts = path.strip("/").split("/")
         if parts[-1].startswith("#"):
@@ -270,9 +282,8 @@ def module_page(parts, m, is_package):
 
 
 def main():
-    doc = load(sys.argv[1] if len(sys.argv) > 1 else None)
-    decl = doc["decl"]
-    mods = list(modules(decl))
+    docs = load(sys.argv[1:])
+    mods = [m for doc in docs for m in modules(doc["decl"])]
     for parts, _, is_package in mods:
         if is_package:
             PACKAGES.add(parts)
@@ -291,7 +302,7 @@ def main():
         f.write("# API reference\n\n")
         f.write(
             "Generated from the doc strings by `pixi run docs` "
-            f"(Mojo {doc.get('version', '?')}); do not edit.\n\n"
+            f"(Mojo {docs[0].get('version', '?')}); do not edit.\n\n"
         )
         for parts, file, m in pages:
             depth = "  " * (len(parts) - 1)

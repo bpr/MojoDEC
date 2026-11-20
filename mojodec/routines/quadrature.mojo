@@ -28,7 +28,7 @@ var rule = grundmann_moeller(2, 5)              # triangles, exact to degree 5
 def f(x: List[Float64]) -> Float64:
     return x[0] * x[0] * x[1]
 
-var tri = nm.fromstring[f64]("[[0, 0], [1, 0], [0, 1]]")
+var tri = real_array_from_string("[[0, 0], [1, 0], [0, 1]]")
 print(rule.integrate(tri, f))                   # 1/60
 var per_edge = integrate_simplices(sc, 1, 3, f) # one integral per edge
 ```

@@ -6,7 +6,7 @@
 Typed sparse factorizations (`mojodec.routines.sparse_ldlt`).
 =============================================================
 `TypedSparseLDLT`, `TypedSparseCholesky`, and `BlockSparseLDLT`: the
-factorizations of `mojodec.routines.sparse_ldlt_core` for typed operators,
+factorizations of `molina.sparse_ldlt` for typed operators,
 whose solves take and give cochains. The untyped `SparseLDLT`,
 `SparseCholesky`, `FactorLayout`, `FillOrdering`, `Inertia`, and
 `cholesky_nonzeros` are re-exported from there.
@@ -14,12 +14,12 @@ whose solves take and give cochains. The untyped `SparseLDLT`,
 
 from std.math import isfinite, sqrt
 
-from mojodec.core.operator import LinearOperator, Preconditioner
+from molina.operator import LinearOperator, Preconditioner
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.typed import MatrixOp, TypedCochain
 from mojodec.core.typed_block import BlockOp, CochainPair
-from mojodec.core.parallel import parallel_ranges
+from molina.parallel import parallel_ranges
 from mojodec.core.utils import (
     RealArray,
     cols_of,
@@ -29,9 +29,9 @@ from mojodec.core.utils import (
     real_vector,
     rows_of,
 )
-from mojodec.routines.ordering import amd_ordering
-from mojodec.routines.supernodal import _Supernodal, etree_postorder
-from mojodec.routines.sparse_ldlt_core import (
+from molina.ordering import amd_ordering
+from molina.supernodal import _Supernodal, etree_postorder
+from molina.sparse_ldlt import (
     FactorLayout,
     FillOrdering,
     Inertia,

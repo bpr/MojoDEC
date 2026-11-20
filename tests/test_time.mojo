@@ -10,9 +10,9 @@ from std.testing import (
 import numojo as nm
 from numojo.prelude import *
 
-from mojodec.core.diagonal import DiagonalOperator
+from molina.diagonal import DiagonalOperator
 from mojodec.core.mesh import SimplicialMesh
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.typed import PRIMAL, TypedCochain, TypedComplex
 from mojodec.core.utils import dot, real_vector
 from mojodec.routines.linalg import cg, eigh_generalized

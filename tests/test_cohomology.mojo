@@ -25,7 +25,7 @@ from mojodec import (
 from mojodec.core.cell_set import CellSet
 from mojodec.core.cochain import Cochain
 from mojodec.core.primality import Primality
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import (
     RealArray,
     cols_of,

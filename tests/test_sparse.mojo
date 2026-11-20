@@ -6,7 +6,7 @@ from std.testing import (
     assert_true,
 )
 
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import real_vector_from_list
 
 

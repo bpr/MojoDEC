@@ -16,7 +16,7 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec import RipsComplex, VTKField, read_array, cg, write_vtu
-from mojodec.core.utils import iget, norm2, real_vector, rows_of
+from mojodec.core.utils import from_ndarray, iget, norm2, real_vector, rows_of
 from mojodec.vis import lineplot, pyplot, show_requested, triplot
 
 
@@ -36,7 +36,7 @@ def main() raises:
     )
 
     nm.random.seed(0)
-    var x = nm.random.rand[f64](Shape(b1.ncols))  # random 1-chain
+    var x = from_ndarray(nm.random.rand[f64](Shape(b1.ncols)))  # random 1-chain
     # decompose x using the discrete Hodge decomposition
     var alpha = cg(b1 @ b1.T(), b1 @ x, rtol=1e-8).take_x()
     var beta = cg(b2.T() @ b2, b2.T() @ x, rtol=1e-8).take_x()

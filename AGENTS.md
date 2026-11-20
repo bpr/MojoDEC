@@ -27,8 +27,8 @@ pixi run examples DarcyFlow --show    # one example, figures in windows
 pixi run test-release                 # tests with -D ASSERT=none (also examples-release)
 pixi run bench                        # timings of the parallel loops (release build)
 pixi run bench-compare                # vs PyDEC, dexterior, formoniq (benchmarks/compare)
-pixi run package                      # build/mojodec.mojoc
-pixi run format                       # mojo format mojodec tests examples
+pixi run package                      # build/molina.mojoc, build/mojodec.mojoc
+pixi run format                       # mojo format molina mojodec tests examples
 pixi run doc-check                    # doc string warnings vs docs/docstring-baseline.txt
 pixi run docs                         # API reference -> docs/api/ (Markdown, not committed)
 pixi run docs-site                    # MkDocs site -> build/site (pixi's `docs` env)
@@ -45,8 +45,10 @@ use another checkout.
 
 ## Project layout
 
-Layout follows NuMojo: `mojodec/core` holds data structures,
-`mojodec/routines` holds algorithms, `mojodec/vis` holds plotting.
+`molina/` is the linear algebra, a package of its own (see Linear
+algebra boundary below). Otherwise the layout follows NuMojo:
+`mojodec/core` holds data structures, `mojodec/routines` holds
+algorithms, `mojodec/vis` holds plotting.
 `mojodec/__init__.mojo` re-exports the public API (add new public names
 there); `mojodec/prelude.mojo` is the small common subset.
 
@@ -71,7 +73,8 @@ there); `mojodec/prelude.mojo` is the small common subset.
   1.3.0); `pixi.lock` records the build actually tested. Don't pin exact
   versions in `pixi.toml` except temporarily while testing one. `max-core`
   is needed by the vendored NuMojo (`max.algorithm`, `max.gpu`); MojoDEC
-  uses `max.algorithm.parallelize` only through `core/parallel.mojo`.
+  and molina use `max.algorithm.parallelize` only through
+  `molina/parallel.mojo`.
   `benchmarks/parallel_for.mojo` is a pure-Mojo POSIX-threads baseline to
   time it against.
 - `-D ASSERT=none` removes `debug_assert` bounds checks. `mojo run`/`build`
@@ -83,8 +86,8 @@ there); `mojodec/prelude.mojo` is the small common subset.
   `build/numojo.mojoc`, so rebuild it after touching the vendored copy, and
   keep the patch file in sync with any change there.
 - NuMojo's `linalg.solve` (no pivoting) and Jacobi `eigh` are unsuitable for
-  DEC systems; use MojoDEC's own `routines/dense.mojo` (pivoted LU,
-  Householder/QL `eigh`) and `routines/linalg_core.mojo` (`cg`, `minres`,
+  DEC systems; use molina's `molina/dense.mojo` (pivoted LU,
+  Householder/QL `eigh`) and `molina/linalg.mojo` (`cg`, `minres`,
   `lsqr`, dense `spsolve`, `eigh_generalized`).
 
 ### Known toolchain bugs
@@ -130,29 +133,36 @@ operators other than `d`, `boundary`, and the stars are functions whose
 results the caller owns (caching Whitney sparsity was rejected, see the
 plan). Key design points that span several files:
 
-- **Linear algebra boundary** (to become a package of its own):
-  `core/{sparse,operator,diagonal,parallel,utils,index_set}.mojo` and
-  `routines/{dense,linalg_core,sparse_ldlt_core,supernodal,ordering,lanczos_core,amg}.mojo`
-  import nothing else from MojoDEC: no complexes, cochains, subsets, or
-  typed layer, and no NuMojo: real vectors and dense matrices are
-  `RealArray` (`core/real_array.mojo`: C-contiguous `Float64`, rank 1 or
+- **Linear algebra boundary**: the package `molina` (`molina/`, beside
+  `mojodec/`; mogeometry and minigrad are to use it too) holds
+  `real_array`, `utils`, `parallel`, `index_set`, `operator`,
+  `diagonal`, `sparse`, `dense`, `ordering`, `supernodal`,
+  `sparse_ldlt`, `linalg`, `lanczos`, and `amg`. It imports nothing from
+  MojoDEC (no complexes, cochains, subsets, or typed layer) and no
+  NuMojo, and must build alone (`mojo precompile molina`, no `-I`):
+  real vectors and dense matrices are
+  `RealArray` (`molina/real_array.mojo`: C-contiguous `Float64`, rank 1 or
   2, NuMojo's method names for flat access, `+`/`-`/scaling entrywise,
-  `to_numpy`), which the rest of MojoDEC uses too (`utils` re-exports
-  it, with `real_vector`/`real_array`; `from_ndarray`/`to_ndarray` and
+  `to_numpy`), which the rest of MojoDEC uses too
+  (`mojodec.core.utils` re-exports it and `molina.utils`'s builders and
+  kernels, `real_vector`, `real_array`, `dot`, ...; `from_ndarray`/`to_ndarray` and
   `real_array_from_string` convert to and from NuMojo, which integer
   arrays still are). `read_array(path)` and `loadtxt(path)` without a
   dtype give a `RealArray`; with one, a NuMojo array of that dtype.
   `CSRMatrix` and `DiagonalOperator`'s
   `exclude_subset`/`restrict_to_subset` take any `IndexSet`
-  (`core/index_set.mojo`: `universe_size()` and `in`), which `Subset`
-  implements. The typed overloads stay in `routines/linalg.mojo`,
-  `lanczos.mojo`, and `sparse_ldlt.mojo`, which re-export the core
+  (`molina/index_set.mojo`: `universe_size()` and `in`), which `Subset`
+  implements. The typed overloads are in `mojodec/routines/linalg.mojo`,
+  `lanczos.mojo`, and `sparse_ldlt.mojo`, which re-export the molina
   modules' names and define the overloaded ones (`cg`, `minres`,
   `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`, `eigsh`) again as
-  forwarders: Mojo does not merge overloads of one name imported from
-  two modules (the second import is ambiguous). Put new solver code in
-  the core modules, importing nothing from the DEC side; a forwarder's
-  signature must match its core function's.
+  forwarders (to `molina_linalg.cg`, ...): Mojo does not merge overloads
+  of one name imported from two modules (the second import is
+  ambiguous); importing one function by two paths is fine. Put new
+  solver code in molina, importing nothing from MojoDEC; a forwarder's
+  signature must match its molina function's. `molina/__init__.mojo`
+  re-exports its public names, and `mojodec/__init__.mojo` re-exports
+  them too (from the typed modules where there are overloads).
 
 - **`SimplicialComplex`** (`core/simplicial_complex.mojo`) stores its
   `ComplexData` (mesh + one `SimplexLevel` per dimension) behind an
@@ -210,7 +220,7 @@ plan). Key design points that span several files:
   `laplace_derham`, `laplace_beltrami` are generic over `CochainLike`.
 - **Operators**: on `CSRMatrix`, `A @ B` / `A @ x` are matrix products
   (PyDEC's `A * B` on SciPy matrices); `A * s` scales. Hodge stars
-  (`sc[k].star`, `star_inv`) are `DiagonalOperator` (`core/diagonal.mojo`):
+  (`sc[k].star`, `star_inv`) are `DiagonalOperator` (`molina/diagonal.mojo`):
   `D @ A` scales rows, `A @ D` (via `__rmatmul__`) scales columns;
   `to_csr()` when a `CSRMatrix` is required. `CochainLike.mapped` is overloaded for both.
 - **`Primality`** (`core/primality.mojo`): `.PRIMAL`/`.DUAL` in place of
@@ -224,8 +234,8 @@ plan). Key design points that span several files:
   k-cells (indexed by primal level k or n-k). Boundary/coboundary walk the
   rows of `sc[m-1].d` / `sc[m+1].boundary`, swapped for dual cells.
   `CSRMatrix`/`DiagonalOperator` have `exclude_subset`/`restrict_to_subset`,
-  `Cochain.overwrite`, `sc.boundary_cells()[k]`. `subset.mojo` and
-  `sparse.mojo` import each other, as do `cochain` and `simplicial_complex`.
+  `Cochain.overwrite`, `sc.boundary_cells()[k]`. `cochain` and
+  `simplicial_complex` import each other.
 - **`CellSet`** (`core/cell_set.mojo`): one primal `Subset` per dimension
   `0..n`; the neighborhood queries take and return it. They are generic
   over the `CellComplex` trait (`num_cells`, `faces_of`, `cofaces_of`,
@@ -273,15 +283,15 @@ plan). Key design points that span several files:
   per-cell link checks cost the size of the link). `ChainComplex` checks `B_k B_{k+1} = 0` and
   `d_k = B_{k+1}^T` when built. `len(cells)` on a `CellSet` counts cells;
   `len(cells.levels)` is the number of dimensions.
-- **Operators and Krylov solvers** (`core/operator.mojo`,
-  `routines/linalg_core.mojo`; typed overloads in `routines/linalg.mojo`): `LinearOperator` is `num_rows`/`num_cols`/
+- **Operators and Krylov solvers** (`molina/operator.mojo`,
+  `molina/linalg.mojo`; typed overloads in `routines/linalg.mojo`): `LinearOperator` is `num_rows`/`num_cols`/
   `apply_into(x, mut y)` on `RealArray`; `CSRMatrix`, `DiagonalOperator`,
   `Identity`, `MatrixOp`, `DiagonalOp`, and `BlockOp` (applied block by
   block) implement it. `Preconditioner` is a method-less marker for
   symmetric positive definite operators (`DiagonalOperator`, `DiagonalOp`,
   `Identity`; never a general `CSRMatrix`). `BlockDiagonal(P1, P2)`
-  (`core/operator.mojo`) stacks two for 2 x 2 systems; `DenseCholesky`
-  (`routines/linalg_core.mojo`) is an exact dense inverse for small problems. `cg` and `minres` are generic
+  (`molina/operator.mojo`) stacks two for 2 x 2 systems; `DenseCholesky`
+  (`molina/linalg.mojo`) is an exact dense inverse for small problems. `cg` and `minres` are generic
   over both, with `M=` keyword-only; the unpreconditioned overloads pass
   `Identity`, which reproduces the old iterates bit for bit. Both raise on
   a non-symmetric operator (`_require_symmetric`, two probe products) and
@@ -298,7 +308,7 @@ plan). Key design points that span several files:
   `eigenvalue_range` runs 10 CG steps on `probe_vector(n, 3)` for the
   extreme Ritz values (inner bounds). Without the options, every solve is
   bit for bit what it was before them; keep it so.
-  `eigsh(K, M, nev, sigma=)` (`routines/lanczos_core.mojo`, from the papers:
+  `eigsh(K, M, nev, sigma=)` (`molina/lanczos.mojo`, from the papers:
   Ericsson–Ruhe, Wu–Simon) factors `K - sigma M` once (`SparseLDLT`)
   and runs thick-restart Lanczos on `OP = (K - sigma M)^-1 M` in the `M`
   inner product (basis and `M V` stored, full reorthogonalization twice,
@@ -314,9 +324,9 @@ plan). Key design points that span several files:
   pair's normwise backward error with norms from 30 power steps (lower
   bounds, so the errors err high); dense arrays are wrapped in a private
   `_Dense` operator. Pass sparse `K` to keep it at n sparse products.
-- **Sparse direct** (`routines/ordering.mojo`, `routines/sparse_ldlt_core.mojo`
+- **Sparse direct** (`molina/ordering.mojo`, `molina/sparse_ldlt.mojo`
   (typed wrappers in `routines/sparse_ldlt.mojo`),
-  `routines/supernodal.mojo`; ports of faer's AMD and simplicial and
+  `molina/supernodal.mojo`; ports of faer's AMD and simplicial and
   supernodal Cholesky, notices in `NOTICE`):
   `amd_ordering(A)` builds AMD's quotient graph exactly as faer's
   `aat`/`amd_1` do from the sorted pattern of `A + A^T`, so its
@@ -421,7 +431,7 @@ plan). Key design points that span several files:
   `column_counts_aat`), nearly linear in nnz(C): 2.2 ms at 30^3 where
   walking every path of L took 13; `test_column_counts_match_dense_elimination`
   checks it against dense symbolic elimination.
-- **Algebraic multigrid** (`routines/amg.mojo`): `SmoothedAggregation`
+- **Algebraic multigrid** (`molina/amg.mojo`): `SmoothedAggregation`
   ports amgcl's `plain_aggregates` (`_aggregates`: strong when
   `a_ij^2 > eps^2 a_ii a_jj`, eps halved per level, one serial greedy
   pass in row order, rows without strong neighbors left out, id `-1`)
@@ -567,7 +577,7 @@ plan). Key design points that span several files:
 
 ### Parallel loops
 
-`parallel_ranges(n, serial_below, body)` (`core/parallel.mojo`) runs
+`parallel_ranges(n, serial_below, body)` (`molina/parallel.mojo`) runs
 `body(chunk, lo, hi)` on one chunk per logical core (per physical core
 with `memory_bound=True`, which the matvec passes: a second hardware
 thread speeds up arithmetic, not memory streams), or serially when
@@ -577,7 +587,7 @@ loop takes a few hundred µs: matvec at `PARALLEL_NNZ` (1M stored entries),
 circumcenters and primal volumes at 50k simplices, `whitney_innerproduct`
 at 4096 top simplices (element loop and row assembly), dual volumes at
 4096 top simplices, the supernodal factor at 5e6 multiply-adds (one call
-for the whole factorization). `MOJODEC_NUM_THREADS=k` caps the chunks at k (1 runs
+for the whole factorization). `MOLINA_NUM_THREADS=k` caps the chunks at k (1 runs
 everything serially, for single-threaded benchmarks). Bodies must not
 raise: record failures per chunk and raise afterwards. Keep a hot serial loop out of a function that also
 holds the parallel branch (`CSRMatrix._matvec_parallel` is separate): in

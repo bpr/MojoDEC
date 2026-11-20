@@ -90,7 +90,7 @@ relative with `†`, and one containing NaN with `NaN`.
 
 ## Threads
 
-MojoDEC (`MOJODEC_NUM_THREADS`, see `mojodec/core/parallel.mojo`) and
+MojoDEC (`MOLINA_NUM_THREADS`, see `molina/parallel.mojo`) and
 formoniq (`RAYON_NUM_THREADS`) run once with one thread and once on all
 cores. PyDEC and dexterior are single-threaded and run once, with
 `OPENBLAS_NUM_THREADS=1` and `OMP_NUM_THREADS=1` for NumPy. MojoDEC's

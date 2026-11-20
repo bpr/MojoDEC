@@ -18,11 +18,11 @@ from mojodec.core.cochain import (
     laplace_beltrami,
     laplace_derham,
 )
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.primality import Primality
 from mojodec.core.subset import Subset
 from mojodec.core.utils import real_array_from_string
-from mojodec.core.real_array import RealArray
+from molina.real_array import RealArray
 
 
 def I(s: String) raises -> NDArray[DType.int]:

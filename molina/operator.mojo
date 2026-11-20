@@ -1,18 +1,18 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 """
-Linear operators (`mojodec.core.operator`).
-===========================================
+Linear operators (`molina.operator`).
+=====================================
 What an iterative solver needs of a matrix: its shape and its product with
-a vector. `cg` and `minres` in `mojodec.routines.linalg` take any
+a vector. `cg` and `minres` in `molina.linalg` take any
 `LinearOperator` and, as a preconditioner, any `Preconditioner`.
 
 - `LinearOperator`: `num_rows`, `num_cols`, and `apply_into(x, y)`,
-  `y = A x`. `CSRMatrix`, `DiagonalOperator`, `Identity`, and the typed
-  `MatrixOp`, `DiagonalOp`, and `BlockOp` implement it; a `BlockOp`
-  applies its blocks without assembling them.
+  `y = A x`. `CSRMatrix`, `DiagonalOperator`, and `Identity` implement
+  it, as do MojoDEC's typed `MatrixOp`, `DiagonalOp`, and `BlockOp` (a
+  `BlockOp` applies its blocks without assembling them).
 - `Preconditioner`: a `LinearOperator` that promises to be symmetric
   positive definite, which `cg` and `minres` need of it. It has no methods
   of its own; the promise is what a type declares by conforming.
@@ -29,7 +29,7 @@ A.apply_into(x, y)                             # any LinearOperator
 ```
 """
 
-from mojodec.core.utils import RealArray, real_vector
+from molina.utils import RealArray, real_vector
 
 
 trait LinearOperator:

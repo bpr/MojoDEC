@@ -42,12 +42,12 @@ The untyped core remains available through `complex()`, `untyped()`,
 """
 
 from mojodec.core.cochain import Cochain
-from mojodec.core.diagonal import DiagonalOperator
+from molina.diagonal import DiagonalOperator
 from mojodec.core.mesh import SimplicialMesh
-from mojodec.core.operator import LinearOperator, Preconditioner
+from molina.operator import LinearOperator, Preconditioner
 from mojodec.core.primality import Primality
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.subset import Subset
 from mojodec.core.utils import IntArray, RealArray, real_vector
 

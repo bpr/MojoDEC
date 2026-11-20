@@ -1,10 +1,10 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 """
-Diagonal operators (`mojodec.core.diagonal`).
-=============================================
+Diagonal operators (`molina.diagonal`).
+=======================================
 A square diagonal matrix stored as its diagonal. DEC's Hodge stars
 (`sc[k].star`, `sc[k].star_inv`) are diagonal, and keeping them so makes the
 common products cheap: `D @ x` is elementwise, `D @ A` scales the rows of a
@@ -19,10 +19,10 @@ var energy = sc[1].star.inner_product(omega.v, omega.v)       # omega^T S omega
 """
 
 from std.math import sqrt
-from mojodec.core.operator import Preconditioner
-from mojodec.core.sparse import CSRMatrix
-from mojodec.core.index_set import IndexSet
-from mojodec.core.utils import RealArray, real_array, real_vector
+from molina.operator import Preconditioner
+from molina.sparse import CSRMatrix
+from molina.index_set import IndexSet
+from molina.utils import RealArray, real_array, real_vector
 
 
 struct DiagonalOperator(Copyable, Movable, Preconditioner, Sized, Writable):
@@ -361,10 +361,10 @@ struct DiagonalOperator(Copyable, Movable, Preconditioner, Sized, Writable):
         """The operator with the entries of `subset` set to zero.
 
         Parameters:
-            S: The set type: a `Subset` of cells, or any `IndexSet`.
+            S: The set type: any `IndexSet` (MojoDEC's `Subset` is one).
 
         Args:
-            subset: The cells indexing the diagonal.
+            subset: The diagonal indices.
 
         Returns:
             A copy with those entries zeroed.
@@ -378,10 +378,10 @@ struct DiagonalOperator(Copyable, Movable, Preconditioner, Sized, Writable):
         """The operator with the entries outside `subset` set to zero.
 
         Parameters:
-            S: The set type: a `Subset` of cells, or any `IndexSet`.
+            S: The set type: any `IndexSet` (MojoDEC's `Subset` is one).
 
         Args:
-            subset: The cells indexing the diagonal.
+            subset: The diagonal indices.
 
         Returns:
             A copy with the other entries zeroed.

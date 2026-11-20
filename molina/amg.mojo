@@ -1,6 +1,6 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 # The aggregation (`_aggregates`) and the smoothed prolongation
 # (`_smoothed_prolongation`) are ported from amgcl
@@ -12,8 +12,8 @@
 # Brezina's (Computing 56, 1996).
 # ===----------------------------------------------------------------------=== #
 """
-Smoothed-aggregation algebraic multigrid (`mojodec.routines.amg`).
-=================================================================
+Smoothed-aggregation algebraic multigrid (`molina.amg`).
+========================================================
 `SmoothedAggregation(A)` builds a multigrid hierarchy from a sparse
 symmetric positive definite matrix alone, such as a 0-form stiffness
 `d0^T M1 d0` (plus a mass), and applies one V-cycle as a preconditioner.
@@ -32,11 +32,11 @@ coarsest level is factored (`SparseCholesky`).
 
 from std.math import isfinite, sqrt
 
-from mojodec.core.operator import LinearOperator, Preconditioner
-from mojodec.core.sparse import CSRMatrix
-from mojodec.core.utils import RealArray, real_vector
-from mojodec.routines.linalg_core import eigenvalue_range, jacobi
-from mojodec.routines.sparse_ldlt_core import SparseCholesky, SparseLDLT
+from molina.operator import LinearOperator, Preconditioner
+from molina.sparse import CSRMatrix
+from molina.utils import RealArray, real_vector
+from molina.linalg import eigenvalue_range, jacobi
+from molina.sparse_ldlt import SparseCholesky, SparseLDLT
 
 
 struct Relaxation(Equatable, ImplicitlyCopyable, Writable):

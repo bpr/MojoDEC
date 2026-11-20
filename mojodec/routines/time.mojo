@@ -46,14 +46,14 @@ print(lf.energy(e, b))                     # the same after every step
 
 from std.math import isfinite, sqrt
 
-from mojodec.core.diagonal import DiagonalOperator
-from mojodec.core.operator import LinearOperator
+from molina.diagonal import DiagonalOperator
+from molina.operator import LinearOperator
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.typed import DiagonalOp, MatrixOp, TypedCochain
 from mojodec.core.utils import RealArray, axpy, dot, real_vector
 from mojodec.routines.linalg import cg, jacobi
-from mojodec.routines.ordering import amd_ordering
+from molina.ordering import amd_ordering
 from mojodec.routines.sparse_ldlt import SparseCholesky, cholesky_nonzeros
 
 

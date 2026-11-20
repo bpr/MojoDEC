@@ -27,9 +27,9 @@ every `k` and both the mass and the stiffness parts.
 
 from std.math import isfinite, sqrt
 
-from mojodec.core.operator import LinearOperator, Preconditioner
+from molina.operator import LinearOperator, Preconditioner
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import RealArray, real_vector
 from mojodec.routines.refinement import Refinement, refine
 from mojodec.routines.sparse_ldlt import SparseCholesky

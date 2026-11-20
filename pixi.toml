@@ -19,8 +19,9 @@ test-release = { cmd = "bash tests/run_all.sh", env = { MOJO_FLAGS = "-D ASSERT=
 bench = { cmd = "mojo run -D ASSERT=none -I . -I build benchmarks/geometry_and_solvers.mojo", depends-on = ["numojo"] }
 # MojoDEC against PyDEC, dexterior and formoniq: see benchmarks/compare/README.md
 bench-compare = { cmd = "python benchmarks/compare/run.py", depends-on = ["numojo"] }
-package = { cmd = "mojo precompile -I build mojodec -o build/mojodec.mojoc", depends-on = ["numojo"] }
-format = "mojo format mojodec tests examples"
+# build/molina.mojoc (the linear algebra, no NuMojo), then build/mojodec.mojoc
+package = { cmd = "mojo precompile molina -o build/molina.mojoc && mojo precompile -I build mojodec -o build/mojodec.mojoc", depends-on = ["numojo"] }
+format = "mojo format molina mojodec tests examples"
 # `pixi run doc-check [--update | --list PATTERN]`: doc string warnings
 # against docs/docstring-baseline.txt (see docs/writing-docs.md)
 doc-check = { cmd = "python docs/check_docstrings.py", depends-on = ["numojo"] }

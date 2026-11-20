@@ -19,8 +19,8 @@ from std.sys import Endian, size_of
 import numojo as nm
 from numojo.prelude import *
 
-from mojodec.core.parallel import num_chunks, parallel_ranges
-from mojodec.core.real_array import RealArray
+from molina.parallel import num_chunks, parallel_ranges
+from molina.real_array import RealArray
 
 
 struct ByteReader(Movable):

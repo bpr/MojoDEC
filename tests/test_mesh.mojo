@@ -13,7 +13,7 @@ from mojodec.routines.simplex_array import (
 )
 from mojodec.routines.combinatorial import relative_parity
 from mojodec.core.utils import real_array_from_string
-from mojodec.core.real_array import RealArray
+from molina.real_array import RealArray
 
 
 def I(s: String) raises -> NDArray[DType.int]:

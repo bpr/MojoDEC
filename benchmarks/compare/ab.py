@@ -21,9 +21,9 @@ best = {}
 checks = {}
 for threads in threads_list:
     env = dict(os.environ)
-    env.pop("MOJODEC_NUM_THREADS", None)
+    env.pop("MOLINA_NUM_THREADS", None)
     if threads == "1":
-        env["MOJODEC_NUM_THREADS"] = "1"
+        env["MOLINA_NUM_THREADS"] = "1"
     for _ in range(rounds):
         for tag, binary in (("old", old), ("new", new)):
             for mesh in meshes:

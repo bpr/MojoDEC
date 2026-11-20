@@ -1,6 +1,6 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 # The symbolic analysis (elimination tree, column counts, `ereach`) and the
 # up-looking numeric factorization with dynamic regularization are ported
@@ -13,8 +13,8 @@
 # Cholesky of Davis, *Direct Methods for Sparse Linear Systems*, ch. 4.
 # ===----------------------------------------------------------------------=== #
 """
-Sparse LDL^T and Cholesky factorizations (`mojodec.routines.sparse_ldlt_core`).
-==============================================================================
+Sparse LDL^T and Cholesky factorizations (`molina.sparse_ldlt`).
+================================================================
 `SparseLDLT(A)` factors a sparse symmetric matrix as `P A P^T = L D L^T`,
 with `P` a fill-reducing permutation (`amd_ordering` by default), `L` unit
 lower triangular and `D` diagonal, and then solves `A x = b` by two sparse
@@ -34,26 +34,24 @@ as one dense block and factored by dense kernels; it suits 3D meshes,
 where the factor fills in. `FactorLayout.AUTO` picks by the flops per
 entry of `L`, from the symbolic analysis.
 
-The typed factorizations, of operators on cochains, are in
+MojoDEC's typed factorizations, of operators on cochains, are in
 `mojodec.routines.sparse_ldlt`, which re-exports everything public here.
 """
 
 from std.math import isfinite, sqrt
 
-from mojodec.core.operator import LinearOperator, Preconditioner
-from mojodec.core.sparse import CSRMatrix
-from mojodec.core.parallel import parallel_ranges
-from mojodec.core.utils import (
+from molina.operator import LinearOperator, Preconditioner
+from molina.sparse import CSRMatrix
+from molina.parallel import parallel_ranges
+from molina.utils import (
     RealArray,
-    cols_of,
     fget,
     fset,
     real_array,
     real_vector,
-    rows_of,
 )
-from mojodec.routines.ordering import amd_ordering
-from mojodec.routines.supernodal import _Supernodal, etree_postorder
+from molina.ordering import amd_ordering
+from molina.supernodal import _Supernodal, etree_postorder
 
 
 comptime _NONE = -1
@@ -61,7 +59,7 @@ comptime _PARALLEL_SOLVE_WORK = 4.0e6
 """Solves of fewer stored entries times right-hand sides run serially."""
 comptime _SUPERNODAL_RATIO = 20.0
 """`FactorLayout.AUTO` goes supernodal above this many flops per entry of
-`L` (faer's rule, with faer's 40 lowered to where MojoDEC's kernels
+`L` (faer's rule, with faer's 40 lowered to where molina's kernels
 measured even: simplicial was 1.3x faster at 10, the two tied at 12-16,
 supernodal was 1.5x faster at 21 and 2x at 35)."""
 
@@ -592,13 +590,13 @@ struct SparseLDLT(LinearOperator, Movable):
     def _solve_many(self, B: RealArray) raises -> RealArray:
         """`solve` for an `n x m` `B`: `_solve_block` on all `m` columns,
         split into blocks of columns across the physical cores when the
-        work is large enough (`MOJODEC_NUM_THREADS` caps them). The bits do
+        work is large enough (`MOLINA_NUM_THREADS` caps them). The bits do
         not depend on the split."""
         var n = self.n
-        var m = cols_of(B)
-        if rows_of(B) != n:
+        var m = B.cols()
+        if B.rows() != n:
             raise Error(
-                String("SparseLDLT.solve: B has ", rows_of(B), " rows, not ", n)
+                String("SparseLDLT.solve: B has ", B.rows(), " rows, not ", n)
             )
         var X = real_array(n, m)
         if n == 0 or m == 0:

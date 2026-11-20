@@ -1,10 +1,10 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 """
-Small dense linear algebra (`mojodec.routines.dense`).
-======================================================
+Small dense linear algebra (`molina.dense`).
+============================================
 LU factorization with row partial pivoting on `RealArray`s.
 
 NuMojo 0.12's `linalg.solve` factors without row exchanges, which breaks on
@@ -14,19 +14,15 @@ routines pivot during elimination, as LAPACK's `getrf` does.
 """
 
 from std.math import sqrt
-import numojo as nm
-from numojo.prelude import *
 
-from mojodec.core.operator import Identity, LinearOperator
-from mojodec.core.utils import (
+from molina.operator import Identity, LinearOperator
+from molina.utils import (
     RealArray,
     dot,
     norm2,
     probe_vector,
     real_array,
     real_vector,
-    rows_of,
-    cols_of,
 )
 
 
@@ -170,7 +166,7 @@ struct EighResult(Copyable, Movable):
             If `A` is not `n x n`.
         """
         return _residuals(
-            self.values, self.vectors, _Dense(A), Identity(rows_of(A))
+            self.values, self.vectors, _Dense(A), Identity(A.rows())
         )
 
 
@@ -185,8 +181,8 @@ struct _Dense(LinearOperator):
         if a.ndim != 2:
             raise Error("expected a matrix")
         self.a = a.copy()
-        self.rows = rows_of(a)
-        self.cols = cols_of(a)
+        self.rows = a.rows()
+        self.cols = a.cols()
 
     def num_rows(self) -> Int:
         return self.rows
@@ -290,9 +286,9 @@ def lu_factor(A: RealArray) raises -> LUFactors:
         If `A` is not square, or is singular (an exactly zero pivot column;
             nearly singular matrices factor without error).
     """
-    if A.ndim != 2 or rows_of(A) != cols_of(A):
+    if A.ndim != 2 or A.rows() != A.cols():
         raise Error("lu_factor: expected a square matrix")
-    var n = rows_of(A)
+    var n = A.rows()
     var lu = real_array(n, n)
     for i in range(n * n):
         lu.unsafe_set(i, A.unsafe_get(i))
@@ -339,9 +335,9 @@ def lu_solve(F: LUFactors, B: RealArray) raises -> RealArray:
     Raises:
         If `B` does not have `n` rows.
     """
-    var n = rows_of(F.lu)
-    var m = 1 if B.ndim == 1 else cols_of(B)
-    if rows_of(B) != n:
+    var n = F.lu.rows()
+    var m = 1 if B.ndim == 1 else B.cols()
+    if B.rows() != n:
         raise Error("lu_solve: dimension mismatch")
     var X = real_vector(n) if B.ndim == 1 else real_array(n, m)
     if m == 1:
@@ -397,9 +393,9 @@ def det(A: RealArray) raises -> Float64:
     Raises:
         If `A` is not a square 2-D array.
     """
-    if A.ndim != 2 or rows_of(A) != cols_of(A):
+    if A.ndim != 2 or A.rows() != A.cols():
         raise Error("det: expected a square matrix")
-    var n = rows_of(A)
+    var n = A.rows()
     if n == 1:
         return A.unsafe_get(0)
     if n == 2:
@@ -428,7 +424,7 @@ def inv(A: RealArray) raises -> RealArray:
     Raises:
         If `A` is not square or is singular.
     """
-    var n = rows_of(A)
+    var n = A.rows()
     return solve(A, RealArray.identity(n))
 
 
@@ -447,8 +443,8 @@ def cholesky(A: RealArray) raises -> RealArray:
         If `A` is not square or not positive definite (a non-positive
             pivot).
     """
-    var n = rows_of(A)
-    if n != cols_of(A):
+    var n = A.rows()
+    if n != A.cols():
         raise Error("cholesky: expected a square matrix")
     var L = real_array(n, n)
     for j in range(n):
@@ -487,8 +483,8 @@ def eigh(A: RealArray) raises -> EighResult:
         If `A` is not square, or the QL iteration does not converge within
             100 sweeps for some eigenvalue.
     """
-    var n = rows_of(A)
-    if n != cols_of(A):
+    var n = A.rows()
+    if n != A.cols():
         raise Error("eigh: expected a square matrix")
     if n == 0:  # _tred2 and _tql2 assume n >= 1
         return EighResult(real_vector(0), real_array(0, 0))

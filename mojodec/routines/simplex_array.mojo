@@ -10,8 +10,8 @@ Largely inspired by `pydec.dec.simplex_array`. A simplex array is an
 """
 
 from numojo.prelude import Shape
-from mojodec.core.parallel import num_chunks, parallel_ranges
-from mojodec.core.sparse import CSRMatrix
+from molina.parallel import num_chunks, parallel_ranges
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import (
     IntArray,
     _bounds,

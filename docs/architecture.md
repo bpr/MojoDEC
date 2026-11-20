@@ -22,10 +22,11 @@ volumes, build, and Whitney times were measured again after later work
 
 | Layer | Where | What |
 |---|---|---|
-| Data structures | `mojodec/core/` | complexes, sparse and diagonal matrices, cochains, subsets, the typed layer |
-| Algorithms | `mojodec/routines/` | topology, geometry, Whitney forms, solvers, I/O, mesh generation |
+| Linear algebra | `molina/` | `RealArray`, sparse and diagonal matrices, dense and sparse direct solvers, Krylov solvers, Lanczos, AMG, parallel loops; a package of its own |
+| Data structures | `mojodec/core/` | complexes, cochains, subsets, the typed layer |
+| Algorithms | `mojodec/routines/` | topology, geometry, Whitney forms, typed solver overloads, I/O, mesh generation |
 | Plotting | `mojodec/vis/` | matplotlib through Python interop, not re-exported |
-| Public API | `mojodec/__init__.mojo` | re-exports `core` and `routines`; `prelude.mojo` is a small subset |
+| Public API | `mojodec/__init__.mojo` | re-exports `core`, `routines`, and molina's public names; `prelude.mojo` is a small subset |
 
 The untyped API follows PyDEC: a complex, levels indexed by dimension,
 cochains holding `RealArray` vectors, and operators as `CSRMatrix` and
@@ -176,13 +177,13 @@ has the measurements.
 ## Parallelism and determinism
 
 Every loop over simplices that is large enough goes through
-`parallel_ranges` (`core/parallel.mojo`).
+`parallel_ranges` (`molina/parallel.mojo`).
 
 - **Chunks:** one per logical core, or one per physical core for
   memory-bound loops.
 - **Serial threshold:** a loop runs serially below a size where it would
   take a few hundred µs, since starting the threads costs about 200 µs.
-- **Single thread:** `MOJODEC_NUM_THREADS=1` makes every loop serial.
+- **Single thread:** `MOLINA_NUM_THREADS=1` makes every loop serial.
 
 **Results do not depend on the thread count, bit for bit.** Loops that
 add into shared entries get this by ownership. Each chunk owns a block
@@ -222,17 +223,19 @@ and `reorder_vertices` fixes it. See
   are compared, the tests allow the conditioning (`eps L / h`), not the
   last bit. One example is the Whitney top-form mass against the primal
   volume.
-- **Solvers:** `routines/dense.mojo` and `routines/linalg_core.mojo`
+- **Solvers:** `molina/dense.mojo` and `molina/linalg.mojo`
   provide pivoted LU, Householder `eigh`, and Krylov methods;
-  `routines/sparse_ldlt_core.mojo`, `routines/supernodal.mojo`, and
-  `routines/ordering.mojo` the sparse LDL^T and Cholesky factorizations
+  `molina/sparse_ldlt.mojo`, `molina/supernodal.mojo`, and
+  `molina/ordering.mojo` the sparse LDL^T and Cholesky factorizations
   (simplicial or supernodal, the supernodal factor parallel as one task
   graph) with AMD (ported from faer). NuMojo's
   unpivoted `solve` and Jacobi `eigh` are not used. These, with
-  `lanczos_core.mojo`, `amg.mojo`, and the sparse and diagonal matrices,
-  import nothing from the DEC side, so they can become a package of their
-  own; the typed overloads are in `linalg.mojo`, `lanczos.mojo`, and
-  `sparse_ldlt.mojo` (see AGENTS.md, Linear algebra boundary).
+  `lanczos.mojo`, `amg.mojo`, `RealArray`, and the sparse and diagonal
+  matrices, are the package `molina` (`molina/`, beside `mojodec/`),
+  which imports nothing from MojoDEC or NuMojo, so other projects can
+  use it alone; MojoDEC's typed overloads are in
+  `mojodec/routines/linalg.mojo`, `lanczos.mojo`, and `sparse_ldlt.mojo`
+  (see AGENTS.md, Linear algebra boundary).
 
 ## Verification
 

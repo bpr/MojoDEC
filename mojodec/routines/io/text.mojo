@@ -14,7 +14,7 @@ space-padded tables shipped with PyDEC's examples defeat.
 import numojo as nm
 from numojo.prelude import *
 
-from mojodec.core.real_array import RealArray
+from molina.real_array import RealArray
 from mojodec.core.utils import from_ndarray
 
 

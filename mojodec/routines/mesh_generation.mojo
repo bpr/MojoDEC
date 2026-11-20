@@ -35,7 +35,7 @@ import numojo as nm
 from numojo.prelude import *
 
 from mojodec.core.mesh import SimplicialMesh
-from mojodec.core.parallel import chunk_scratch, num_chunks, parallel_ranges
+from molina.parallel import chunk_scratch, num_chunks, parallel_ranges
 from mojodec.routines.simplex_array import coherent_orientation
 from mojodec.core.utils import (
     IntArray,

@@ -34,7 +34,7 @@ from std.math import floor
 
 from mojodec.core.cell_set import CellSet
 from mojodec.core.chain_complex import ChainComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.routines.topology import boundary_of, closure_of, link_of
 
 comptime _PRIME = 1073741789

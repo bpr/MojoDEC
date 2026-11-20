@@ -32,7 +32,7 @@ from mojodec.core.cell_set import CellSet
 from mojodec.core.cochain import Cochain
 from mojodec.core.primality import Primality
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.typed import (
     DUAL,
     PRIMAL,

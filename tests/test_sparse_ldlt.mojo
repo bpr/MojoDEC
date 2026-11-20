@@ -27,7 +27,7 @@ from mojodec import (
     kuhn_grid,
     whitney_innerproduct,
 )
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import (
     RealArray,
     fget,
@@ -38,7 +38,7 @@ from mojodec.core.utils import (
     real_vector,
 )
 from mojodec.routines.linalg import eigh_generalized, spsolve
-from mojodec.routines.supernodal import etree_postorder
+from molina.supernodal import etree_postorder
 
 
 def _laplacian(sc: SimplicialComplex, k: Int) raises -> CSRMatrix:

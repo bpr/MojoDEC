@@ -1,10 +1,10 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 """
-Sparse matrices (`mojodec.core.sparse`).
-========================================
+Sparse matrices (`molina.sparse`).
+==================================
 A compressed-sparse-row matrix of `Float64`, standing in for
 `scipy.sparse.csr_matrix`. NuMojo, Linamo, and SciJo provide only dense
 arrays, while every DEC operator (boundary, coboundary, Hodge star, mass
@@ -18,18 +18,14 @@ Conventions:
   vector (`RealArray`), and `A * s` scales by a scalar.
 """
 
-import numojo as nm
-from numojo.prelude import *
 
-from mojodec.core.operator import LinearOperator
-from mojodec.core.parallel import parallel_ranges
-from mojodec.core.index_set import IndexSet
-from mojodec.core.utils import (
+from molina.operator import LinearOperator
+from molina.parallel import parallel_ranges
+from molina.index_set import IndexSet
+from molina.utils import (
     RealArray,
     real_vector,
     real_array,
-    rows_of,
-    cols_of,
 )
 
 
@@ -302,8 +298,8 @@ struct CSRMatrix(Copyable, LinearOperator, Movable, Writable):
         Raises:
             Does not raise in practice.
         """
-        var r = rows_of(a)
-        var c = cols_of(a)
+        var r = a.rows()
+        var c = a.cols()
         var rows = List[Int]()
         var cols = List[Int]()
         var vals = List[Float64]()
@@ -569,10 +565,10 @@ struct CSRMatrix(Copyable, LinearOperator, Movable, Writable):
         zero on those cells (e.g. Dirichlet boundary values held fixed).
 
         Parameters:
-            S: The set type: a `Subset` of cells, or any `IndexSet`.
+            S: The set type: any `IndexSet` (MojoDEC's `Subset` is one).
 
         Args:
-            subset: The cells indexing the rows.
+            subset: The row indices.
 
         Returns:
             A copy with those rows empty.
@@ -587,10 +583,10 @@ struct CSRMatrix(Copyable, LinearOperator, Movable, Writable):
         are zero off those cells.
 
         Parameters:
-            S: The set type: a `Subset` of cells, or any `IndexSet`.
+            S: The set type: any `IndexSet` (MojoDEC's `Subset` is one).
 
         Args:
-            subset: The cells indexing the rows.
+            subset: The row indices.
 
         Returns:
             A copy with the other rows empty.

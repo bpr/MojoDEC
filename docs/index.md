@@ -3,7 +3,9 @@
 Discrete exterior calculus on simplicial and cubical complexes in Mojo,
 largely inspired by [PyDEC](https://github.com/hirani/pydec), with its own
 real arrays and NuMojo integer arrays in place of NumPy and its own
-sparse matrices in place of `scipy.sparse`.
+sparse matrices in place of `scipy.sparse`. The linear algebra (real
+arrays, sparse and dense matrices, solvers, eigensolvers, multigrid) is
+the package `molina`, which imports nothing from MojoDEC or NuMojo.
 
 - **[API reference](api/index.md)**: every public module, struct, and
   function, generated from the doc strings.

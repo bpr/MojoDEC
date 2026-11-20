@@ -12,9 +12,10 @@ NumPy and `CSRMatrix` in place of `scipy.sparse`.
 ```mojo
 import numojo as nm
 from mojodec import SimplicialComplex, d, star, delta
+from mojodec.core.utils import real_array_from_string
 
 def main() raises:
-    var V = nm.fromstring[nm.f64]("[[0,0],[1,0],[1,1],[0,1]]")
+    var V = real_array_from_string("[[0,0],[1,0],[1,1],[0,1]]")
     var S = nm.fromstring[DType.int]("[[0,1,3],[1,2,3]]")
     var sc = SimplicialComplex(V, S)
     var L = delta(d(sc.get_cochain_basis(0))).v.copy()   # 0-form Laplacian
@@ -22,11 +23,17 @@ def main() raises:
 
 Layout
 ------
-- `mojodec.core`: data structures (sparse matrices, simplices, meshes,
-  simplicial / abstract / Rips / cube complexes, cochains, k-d trees).
+- `molina`, a package of its own: the linear algebra (`RealArray`,
+  `CSRMatrix`, `DiagonalOperator`, dense and sparse direct solvers,
+  Krylov solvers, Lanczos, AMG), whose public names are re-exported
+  here.
+- `mojodec.core`: data structures (simplices, meshes, simplicial /
+  abstract / Rips / cube complexes, cochains, subsets, the typed layer,
+  k-d trees).
 - `mojodec.routines`: algorithms (simplex and cube arrays, geometry,
-  combinatorics, Whitney inner products, solvers, mesh generation, I/O,
-  the wedge product and flat, surface curvature, mesh quality).
+  combinatorics, Whitney inner products, typed solver overloads, mesh
+  generation, I/O, the wedge product and flat, surface curvature, mesh
+  quality).
 - `mojodec.vis`: matplotlib drawing through Python interop, and sampling
   of 1-cochains for `quiver` plots. Not re-exported here, so programs that
   do not plot never touch Python.
@@ -35,9 +42,9 @@ Layout
 comptime __version__: String = "0.1.0"
 """The MojoDEC version."""
 
-from mojodec.core.sparse import COOEntries, CSRMatrix
-from mojodec.core.diagonal import DiagonalOperator
-from mojodec.core.operator import (
+from molina.sparse import COOEntries, CSRMatrix
+from molina.diagonal import DiagonalOperator
+from molina.operator import (
     BlockDiagonal,
     Identity,
     LinearOperator,
@@ -128,17 +135,17 @@ from mojodec.routines.linalg import (
     DirectMethod,
     TypedEighResult,
 )
-from mojodec.routines.dense import (
+from molina.dense import (
     EighResult,
 )
-from mojodec.routines.amg import Relaxation, SmoothedAggregation
+from molina.amg import Relaxation, SmoothedAggregation
 from mojodec.routines.gmg import (
     GeometricMultigrid,
     PatchSmoother,
     refinement_hierarchy,
 )
 from mojodec.routines.lanczos import eigsh
-from mojodec.routines.ordering import amd_ordering
+from molina.ordering import amd_ordering
 from mojodec.routines.sparse_ldlt import (
     FactorLayout,
     FillOrdering,

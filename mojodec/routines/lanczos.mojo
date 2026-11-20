@@ -6,17 +6,17 @@
 Sparse symmetric eigenproblems on cochains (`mojodec.routines.lanczos`).
 =======================================================================
 `eigsh` on typed operators, giving k-cochains as eigenvectors. The
-untyped `eigsh` is `mojodec.routines.lanczos_core`'s, which documents the
-method; its overloads are defined here too, forwarding to it, because
+untyped `eigsh` is `molina.lanczos`'s, which documents the method; its
+overloads are defined here too, forwarding to it, because
 Mojo does not merge overloads of one name imported from two modules.
 """
 
-from mojodec.core.diagonal import DiagonalOperator
+from molina.diagonal import DiagonalOperator
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.typed import MatrixOp
-from mojodec.routines import lanczos_core
-from mojodec.routines.dense import EighResult
+from molina import lanczos as molina_lanczos
+from molina.dense import EighResult
 from mojodec.routines.linalg import TypedEighResult
 
 
@@ -31,7 +31,7 @@ def eigsh(
     max_restarts: Int = 300,
 ) raises -> EighResult:
     """The `nev` eigenpairs of `K x = lambda M x` nearest `sigma`:
-    `lanczos_core.eigsh`, which documents it.
+    `molina.lanczos.eigsh`, which documents it.
 
     Args:
         K: The `n x n` symmetric matrix.
@@ -46,9 +46,9 @@ def eigsh(
         The eigenvalues ascending and the eigenvectors as columns.
 
     Raises:
-        As `lanczos_core.eigsh`.
+        As `molina.lanczos.eigsh`.
     """
-    return lanczos_core.eigsh(
+    return molina_lanczos.eigsh(
         K, M, nev, sigma=sigma, tol=tol, ncv=ncv, max_restarts=max_restarts
     )
 
@@ -65,7 +65,7 @@ def eigsh(
     max_restarts: Int = 300,
 ) raises -> EighResult:
     """`eigsh` with eigenvectors `M`-orthogonal to `range(deflate)`:
-    `lanczos_core.eigsh`, which documents it.
+    `molina.lanczos.eigsh`, which documents it.
 
     Args:
         K: The `n x n` symmetric matrix.
@@ -81,9 +81,9 @@ def eigsh(
         The eigenvalues ascending and the eigenvectors as columns.
 
     Raises:
-        As `lanczos_core.eigsh`.
+        As `molina.lanczos.eigsh`.
     """
-    return lanczos_core.eigsh(
+    return molina_lanczos.eigsh(
         K,
         M,
         nev,
@@ -105,7 +105,7 @@ def eigsh(
     ncv: Optional[Int] = None,
     max_restarts: Int = 300,
 ) raises -> EighResult:
-    """`eigsh` with a diagonal mass matrix: `lanczos_core.eigsh`, which
+    """`eigsh` with a diagonal mass matrix: `molina.lanczos.eigsh`, which
     documents it.
 
     Args:
@@ -121,9 +121,9 @@ def eigsh(
         The eigenvalues ascending and the eigenvectors as columns.
 
     Raises:
-        As `lanczos_core.eigsh`.
+        As `molina.lanczos.eigsh`.
     """
-    return lanczos_core.eigsh(
+    return molina_lanczos.eigsh(
         K, M, nev, sigma=sigma, tol=tol, ncv=ncv, max_restarts=max_restarts
     )
 

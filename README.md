@@ -46,7 +46,8 @@ Beyond PyDEC, MojoDEC adds:
   badly numbered ones
 - its own dense and sparse linear algebra (pivoted LU, symmetric
   eigensolver, CG, LSQR, generalized eigenproblems), and a
-  `DiagonalOperator` type for the Hodge stars
+  `DiagonalOperator` type for the Hodge stars, in a package of their own,
+  `molina`
 - faster complex construction: geometry computed in place without
   per-simplex allocation, and simplex lookup by binary search instead of
   per-level dictionaries
@@ -62,9 +63,10 @@ Mathematical Software, Vol. 39, No. 1, pp. 3:1-3:41, 2012,
 ```mojo
 import numojo as nm
 from mojodec import SimplicialComplex, d, delta, cg
+from mojodec.core.utils import real_array_from_string
 
 def main() raises:
-    var V = nm.fromstring[nm.f64]("[[0,0],[1,0],[1,1],[0,1]]")
+    var V = real_array_from_string("[[0,0],[1,0],[1,1],[0,1]]")
     var S = nm.fromstring[DType.int]("[[0,1,3],[1,2,3]]")
     var sc = SimplicialComplex(V, S)
     print(sc[1].num_simplices)                              # 5 edges
@@ -107,14 +109,17 @@ Notes about installation:
 
 ## Layout
 
-Modeled on NuMojo (`core` for data structures, `routines` for algorithms)
-rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
+The linear algebra is `molina` (`molina/`), a package of its own that
+imports nothing from MojoDEC or NuMojo, so other projects can use it
+alone; `mojodec` re-exports its public names. The rest is modeled on
+NuMojo (`core` for data structures, `routines` for algorithms) rather
+than PyDEC's `pydec/pydec/<subpackage>` nesting.
 
 | MojoDEC | PyDEC |
 |---|---|
-| `mojodec/core/sparse.mojo` — `CSRMatrix` | `scipy.sparse.csr_matrix` (PyDEC's sparse matrices) |
-| `mojodec/core/diagonal.mojo` — `DiagonalOperator` | (new; PyDEC uses `scipy.sparse` diagonal matrices) |
-| `mojodec/core/operator.mojo` — `LinearOperator`, `Preconditioner`, `Identity` | `scipy.sparse.linalg.LinearOperator` |
+| `molina/sparse.mojo` — `CSRMatrix` | `scipy.sparse.csr_matrix` (PyDEC's sparse matrices) |
+| `molina/diagonal.mojo` — `DiagonalOperator` | (new; PyDEC uses `scipy.sparse` diagonal matrices) |
+| `molina/operator.mojo` — `LinearOperator`, `Preconditioner`, `Identity` | `scipy.sparse.linalg.LinearOperator` |
 | `mojodec/core/subset.mojo` — `Subset` | (new) |
 | `mojodec/core/typed.mojo` — `TypedComplex`, `TypedCochain`, `MatrixOp`, `DiagonalOp` | (new) |
 | `mojodec/core/typed_block.mojo` — `BlockOp`, `CochainPair` | (new) |
@@ -127,14 +132,15 @@ rather than PyDEC's `pydec/pydec/<subpackage>` nesting.
 | `mojodec/core/rips_complex.mojo` | `dec/rips_complex.py` |
 | `mojodec/core/regular_cube_complex.mojo` | `dec/regular_cube_complex.py` |
 | `mojodec/core/kd_tree.mojo` — `KDTree` | `math/kd_tree.py` |
+| `molina/real_array.mojo` — `RealArray`; `molina/utils.mojo` | NumPy's `float64` arrays |
 | `mojodec/core/utils.mojo` | array helpers |
 | `mojodec/routines/simplex_array.mojo`, `cube_array.mojo` | `dec/simplex_array.py`, `dec/cube_array.py` |
 | `mojodec/routines/geometry.mojo` | `math/volume.py`, `math/circumcenter.py`, `barycentric_gradients` |
 | `mojodec/routines/combinatorial.mojo` | `math/combinatorial.py`, `math/parity.py` |
 | `mojodec/routines/innerproduct.mojo` | `fem/innerproduct.py` |
 | `mojodec/routines/mesh_generation.mojo` | `mesh/generation.py`, `mesh/subdivision.py` |
-| `mojodec/routines/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range`; `routines/sparse_ldlt.mojo`, `routines/supernodal.mojo`, `routines/ordering.mojo` — `SparseLDLT`, `SparseCholesky`, `FactorLayout`, `amd_ordering`; `routines/lanczos.mojo` — `eigsh`; `routines/amg.mojo` — `SmoothedAggregation`; `routines/gmg.mojo` — `GeometricMultigrid`, `refinement_hierarchy` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
-| `mojodec/routines/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh`, `EighResult.residuals` | `numpy.linalg` (called by PyDEC) |
+| `molina/linalg.mojo` — `cg`, `minres`, `jacobi`, `lsqr`, `spsolve`, `eigh_generalized`; `NullSpace`, `eigenvalue_range`; `molina/sparse_ldlt.mojo`, `molina/supernodal.mojo`, `molina/ordering.mojo` — `SparseLDLT`, `SparseCholesky`, `FactorLayout`, `amd_ordering`; `molina/lanczos.mojo` — `eigsh`; `molina/amg.mojo` — `SmoothedAggregation`; typed overloads in `mojodec/routines/linalg.mojo`, `sparse_ldlt.mojo`, `lanczos.mojo`; `mojodec/routines/gmg.mojo` — `GeometricMultigrid`, `refinement_hierarchy` | `scipy.sparse.linalg`, `scipy.linalg.eig` (called by PyDEC) |
+| `molina/dense.mojo` — pivoted LU, `det`, `inv`, `cholesky`, `eigh`, `EighResult.residuals` | `numpy.linalg` (called by PyDEC) |
 | `mojodec/routines/io/` — `read_array`, `write_array`, `read_mesh`, `write_mesh`, `loadtxt` | `io/arrayio.py`, `io/meshio.py` |
 | `mojodec/routines/io/vtk.mojo` — `write_vtu`, `write_vtu_cubes`, `VTKField` | (new) |
 | `mojodec/routines/io/ply.mojo` — `read_ply`, `write_ply` | (new) |
@@ -400,7 +406,7 @@ the published mathematics:
   (from 50k simplices), Whitney mass matrices (from 4096 top simplices),
   and sparse matrix-vector products in `cg` and `lsqr` (from 1M stored
   entries), through MAX's `parallelize`. Smaller problems run serially, and
-  the results are the same either way. `MOJODEC_NUM_THREADS=k` caps the
+  the results are the same either way. `MOLINA_NUM_THREADS=k` caps the
   threads at k.
 - **`icosahedron` and `icosphere`**, closed surfaces to test on.
 - **`read_ply` and `write_ply`**, for meshes from MeshLab, Blender, and
@@ -691,7 +697,7 @@ the published mathematics:
 - **Linear algebra.** NuMojo 0.12's `linalg.solve` factors without row
   exchanges, which fails on DEC's saddle-point systems, and its Jacobi
   `eigh` is slow for a few hundred unknowns. MojoDEC has its own pivoted LU
-  and Householder/QL `eigh` (`routines/dense.mojo`). `spsolve` and
+  and Householder/QL `eigh` (`molina/dense.mojo`). `spsolve` and
   `eigh_generalized` are dense, which suits the example sizes;
   `eigh_generalized(K, M)` also takes a diagonal `M` (a Hodge star) and
   then only rescales `K`, with no Cholesky factorization.

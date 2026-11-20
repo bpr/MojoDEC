@@ -32,6 +32,7 @@ from mojodec import (
 )
 from mojodec.core.utils import (
     RealArray,
+    from_ndarray,
     norm2,
     real_array,
     rows_of,
@@ -134,7 +135,7 @@ def main() raises:
     # PyDEC's way: the harmonic part of a random cochain. Being closed, it
     # is determined by its periods, so it should equal sum_j p_j H[j].
     var omega = sc.get_cochain(1)
-    omega.v = nm.random.rand[f64](Shape(omega.v.size))
+    omega.v = from_ndarray(nm.random.rand[f64](Shape(omega.v.size)))
     var h = hodge_decomposition(omega)[2].copy()
     var p = basis.periods(h)
     var diff = h.v.copy()

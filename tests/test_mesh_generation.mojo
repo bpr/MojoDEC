@@ -14,7 +14,7 @@ from numojo.prelude import *
 
 from mojodec.core.ncube import NCube
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.routines.innerproduct import whitney_innerproduct
 from mojodec.routines.linalg import eigh_generalized
 from mojodec.core.utils import (

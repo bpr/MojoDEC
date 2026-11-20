@@ -8,8 +8,8 @@ MojoDEC prelude (`mojodec.prelude`).
 The names most programs need: `from mojodec.prelude import *`.
 """
 
-from mojodec.core.sparse import CSRMatrix
-from mojodec.core.diagonal import DiagonalOperator
+from molina.sparse import CSRMatrix
+from molina.diagonal import DiagonalOperator
 from mojodec.core.primality import Primality
 from mojodec.core.subset import Subset
 from mojodec.core.cell_set import CellSet

@@ -1,14 +1,14 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 """
-Parallel loops (`mojodec.core.parallel`).
-=========================================
+Parallel loops (`molina.parallel`).
+===================================
 `parallel_ranges` splits a loop into one chunk per logical core (per
 physical core for loops marked `memory_bound`, such as sparse
-matrix-vector products) and runs them on MAX's thread pool (`max.algorithm.parallelize`), the only use of
-MAX in MojoDEC. A call costs about 200 microseconds however little work it
+matrix-vector products) and runs them on MAX's thread pool (`max.algorithm.parallelize`), molina's only
+use of MAX. A call costs about 200 microseconds however little work it
 does, so loops below a caller-chosen size run serially on the calling
 thread.
 
@@ -23,8 +23,8 @@ def body(chunk: Int, lo: Int, hi: Int) {op}:
 parallel_ranges(n, 50_000, body)
 ```
 
-Setting the environment variable `MOJODEC_NUM_THREADS` to a positive
-integer caps the number of chunks (so `MOJODEC_NUM_THREADS=1` runs every
+Setting the environment variable `MOLINA_NUM_THREADS` to a positive
+integer caps the number of chunks (so `MOLINA_NUM_THREADS=1` runs every
 loop serially, as single-threaded benchmarks need); unset, or not a
 positive integer, it leaves one chunk per logical (or physical) core.
 
@@ -76,11 +76,11 @@ def max_threads(*, memory_bound: Bool = False) -> Int:
 
     Returns:
         The number of logical cores (physical cores when `memory_bound`),
-        or the value of the environment variable `MOJODEC_NUM_THREADS`
+        or the value of the environment variable `MOLINA_NUM_THREADS`
         when it is a smaller positive integer.
     """
     var cores = num_physical_cores() if memory_bound else num_logical_cores()
-    var s = getenv("MOJODEC_NUM_THREADS")
+    var s = getenv("MOLINA_NUM_THREADS")
     if not s:
         return cores
     try:

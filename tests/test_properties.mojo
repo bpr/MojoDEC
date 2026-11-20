@@ -28,7 +28,7 @@ from proptest import (
 from mojodec.core.cell_set import CellSet
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import (
     IntArray,
     _lexsort_rows,

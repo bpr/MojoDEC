@@ -18,7 +18,7 @@ from mojodec import (
     refinement_hierarchy,
     whitney_innerproduct,
 )
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import RealArray, dot, probe_vector, real_vector
 from mojodec.routines.refinement import Refinement
 

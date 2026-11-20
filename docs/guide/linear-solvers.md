@@ -78,7 +78,7 @@ operator such as `d0.T() @ tc.star[1, PRIMAL]() @ d0` maps primal
 
 ## Operators
 
-`mojodec.core.operator` defines what a solver needs of a matrix.
+`molina.operator` defines what a solver needs of a matrix.
 
 ```mojo
 trait LinearOperator:

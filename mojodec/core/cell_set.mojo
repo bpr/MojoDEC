@@ -26,7 +26,7 @@ var grown = sc.closure(sc.star(region))
 
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.primality import Primality
 from mojodec.core.subset import Subset
 

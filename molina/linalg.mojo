@@ -1,10 +1,10 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 """
-Sparse linear solvers (`mojodec.routines.linalg_core`).
-=======================================================
+Sparse linear solvers (`molina.linalg`).
+========================================
 The parts of `scipy.sparse.linalg` and `scipy.linalg` that PyDEC's examples
 use, over `CSRMatrix` and `RealArray`.
 
@@ -24,7 +24,7 @@ use, over `CSRMatrix` and `RealArray`.
   and symmetric positive definite `M` (dense, or a `DiagonalOperator` such
   as a Hodge star).
 
-`cg` and `minres` take any `LinearOperator` (`mojodec.core.operator`) and,
+`cg` and `minres` take any `LinearOperator` (`molina.operator`) and,
 as `M`, any `Preconditioner`, and optionally a starting guess (`x0`), a
 `NullSpace`, and `ritz=True` for the Ritz values:
 
@@ -33,20 +33,18 @@ var res = cg(A, b, M=jacobi(A), rtol=1e-10)
 var x = res^.take_x()
 ```
 
-Nothing here knows about complexes or cochains: the overloads on typed
-operators and cochains are in `mojodec.routines.linalg`, which also
+Nothing here knows about complexes or cochains: MojoDEC's overloads on
+typed operators and cochains are in `mojodec.routines.linalg`, which also
 re-exports everything public here.
 """
 
 from std.math import isfinite, sqrt
 from std.memory import ArcPointer
-import numojo as nm
-from numojo.prelude import *
 
-from mojodec.core.diagonal import DiagonalOperator
-from mojodec.core.operator import Identity, LinearOperator, Preconditioner
-from mojodec.core.sparse import CSRMatrix
-from mojodec.core.utils import (
+from molina.diagonal import DiagonalOperator
+from molina.operator import Identity, LinearOperator, Preconditioner
+from molina.sparse import CSRMatrix
+from molina.utils import (
     RealArray,
     axpy,
     dot,
@@ -54,12 +52,10 @@ from mojodec.core.utils import (
     probe_vector,
     real_array,
     real_vector,
-    rows_of,
-    cols_of,
 )
-from mojodec.routines import dense
-from mojodec.routines.dense import EighResult
-from mojodec.routines.sparse_ldlt_core import SparseLDLT
+from molina import dense
+from molina.dense import EighResult
+from molina.sparse_ldlt import SparseLDLT
 
 
 struct StopReason(Equatable, ImplicitlyCopyable, Writable):
@@ -1118,7 +1114,7 @@ struct DenseCholesky(Movable, Preconditioner):
         Returns:
             `n`.
         """
-        return rows_of(self._L)
+        return self._L.rows()
 
     def num_cols(self) -> Int:
         """The dimension.
@@ -1126,7 +1122,7 @@ struct DenseCholesky(Movable, Preconditioner):
         Returns:
             `n`.
         """
-        return rows_of(self._L)
+        return self._L.rows()
 
     def apply_into(self, x: RealArray, mut y: RealArray) raises:
         """Solve `A y = x` by two triangular solves.
@@ -1138,7 +1134,7 @@ struct DenseCholesky(Movable, Preconditioner):
         Raises:
             If a length is not `n`.
         """
-        var n = rows_of(self._L)
+        var n = self._L.rows()
         if x.size != n or y.size != n:
             raise Error("DenseCholesky.apply_into: dimension mismatch")
         # L z = x, then L^T y = z
@@ -1363,8 +1359,8 @@ def eigh_generalized(K: RealArray, M: RealArray) raises -> EighResult:
         If `K` and `M` are not both `n x n`, `M` is not positive definite,
             or the eigenvalue iteration does not converge.
     """
-    var n = rows_of(M)
-    if cols_of(M) != n or rows_of(K) != n or cols_of(K) != n:
+    var n = M.rows()
+    if M.cols() != n or K.rows() != n or K.cols() != n:
         raise Error("eigh_generalized: K and M must both be n x n")
     var L = dense.cholesky(M)
     # C = L^-1 K L^-T, by two triangular solves
@@ -1397,7 +1393,7 @@ def eigh_generalized(K: RealArray, M: DiagonalOperator) raises -> EighResult:
             eigenvalue iteration does not converge.
     """
     var n = len(M)
-    if rows_of(K) != n or cols_of(K) != n:
+    if K.rows() != n or K.cols() != n:
         raise Error("eigh_generalized: K and M differ in shape")
     var scale = List[Float64](capacity=n)
     for i in range(n):
@@ -1460,8 +1456,8 @@ def _xpby(x: RealArray, beta: Float64, mut y: RealArray):
 
 
 def _transpose(A: RealArray) raises -> RealArray:
-    var r = rows_of(A)
-    var c = cols_of(A)
+    var r = A.rows()
+    var c = A.cols()
     var out = real_array(c, r)
     for i in range(r):
         for j in range(c):
@@ -1471,8 +1467,8 @@ def _transpose(A: RealArray) raises -> RealArray:
 
 def _forward(L: RealArray, B: RealArray) raises -> RealArray:
     """Solve `L X = B` for lower-triangular `L`, a row of `X` at a time."""
-    var n = rows_of(L)
-    var m = cols_of(B)
+    var n = L.rows()
+    var m = B.cols()
     var X = B.copy()
     for i in range(n):
         for j in range(i):
@@ -1485,8 +1481,8 @@ def _forward(L: RealArray, B: RealArray) raises -> RealArray:
 
 def _backward_transposed(L: RealArray, B: RealArray) raises -> RealArray:
     """Solve `L^T X = B` for lower-triangular `L`, a row of `X` at a time."""
-    var n = rows_of(L)
-    var m = cols_of(B)
+    var n = L.rows()
+    var m = B.cols()
     var X = B.copy()
     for i in range(n - 1, -1, -1):
         for j in range(i + 1, n):

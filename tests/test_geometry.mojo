@@ -32,7 +32,7 @@ from mojodec.routines.combinatorial import (
     relative_parity,
 )
 from mojodec.core.utils import from_ndarray, real_array, real_array_from_string
-from mojodec.core.real_array import RealArray
+from molina.real_array import RealArray
 
 
 def A(s: String) raises -> RealArray:

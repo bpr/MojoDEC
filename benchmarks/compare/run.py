@@ -106,7 +106,7 @@ def thread_env(threads):
     """Environment capping every library's (and BLAS's) thread count;
     `threads=None` leaves them at their defaults (all cores)."""
     env = dict(os.environ)
-    for var in ["MOJODEC_NUM_THREADS", "RAYON_NUM_THREADS",
+    for var in ["MOLINA_NUM_THREADS", "RAYON_NUM_THREADS",
                 "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"]:
         env.pop(var, None)
         if threads is not None:

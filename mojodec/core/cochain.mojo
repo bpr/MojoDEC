@@ -22,9 +22,9 @@ from numojo.prelude import *
 
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.diagonal import DiagonalOperator
+from molina.diagonal import DiagonalOperator
 from mojodec.core.primality import Primality
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.subset import Subset
 from mojodec.core.utils import RealArray, real_vector, rows_of
 

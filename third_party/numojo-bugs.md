@@ -46,7 +46,7 @@ def main() raises:
 
 Without pivoting, small pivots also make the result inaccurate when they
 are not exactly zero. MojoDEC uses its own pivoted LU
-(`mojodec/routines/dense.mojo`).
+(`molina/dense.mojo`).
 
 ## 3. A new axis is dropped when every dimension gets an integer
 

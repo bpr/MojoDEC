@@ -1,6 +1,6 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 # The approximate minimum degree ordering below is a port of faer's
 # `sparse::linalg::amd` (faer 0.24, commit 0ecd846, MIT License, Copyright (c)
@@ -12,8 +12,8 @@
 # Both notices and licenses are reproduced in NOTICE.
 # ===----------------------------------------------------------------------=== #
 """
-Fill-reducing orderings (`mojodec.routines.ordering`).
-=====================================================
+Fill-reducing orderings (`molina.ordering`).
+============================================
 `amd_ordering(A)` permutes a sparse symmetric matrix so that its Cholesky
 or LDL^T factor has few nonzeros: Amestoy, Davis, and Duff's approximate
 minimum degree (AMD, SIAM J. Matrix Anal. Appl. 17(4), 1996). Each step
@@ -25,7 +25,7 @@ matrix-vector products.
 
 from std.math import sqrt
 
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 
 
 comptime _NONE = -1

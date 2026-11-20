@@ -25,7 +25,7 @@ from mojodec.core.cell_set import (
     cells_in_rows,
     cells_once_in_rows,
 )
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.subset import Subset
 
 

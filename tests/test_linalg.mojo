@@ -11,9 +11,9 @@ from std.utils.numerics import nan
 import numojo as nm
 from numojo.prelude import *
 
-from mojodec.core.diagonal import DiagonalOperator
-from mojodec.core.operator import BlockDiagonal, Identity
-from mojodec.core.sparse import CSRMatrix
+from molina.diagonal import DiagonalOperator
+from molina.operator import BlockDiagonal, Identity
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import (
     RealArray,
     fget,
@@ -34,8 +34,8 @@ from mojodec.routines.linalg import (
     minres,
     spsolve,
 )
-from mojodec.routines import dense
-from mojodec.routines.dense import EighResult
+from molina import dense
+from molina.dense import EighResult
 from mojodec.core.utils import from_ndarray, real_array_from_string
 
 

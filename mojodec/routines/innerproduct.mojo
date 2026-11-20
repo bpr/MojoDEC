@@ -15,10 +15,10 @@ matrix as a typed operator from primal k-cochains to dual (n-k)-cochains.
 from std.math import sqrt
 from std.memory import stack_allocation
 
-from mojodec.core.parallel import chunk_scratch, num_chunks, parallel_ranges
+from molina.parallel import chunk_scratch, num_chunks, parallel_ranges
 from mojodec.core.regular_cube_complex import RegularCubeComplex
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.typed import DUAL, PRIMAL, MatrixOp, TypedComplex
 from mojodec.core.utils import (
     factorial,

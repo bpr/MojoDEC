@@ -12,7 +12,7 @@ embedding space.
 """
 
 from mojodec.core.kd_tree import KDTree
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import (
     IntArray,
     RealArray,
@@ -47,7 +47,7 @@ struct RipsComplex(CellComplex, Copyable, Movable):
     """The Rips complex of a point cloud.
 
     ```mojo
-    var pts = nm.fromstring[f64]("[[0,0],[2,0],[2,2],[0,2],[1,1]]")
+    var pts = real_array_from_string("[[0,0],[2,0],[2,2],[0,2],[1,1]]")
     var rc = RipsComplex(pts, 2.1)
     # rc.simplices[1] == [[0,1],[0,3],[0,4],[1,2],[1,4],[2,3],[2,4],[3,4]]
     # rc.simplices[2] == [[0,1,4],[0,3,4],[1,2,4],[2,3,4]]

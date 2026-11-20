@@ -121,7 +121,7 @@ four fused multiply-adds. The solves gather each supernode's rows once,
 so their inner loops run down contiguous columns too.
 
 **Threads.** The supernodal factorization runs on every physical core
-(`MOJODEC_NUM_THREADS` caps them; below about $5 \times 10^6$
+(`MOLINA_NUM_THREADS` caps them; below about $5 \times 10^6$
 multiply-adds it stays serial). Supernodes in disjoint subtrees of the
 supernode tree touch disjoint blocks, so the tree is cut from the roots
 down until its subtrees are small next to a thread's share (Geist and
@@ -147,7 +147,7 @@ failed pivot stops every thread, and the factorization reruns serially
 to report the pivot a serial run would.
 
 Measured on an 8-core AMD Ryzen 7 9800X3D (factor times with
-`MOJODEC_NUM_THREADS`, AMD computed beforehand, the symbolic analysis
+`MOLINA_NUM_THREADS`, AMD computed beforehand, the symbolic analysis
 included):
 
 | matrix | 1 thread | 2 | 4 | 8 |

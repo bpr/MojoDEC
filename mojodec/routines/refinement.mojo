@@ -33,7 +33,7 @@ var fine_c = P1 @ c.v                # the same Whitney 1-form, finer
 
 from mojodec.core.mesh import SimplicialMesh
 from mojodec.core.simplicial_complex import SimplexLevel, SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import (
     IntArray,
     cols_of,

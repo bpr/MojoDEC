@@ -36,11 +36,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --------------------------------------------------------------------------
 
-mojodec/routines/ordering.mojo and mojodec/routines/sparse_ldlt.mojo are
+molina/ordering.mojo and molina/sparse_ldlt.mojo are
 ports of faer (https://codeberg.org/sarah-quinones/faer, commit 0ecd846):
 its sparse::linalg::amd and sparse::linalg::cholesky::simplicial modules,
 the symbolic analysis and left-looking structure of
-sparse::linalg::cholesky::supernodal (mojodec/routines/supernodal.mojo),
+sparse::linalg::cholesky::supernodal (molina/supernodal.mojo),
 and the leaf and ancestor bookkeeping of the column counts in
 sparse::linalg::qr (column_counts_aat).
 faer's license follows, verbatim.
@@ -71,7 +71,7 @@ SOFTWARE.
 
 --------------------------------------------------------------------------
 
-faer's AMD (and so mojodec/routines/ordering.mojo) translates SuiteSparse's
+faer's AMD (and so molina/ordering.mojo) translates SuiteSparse's
 AMD. Its notice and license follow, verbatim from faer's
 COPYING.SUITE_SPARSE.AMD.BSD.
 
@@ -114,7 +114,7 @@ AMD License: BSD 3-clause:
 
 --------------------------------------------------------------------------
 
-mojodec/routines/amg.mojo ports the aggregation and the smoothed
+molina/amg.mojo ports the aggregation and the smoothed
 prolongation of amgcl (https://github.com/ddemidov/amgcl, commit c68350e):
 coarsening/plain_aggregates.hpp and coarsening/smoothed_aggregation.hpp.
 amgcl's license follows, verbatim.

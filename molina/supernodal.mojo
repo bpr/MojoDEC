@@ -1,13 +1,13 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 # The supernode partition, the relaxed amalgamation (its thresholds), the row
 # patterns by `ereach_super`, and the left-looking numeric factorization with
 # one dense update per descendant supernode follow faer's
 # `sparse::linalg::cholesky::supernodal` (faer 0.24, commit 0ecd846, MIT
 # License, Copyright (c) 2026 sarah quiñones el kazdadi); see NOTICE. The
-# dense kernels are MojoDEC's own. The algorithms: J. W. H. Liu, E. G. Ng,
+# dense kernels are molina's own. The algorithms: J. W. H. Liu, E. G. Ng,
 # B. W. Peyton, "On finding supernodes for sparse matrix computations", SIAM
 # J. Matrix Anal. Appl. 14(1), 1993; C. Ashcraft, R. Grimes, "The influence
 # of relaxed supernode partitions on the multifrontal method", ACM Trans.
@@ -15,18 +15,18 @@
 # algorithms on advanced uniprocessor computers", SIAM J. Sci. Comput.
 # 14(5), 1993; for the subtrees given to threads, G. A. Geist, E. G. Ng,
 # "Task scheduling for parallel sparse Cholesky factorization", Int. J.
-# Parallel Programming 18(4), 1989. The task graph is MojoDEC's own.
+# Parallel Programming 18(4), 1989. The task graph is molina's own.
 # ===----------------------------------------------------------------------=== #
 """
-Supernodal LDL^T (`mojodec.routines.supernodal`).
-==================================================
+Supernodal LDL^T (`molina.supernodal`).
+=======================================
 The numeric engine behind `SparseLDLT(A, layout=FactorLayout.SUPERNODAL)`.
 Columns of `L` with the same pattern below a dense triangle (a supernode)
 are stored together as one dense column-major block, so the factorization
 and the solves run dense kernels (vector loads, one pass over each block)
 instead of one sparse column at a time. Private: use `SparseLDLT`.
 
-The factorization runs on every physical core (`MOJODEC_NUM_THREADS` caps
+The factorization runs on every physical core (`MOLINA_NUM_THREADS` caps
 them) as a list of tasks: disjoint subtrees of the supernode tree, then
 each supernode above them, split when large into windows of columns for
 its updates and, per panel, a diagonal-block task and tasks of 64 rows
@@ -39,7 +39,7 @@ depend on the number of threads.
 from std.atomic import Atomic
 from std.math import isfinite
 
-from mojodec.core.parallel import max_threads, parallel_ranges
+from molina.parallel import max_threads, parallel_ranges
 
 comptime _NONE = -1
 comptime _W = 8

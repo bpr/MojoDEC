@@ -7,7 +7,7 @@
 Prints one JSON object per line: `{"lib", "mesh", "phase", "ms",
 "check"}`, `ms` the best of `repeats` runs, `check` a list of numbers every
 library should agree on for that phase (see README.md). `run.py` sets the thread
-count through `MOJODEC_NUM_THREADS`.
+count through `MOLINA_NUM_THREADS`.
 
 ```sh
 pixi run mojo run -D ASSERT=none -I . -I build \\

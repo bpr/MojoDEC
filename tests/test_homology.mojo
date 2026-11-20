@@ -18,7 +18,7 @@ from mojodec.core.regular_cube_complex import RegularCubeComplex
 from mojodec.core.rips_complex import RipsComplex
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import int_array, iset, real_array, fset
 from mojodec.routines.homology import (
     betti_numbers,

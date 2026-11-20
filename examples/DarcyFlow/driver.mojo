@@ -36,7 +36,7 @@ from mojodec.core.utils import (
     take_rows,
     row_list,
 )
-from mojodec.routines.dense import det
+from molina.dense import det
 from mojodec.vis import pyplot, show_requested, simplex_quivers
 
 
@@ -76,7 +76,7 @@ def main() raises:
     var boundary_flux = tc.cochain[1, PRIMAL]()
     # all triangles have the same orientation, so look at the first one
     var t0 = take_rows(vertices, row_list(triangles, 0))
-    var edge_mat = nm.zeros[f64](Shape(2, 2))
+    var edge_mat = real_array(2, 2)
     for r in range(2):
         for c in range(2):
             edge_mat.unsafe_set(r * 2 + c, fget(t0, r + 1, c) - fget(t0, 0, c))

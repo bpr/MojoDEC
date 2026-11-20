@@ -13,7 +13,7 @@ from numojo.prelude import *
 
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import iget, row_list, rows_of, cols_of
 from mojodec.routines.io.arrayio import (
     ArrayFormat,

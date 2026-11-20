@@ -33,7 +33,7 @@ from mojodec.routines.quality import (
     well_centeredness,
 )
 from mojodec.core.utils import real_array, real_array_from_string
-from mojodec.core.real_array import RealArray
+from molina.real_array import RealArray
 
 
 def sphere(subdivisions: Int, radius: Float64) raises -> SimplicialComplex:

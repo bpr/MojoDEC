@@ -42,14 +42,19 @@ from mojodec import (
     loop_subdivision,
     write_vtu,
 )
-from mojodec.core.utils import dot, real_vector, real_vector_from_list
+from mojodec.core.utils import (
+    dot,
+    real_array_from_string,
+    real_vector,
+    real_vector_from_list,
+)
 from mojodec.vis import pyplot, show_requested, simplex_quivers
 
 
 def main() raises:
     # an equilateral triangle of side 1, subdivided into 256 triangles
     var mesh = SimplicialMesh(
-        nm.fromstring[f64]("[[0, 0], [1, 0], [0.5, 0.8660254037844386]]"),
+        real_array_from_string("[[0, 0], [1, 0], [0.5, 0.8660254037844386]]"),
         nm.fromstring[DType.int]("[[0, 1, 2]]"),
     )
     for _ in range(4):

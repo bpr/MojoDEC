@@ -1,5 +1,5 @@
 from mojodec import SimplicialComplex, SparseLDLT, FactorLayout, kuhn_grid, whitney_innerproduct, amd_ordering
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import probe_vector, real_array, fget, fset, real_vector
 from std.time import perf_counter_ns
 

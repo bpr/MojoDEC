@@ -10,7 +10,7 @@ k-cube is a row `[c_0, ..., c_{N-1}, a_0, ..., a_{k-1}]`: its lowest grid
 corner followed by the (increasing) axes it spans.
 """
 
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.routines.simplex_array import FacesAndBoundary
 from mojodec.core.utils import (
     IntArray,

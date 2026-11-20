@@ -32,7 +32,7 @@ from proptest import (
 )
 
 from mojodec.core.kd_tree import KDTree
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import (
     IntArray,
     RealArray,
@@ -46,7 +46,7 @@ from mojodec.core.utils import (
     rows_of,
     cols_of,
 )
-from mojodec.routines import dense
+from molina import dense
 from mojodec.routines.io.arrayio import (
     ArrayFormat,
     SparseFormat,
@@ -73,7 +73,7 @@ from mojodec.routines.time import (
     StepSolver,
     _Guess,
 )
-from mojodec.routines.amg import Relaxation, SmoothedAggregation
+from molina.amg import Relaxation, SmoothedAggregation
 from mojodec.routines.gmg import (
     GeometricMultigrid,
     PatchSmoother,
@@ -83,9 +83,9 @@ from mojodec.routines.innerproduct import whitney_innerproduct
 from mojodec.routines.mesh_generation import kuhn_grid
 from mojodec.core.simplicial_complex import SimplicialComplex
 from mojodec.routines.lanczos import eigsh
-from mojodec.routines.ordering import amd_ordering
-from mojodec.routines.supernodal import etree_postorder
-from mojodec.routines.sparse_ldlt_core import (
+from molina.ordering import amd_ordering
+from molina.supernodal import etree_postorder
+from molina.sparse_ldlt import (
     _etree_and_counts,
     FactorLayout,
     FillOrdering,
@@ -93,7 +93,7 @@ from mojodec.routines.sparse_ldlt_core import (
     SparseLDLT,
     cholesky_nonzeros,
 )
-from mojodec.core.diagonal import DiagonalOperator
+from molina.diagonal import DiagonalOperator
 
 
 comptime TMP = "/tmp/mojodec_properties_robust"

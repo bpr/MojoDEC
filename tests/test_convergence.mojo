@@ -29,7 +29,7 @@ from mojodec import (
 )
 from mojodec.core.cochain import Cochain
 from mojodec.core.primality import Primality
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.utils import dot, fget, fset, real_vector, rows_of
 
 

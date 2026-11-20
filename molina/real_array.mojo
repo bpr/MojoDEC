@@ -1,17 +1,17 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 """
-Real arrays (`mojodec.core.real_array`).
-========================================
+Real arrays (`molina.real_array`).
+==================================
 `RealArray`: a C-contiguous vector or matrix of `Float64`, the vectors
 and dense matrices of the linear algebra (`CSRMatrix` products, the
-solvers, `dense`). It replaces NuMojo's `NDArray[DType.float64]` with the
-part of it MojoDEC used: flat element access (`unsafe_get`, `unsafe_set`,
-SIMD `unsafe_load`/`unsafe_store`, `unsafe_ptr`), `size`, `ndim`, and
-the shape, so the linear algebra does not depend on NuMojo. Integer
-arrays (`IntArray`) are still NuMojo's.
+solvers, `dense`). It has the part of NuMojo's `NDArray[DType.float64]`
+that MojoDEC used, under the same names: flat element access
+(`unsafe_get`, `unsafe_set`, SIMD `unsafe_load`/`unsafe_store`,
+`unsafe_ptr`), `size`, `ndim`, and the shape, so molina does not depend
+on NuMojo.
 
 Element `(i, j)` of an `r x c` array is at flat offset `i * c + j`; a
 vector has `ndim == 1` and one column.

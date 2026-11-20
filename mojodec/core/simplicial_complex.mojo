@@ -34,12 +34,12 @@ from mojodec.core.cell_set import (
 )
 from mojodec.core.chain_complex import ChainComplex
 from mojodec.core.cochain import Cochain, CochainBasis
-from mojodec.core.diagonal import DiagonalOperator
+from molina.diagonal import DiagonalOperator
 from mojodec.core.primality import Primality
 from mojodec.core.mesh import SimplicialMesh
 from mojodec.core.simplex import Simplex
-from mojodec.core.parallel import chunk_scratch, num_chunks, parallel_ranges
-from mojodec.core.sparse import CSRMatrix
+from molina.parallel import chunk_scratch, num_chunks, parallel_ranges
+from molina.sparse import CSRMatrix
 from mojodec.core.subset import Subset
 from mojodec.core.utils import (
     IntArray,
@@ -331,7 +331,7 @@ struct SimplicialComplex(
     """A simplicial complex with its chain and cochain operators.
 
     ```mojo
-    var V = nm.fromstring[f64]("[[0,0],[1,0],[1,1],[0,1]]")
+    var V = real_array_from_string("[[0,0],[1,0],[1,1],[0,1]]")
     var S = nm.fromstring[DType.int]("[[0,1,3],[1,2,3]]")
     var sc = SimplicialComplex(V, S)
     print(sc[1].num_simplices)   # 5 edges

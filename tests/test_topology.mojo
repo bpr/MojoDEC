@@ -16,7 +16,7 @@ from mojodec.core.mesh import RegularCubeMesh
 from mojodec.core.regular_cube_complex import RegularCubeComplex
 from mojodec.core.simplex import Simplex
 from mojodec.core.simplicial_complex import SimplicialComplex
-from mojodec.core.sparse import CSRMatrix
+from molina.sparse import CSRMatrix
 from mojodec.core.subset import Subset
 from mojodec.routines.io.meshio import read_mesh
 from mojodec.core.mesh import SimplicialMesh

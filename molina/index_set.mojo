@@ -1,13 +1,13 @@
 # ===----------------------------------------------------------------------=== #
-# MojoDEC: Discrete Exterior Calculus in Mojo.
-# Largely inspired by PyDEC (https://github.com/hirani/pydec).
+# molina: linear algebra in Mojo (sparse and dense matrices, direct and
+# iterative solvers, eigensolvers, multigrid), split from MojoDEC.
 # ===----------------------------------------------------------------------=== #
 """
-Index sets (`mojodec.core.index_set`).
-======================================
+Index sets (`molina.index_set`).
+================================
 `IndexSet`: what `CSRMatrix.exclude_subset` and `restrict_to_subset` (and
-`DiagonalOperator`'s) need of a set of row indices. `Subset`, a set of
-cells of a complex, implements it.
+`DiagonalOperator`'s) need of a set of row indices. MojoDEC's `Subset`,
+a set of cells of a complex, implements it.
 """
 
 

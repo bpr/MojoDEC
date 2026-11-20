@@ -37,13 +37,17 @@ build:
   number: 0
   script:
     - mkdir -p build ${{ PREFIX }}/lib/mojo
+    # molina, the linear algebra MojoDEC builds on, ships in this package
+    # until it has one of its own
+    - mojo precompile molina -o build/molina.mojoc
+    - cp build/molina.mojoc ${{ PREFIX }}/lib/mojo/molina.mojoc
     - if: numojo == "vendored"
       then:
         - mojo precompile third_party/numojo -o build/numojo.mojoc
         - cp build/numojo.mojoc ${{ PREFIX }}/lib/mojo/numojo.mojoc
         - mojo precompile -I build mojodec -o ${{ PREFIX }}/lib/mojo/mojodec.mojoc
       else:
-        - mojo precompile mojodec -o ${{ PREFIX }}/lib/mojo/mojodec.mojoc
+        - mojo precompile -I build mojodec -o ${{ PREFIX }}/lib/mojo/mojodec.mojoc
 
 requirements:
   # the compiler finds imported .mojoc files in its own environment, so
@@ -82,6 +86,7 @@ tests:
   - package_contents:
       files:
         - lib/mojo/mojodec.mojoc
+        - lib/mojo/molina.mojoc
 
 about:
   homepage: https://github.com/bpr/MojoDEC

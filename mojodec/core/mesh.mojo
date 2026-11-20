@@ -33,7 +33,7 @@ struct SimplicialMesh(Copyable, Movable, Writable):
     """A simplicial mesh: vertex coordinates plus top-simplex vertex lists.
 
     ```mojo
-    var V = nm.fromstring[f64]("[[0,0],[1,0],[0,1]]")
+    var V = real_array_from_string("[[0,0],[1,0],[0,1]]")
     var E = nm.fromstring[DType.int]("[[0,1,2]]")
     var mesh = SimplicialMesh(V, E)
     ```
