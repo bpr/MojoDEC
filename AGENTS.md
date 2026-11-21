@@ -57,6 +57,9 @@ there); `mojodec/prelude.mojo` is the small common subset.
   (`examples/run.sh` cds into it) and writes outputs that `.gitignore`
   excludes.
 - `third_party/numojo`: vendored NuMojo (see Toolchain).
+- `tools/export_molina_fixtures.mojo`: writes the Whitney-form matrices
+  molina's tests read into `../molina/tests/data/matrices` (see the
+  README there); add a spec there when a molina test needs a new one.
 - `benchmarks/`: timings of the parallel loops; `benchmarks/compare/`
   times MojoDEC against PyDEC, dexterior, and formoniq on shared meshes
   (Rust crate pinned by git rev, PyDEC cloned and patched into
