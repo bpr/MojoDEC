@@ -22,7 +22,7 @@ volumes, build, and Whitney times were measured again after later work
 
 | Layer | Where | What |
 |---|---|---|
-| Linear algebra | `molina/` | `RealArray`, sparse and diagonal matrices, dense and sparse direct solvers, Krylov solvers, Lanczos, AMG, parallel loops; a package of its own |
+| Linear algebra | [molina](https://github.com/bpr/molina) | `RealArray`, sparse and diagonal matrices, dense and sparse direct solvers, Krylov solvers, Lanczos, AMG, parallel loops; a separate package |
 | Data structures | `mojodec/core/` | complexes, cochains, subsets, the typed layer |
 | Algorithms | `mojodec/routines/` | topology, geometry, Whitney forms, typed solver overloads, I/O, mesh generation |
 | Plotting | `mojodec/vis/` | matplotlib through Python interop, not re-exported |
@@ -177,7 +177,7 @@ has the measurements.
 ## Parallelism and determinism
 
 Every loop over simplices that is large enough goes through
-`parallel_ranges` (`molina/parallel.mojo`).
+`parallel_ranges` (`molina.parallel`).
 
 - **Chunks:** one per logical core, or one per physical core for
   memory-bound loops.
@@ -223,17 +223,17 @@ and `reorder_vertices` fixes it. See
   are compared, the tests allow the conditioning (`eps L / h`), not the
   last bit. One example is the Whitney top-form mass against the primal
   volume.
-- **Solvers:** `molina/dense.mojo` and `molina/linalg.mojo`
+- **Solvers:** `molina.dense` and `molina.linalg`
   provide pivoted LU, Householder `eigh`, and Krylov methods;
-  `molina/sparse_ldlt.mojo`, `molina/supernodal.mojo`, and
-  `molina/ordering.mojo` the sparse LDL^T and Cholesky factorizations
+  `molina.sparse_ldlt`, `molina.supernodal`, and
+  `molina.ordering` the sparse LDL^T and Cholesky factorizations
   (simplicial or supernodal, the supernodal factor parallel as one task
   graph) with AMD (ported from faer). NuMojo's
   unpivoted `solve` and Jacobi `eigh` are not used. These, with
   `lanczos.mojo`, `amg.mojo`, `RealArray`, and the sparse and diagonal
-  matrices, are the package `molina` (`molina/`, beside `mojodec/`),
-  which imports nothing from MojoDEC or NuMojo, so other projects can
-  use it alone; MojoDEC's typed overloads are in
+  matrices, are the package `molina` (its own repository, a git
+  dependency in `pixi.toml`), which imports nothing from MojoDEC or
+  NuMojo, so other projects can use it alone; MojoDEC's typed overloads are in
   `mojodec/routines/linalg.mojo`, `lanczos.mojo`, and `sparse_ldlt.mojo`
   (see AGENTS.md, Linear algebra boundary).
 

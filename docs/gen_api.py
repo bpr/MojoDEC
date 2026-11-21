@@ -1,15 +1,16 @@
-"""Generate the API reference of molina and MojoDEC as Markdown, from
-`mojo doc`'s JSON.
+"""Generate the API reference of MojoDEC as Markdown, from `mojo doc`'s
+JSON.
 
     pixi run docs                     # docs/api/, one page per module
-    python docs/gen_api.py molina.json mojodec.json   # from JSON made earlier
+    python docs/gen_api.py mojodec.json   # from JSON made earlier
 
 `mojo doc` collects the doc strings of the package into JSON but does not
 render them. This writes `docs/api/index.md` and a page per module
 (`docs/api/mojodec/core/subset.md`, ...) with the module's aliases, traits,
 structs, and functions: signatures, summaries and descriptions, and the
-Parameters, Args, Returns, and Raises sections. Types defined in either
-package link to their pages. The pages read on GitHub as they are, and `pixi run
+Parameters, Args, Returns, and Raises sections. Types MojoDEC defines
+link to their pages; molina's (its own package, with its own reference)
+appear as code. The pages read on GitHub as they are, and `pixi run
 docs-site` builds them into a searchable site with MkDocs.
 
 Run from the repository root, after `pixi run numojo`.
@@ -27,7 +28,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "docs", "api")
 
 
-PACKAGE_NAMES = ("molina", "mojodec")
+PACKAGE_NAMES = ("mojodec",)
 
 
 def load(json_paths=()):
@@ -76,8 +77,7 @@ class Page:
         self.lines.append(text)
 
     def link(self, type_name, path):
-        """`type_name`, linked to its page when molina or MojoDEC defines
-        it."""
+        """`type_name`, linked to its page when MojoDEC defines it."""
         code = f"`{type_name}`"
         if not path or not path.startswith(tuple(f"/{n}/" for n in PACKAGE_NAMES)):
             return code
@@ -303,6 +303,11 @@ def main():
         f.write(
             "Generated from the doc strings by `pixi run docs` "
             f"(Mojo {docs[0].get('version', '?')}); do not edit.\n\n"
+        )
+        f.write(
+            "The linear algebra (`RealArray`, `CSRMatrix`, the solvers) is "
+            "[molina](https://github.com/bpr/molina), which has its own "
+            "reference.\n\n"
         )
         for parts, file, m in pages:
             depth = "  " * (len(parts) - 1)

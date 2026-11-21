@@ -13,6 +13,11 @@ MojoDEC is packaged as a conda package with
   release that goes with the compiler (e.g. Mojo `1.3.0.dev2026110305`
   with MAX `26.8.0.dev2026110305`).
 - `numojo`. MojoDEC's API takes and returns NuMojo arrays.
+- molina, the linear algebra. It has no conda package yet, so the recipe
+  takes its sources as a second `source` entry (git, at `molina_rev`,
+  the commit `pixi.toml` pins), precompiles them, and ships
+  `molina.mojoc` and molina's NOTICE in the MojoDEC package. Once molina
+  is on a channel, depend on it instead.
 - `python`, `numpy` and `matplotlib-base`, for `mojodec.vis`, which plots
   through Python interop. Code that doesn't plot never loads Python.
 
@@ -68,12 +73,13 @@ and isn't needed by the package.
 2. In a fork of modular-community, copy `conda.recipe/recipe.yaml` and
    `conda.recipe/test_package.mojo` to `recipes/mojodec/`.
 3. In `recipes/mojodec/recipe.yaml`:
-   - replace the `source` entry with
+   - replace the first `source` entry (`path: ..`) with
      ```yaml
      source:
        - git: https://github.com/bpr/MojoDEC.git
          rev: <full 40-character commit SHA>
      ```
+     and keep the second (molina);
    - set `numojo: package`, and `numojo_version` to the NuMojo release;
    - set `mojo_version` and `max_version` to the stable releases, e.g.
      `"1.3.0"` and `"26.8.0"`.

@@ -69,7 +69,8 @@ NuMojo (`numojo: vendored`).
 - [ ] Create `recipes/mojodec/` with copies of
       `conda.recipe/recipe.yaml` and `conda.recipe/test_package.mojo`.
 - [ ] In `recipes/mojodec/recipe.yaml`:
-  - [ ] Replace the `source` entry (`path: ..`) with the pushed commit:
+  - [ ] Replace the first `source` entry (`path: ..`) with the pushed
+        commit, keeping the second (molina, at `molina_rev`):
         ```yaml
         source:
           - git: https://github.com/bpr/MojoDEC.git

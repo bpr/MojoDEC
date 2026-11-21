@@ -24,6 +24,8 @@ context:
   numojo: vendored
   # placeholder: set to the first NuMojo release that supports Mojo 1.3
   numojo_version: "0.13.0"
+  # molina, the linear algebra: the commit pixi.toml's dependency names
+  molina_rev: "9e87f60a2724616cde61ed9be01af9356cf509b3"
 
 package:
   name: mojodec
@@ -32,14 +34,17 @@ package:
 source:
   - path: ..
     use_gitignore: true
+  - git: https://github.com/bpr/molina.git
+    rev: ${{ molina_rev }}
+    target_directory: molina
 
 build:
   number: 0
   script:
     - mkdir -p build ${{ PREFIX }}/lib/mojo
     # molina, the linear algebra MojoDEC builds on, ships in this package
-    # until it has one of its own
-    - mojo precompile molina -o build/molina.mojoc
+    # until it has a conda package of its own (its sources are in molina/)
+    - mojo precompile molina/molina -o build/molina.mojoc
     - cp build/molina.mojoc ${{ PREFIX }}/lib/mojo/molina.mojoc
     - if: numojo == "vendored"
       then:
@@ -96,6 +101,7 @@ about:
   license_file:
     - LICENSE
     - NOTICE
+    - molina/NOTICE
   summary: Discrete exterior calculus for Mojo, largely inspired by PyDEC
   description: |
     MojoDEC implements Discrete Exterior Calculus (DEC) and lowest order
